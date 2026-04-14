@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch, BASE_URL } from "@/lib/api";
-import type { RouteDetailResponse, Segment } from "@/lib/types";
+import type { LogEntry, RouteDetailResponse, Segment } from "@/lib/types";
 import {
   MultiCameraPlayer,
   type CameraType,
@@ -16,6 +16,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Button } from "@/components/ui/Button";
 import TripMap from "@/components/map/TripMap";
+import { LogViewer } from "@/components/logs/LogViewer";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
   { key: "fcameraUploaded", label: "fcamera" },
@@ -78,6 +79,8 @@ function buildSegmentBaseUrl(
   return `${BASE_URL}/storage/${dongleId}/${encodeURIComponent(routeName)}/${segmentNumber}`;
 }
 
+type DetailTab = "segments" | "logs";
+
 export default function RouteDetailPage() {
   const params = useParams<{ dongleId: string; routeName: string }>();
   const dongleId = params.dongleId;
@@ -87,6 +90,8 @@ export default function RouteDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<DetailTab>("segments");
+  const [logs, setLogs] = useState<LogEntry[]>([]);
 
   const fetchRoute = useCallback(async () => {
     setLoading(true);
@@ -108,6 +113,17 @@ export default function RouteDetailPage() {
   useEffect(() => {
     void fetchRoute();
   }, [fetchRoute]);
+
+  // Populate placeholder log entries when the route loads.
+  // Replace with a real API call once the backend exposes parsed log data.
+  useEffect(() => {
+    if (!route) {
+      setLogs([]);
+      return;
+    }
+    const sample: LogEntry[] = generatePlaceholderLogs(route);
+    setLogs(sample);
+  }, [route]);
 
   return (
     <PageWrapper>
@@ -219,67 +235,133 @@ export default function RouteDetailPage() {
             );
           })()}
 
-          {/* Segments list */}
-          <h2 className="text-subheading mb-3">Segments</h2>
+          {/* Tabs */}
+          <div className="mb-4 flex gap-1 border-b border-[var(--border-primary)]">
+            {(["segments", "logs"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={[
+                  "px-4 py-2 text-sm font-medium capitalize transition-colors",
+                  "border-b-2 -mb-px",
+                  activeTab === tab
+                    ? "border-[var(--accent)] text-[var(--text-primary)]"
+                    : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--border-secondary)]",
+                ].join(" ")}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
 
-          {route.segments.length === 0 ? (
-            <Card>
-              <CardBody>
-                <p className="text-center text-caption py-4">
-                  No segments recorded for this route.
-                </p>
-              </CardBody>
-            </Card>
-          ) : (
-            <div className="space-y-2">
-              {route.segments.map((segment) => {
-                const cameras = getAvailableCameras(segment);
-                const hasVideo = cameras.length > 0;
-                const isSelected = selectedSegment === segment.number;
-                return (
-                  <Card key={segment.number}>
-                    <CardBody className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium text-[var(--text-primary)] tabular-nums">
-                          Segment {segment.number}
-                        </span>
-                        <Badge variant="info">
-                          {computeUploadProgress(segment)} files
-                        </Badge>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="flex flex-wrap gap-1.5">
-                          {FILE_TYPES.map((ft) => (
-                            <Badge
-                              key={ft.key}
-                              variant={uploadBadgeVariant(segment[ft.key])}
-                            >
-                              {ft.label}
+          {/* Segments list */}
+          {activeTab === "segments" && (
+            <>
+              {route.segments.length === 0 ? (
+                <Card>
+                  <CardBody>
+                    <p className="text-center text-caption py-4">
+                      No segments recorded for this route.
+                    </p>
+                  </CardBody>
+                </Card>
+              ) : (
+                <div className="space-y-2">
+                  {route.segments.map((segment) => {
+                    const cameras = getAvailableCameras(segment);
+                    const hasVideo = cameras.length > 0;
+                    const isSelected = selectedSegment === segment.number;
+                    return (
+                      <Card key={segment.number}>
+                        <CardBody className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex items-center gap-3">
+                            <span className="text-sm font-medium text-[var(--text-primary)] tabular-nums">
+                              Segment {segment.number}
+                            </span>
+                            <Badge variant="info">
+                              {computeUploadProgress(segment)} files
                             </Badge>
-                          ))}
-                        </div>
-                        {hasVideo && (
-                          <Button
-                            variant={isSelected ? "primary" : "secondary"}
-                            size="sm"
-                            onClick={() =>
-                              setSelectedSegment(
-                                isSelected ? null : segment.number,
-                              )
-                            }
-                          >
-                            {isSelected ? "Playing" : "Play"}
-                          </Button>
-                        )}
-                      </div>
-                    </CardBody>
-                  </Card>
-                );
-              })}
-            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap gap-1.5">
+                              {FILE_TYPES.map((ft) => (
+                                <Badge
+                                  key={ft.key}
+                                  variant={uploadBadgeVariant(segment[ft.key])}
+                                >
+                                  {ft.label}
+                                </Badge>
+                              ))}
+                            </div>
+                            {hasVideo && (
+                              <Button
+                                variant={isSelected ? "primary" : "secondary"}
+                                size="sm"
+                                onClick={() =>
+                                  setSelectedSegment(
+                                    isSelected ? null : segment.number,
+                                  )
+                                }
+                              >
+                                {isSelected ? "Playing" : "Play"}
+                              </Button>
+                            )}
+                          </div>
+                        </CardBody>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
+
+          {/* Log viewer */}
+          {activeTab === "logs" && <LogViewer logs={logs} />}
         </>
       )}
     </PageWrapper>
   );
+}
+
+// -- Placeholder log data ----------------------------------------------------
+// Generates representative log entries so the viewer is functional before the
+// backend exposes a parsed-log endpoint. Replace with a real API call later.
+
+const SAMPLE_MESSAGES: { severity: LogEntry["severity"]; message: string }[] = [
+  { severity: "info", message: "boardd: CAN bus initialized" },
+  { severity: "info", message: "controlsd: lateral planner ready" },
+  { severity: "info", message: "modeld: loaded navigation model" },
+  { severity: "warning", message: "pandad: panda not responding, retrying..." },
+  { severity: "info", message: "thermald: CPU temp 42C, GPU temp 39C" },
+  { severity: "error", message: "loggerd: encoder error on ecamera stream" },
+  { severity: "info", message: "uploader: segment 0 upload started" },
+  { severity: "info", message: "uploader: segment 0 upload complete (4.2 MB)" },
+  { severity: "warning", message: "controlsd: steering torque limited" },
+  { severity: "info", message: "camerad: exposure adjusted, gain=1.2" },
+  { severity: "info", message: "sensord: IMU calibration applied" },
+  { severity: "error", message: "athenad: connection to server lost" },
+  { severity: "info", message: "athenad: reconnected to server" },
+  { severity: "info", message: "plannerd: route recalculated" },
+  { severity: "warning", message: "thermald: battery temp 36C approaching limit" },
+];
+
+function generatePlaceholderLogs(route: RouteDetailResponse): LogEntry[] {
+  const entries: LogEntry[] = [];
+  const base = route.startTime ? new Date(route.startTime).getTime() : Date.now();
+  const count = route.segmentCount * 60; // ~60 entries per segment
+
+  for (let i = 0; i < count; i++) {
+    const sample = SAMPLE_MESSAGES[i % SAMPLE_MESSAGES.length];
+    const ts = new Date(base + i * 1000);
+    entries.push({
+      id: i,
+      timestamp: ts.toISOString().slice(11, 23), // HH:MM:SS.mmm
+      severity: sample.severity,
+      message: sample.message,
+    });
+  }
+
+  return entries;
 }
