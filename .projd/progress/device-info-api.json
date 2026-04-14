@@ -1,7 +1,7 @@
 {
   "id": "device-info-api",
   "name": "GET /v1.1/devices/{dongle_id}",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/device-info-api",
   "base_branch": "main",
   "blocked_by": [],
