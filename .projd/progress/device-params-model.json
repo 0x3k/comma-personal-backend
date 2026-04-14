@@ -1,0 +1,16 @@
+{
+  "id": "device-params-model",
+  "name": "Device parameter metadata + DB model",
+  "description": "Add a device_params table and sqlc queries for storing and retrieving device configuration parameters (key-value pairs per device).",
+  "status": "complete",
+  "branch": "agent/device-params-model",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "sql/migrations/ contains a migration adding device_params table",
+    "device_params table: device dongle_id FK, key TEXT, value TEXT, updated_at, unique on (dongle_id, key)",
+    "sql/queries/device_params.sql has CRUD queries: get, set (upsert), list by device, delete",
+    "sqlc generate produces updated code in internal/db/ without errors",
+    "go build and go vet pass cleanly"
+  ]
+}
