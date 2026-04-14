@@ -22,6 +22,9 @@ const (
 
 	// sendChSize is the buffer size for the outgoing message channel.
 	sendChSize = 64
+
+	// maxMessageSize is the maximum size in bytes for incoming WebSocket messages.
+	maxMessageSize = 1 << 20 // 1MB
 )
 
 // MethodHandler processes a JSON-RPC request and returns the result or an error.
@@ -36,20 +39,24 @@ type Client struct {
 	sendCh    chan []byte
 	done      chan struct{}
 	handlers  map[string]MethodHandler
+	rpcCaller *RPCCaller
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 }
 
 // NewClient creates a Client for the given WebSocket connection and dongle ID.
 // The handlers map provides method dispatch for incoming JSON-RPC requests.
-func NewClient(dongleID string, conn *websocket.Conn, hub *Hub, handlers map[string]MethodHandler) *Client {
+// The rpcCaller, if non-nil, receives RPC responses from the device so that
+// outgoing calls made via RPCCaller.Call can complete.
+func NewClient(dongleID string, conn *websocket.Conn, hub *Hub, handlers map[string]MethodHandler, rpcCaller *RPCCaller) *Client {
 	return &Client{
-		DongleID: dongleID,
-		conn:     conn,
-		hub:      hub,
-		sendCh:   make(chan []byte, sendChSize),
-		done:     make(chan struct{}),
-		handlers: handlers,
+		DongleID:  dongleID,
+		conn:      conn,
+		hub:       hub,
+		sendCh:    make(chan []byte, sendChSize),
+		done:      make(chan struct{}),
+		handlers:  handlers,
+		rpcCaller: rpcCaller,
 	}
 }
 
@@ -105,6 +112,7 @@ func (c *Client) readPump() {
 		c.Close()
 	}()
 
+	c.conn.SetReadLimit(maxMessageSize)
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
 		c.conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -154,8 +162,24 @@ func (c *Client) writePump() {
 	}
 }
 
-// handleMessage processes a single incoming message as a JSON-RPC 2.0 request.
+// handleMessage processes a single incoming WebSocket message. It first checks
+// if the message is a JSON-RPC response (has id, no method) and routes it to
+// the RPCCaller. Otherwise it is handled as a JSON-RPC request.
 func (c *Client) handleMessage(data []byte) {
+	if c.rpcCaller != nil {
+		var peek struct {
+			Method string          `json:"method"`
+			ID     json.RawMessage `json:"id"`
+		}
+		if json.Unmarshal(data, &peek) == nil && peek.Method == "" && len(peek.ID) > 0 && string(peek.ID) != "null" {
+			var resp RPCResponse
+			if err := json.Unmarshal(data, &resp); err == nil {
+				c.rpcCaller.HandleResponse(&resp)
+				return
+			}
+		}
+	}
+
 	req, err := ParseRequest(data)
 	if err != nil {
 		resp := NewRPCErrorResponse(nil, NewRPCError(CodeParseError, err.Error()))

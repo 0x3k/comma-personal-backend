@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
+	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
 )
 
@@ -69,7 +70,8 @@ func (r *mockRow) Scan(dest ...interface{}) error {
 
 func newTestHandler(mock *mockDBTX) *PilotAuthHandler {
 	queries := db.New(mock)
-	return NewPilotAuthHandler(queries, testJWTSecret)
+	cfg := &config.Config{JWTSecret: testJWTSecret}
+	return NewPilotAuthHandler(queries, testJWTSecret, cfg)
 }
 
 func newTestDevice(dongleID, serial, publicKey string) *db.Device {
@@ -264,8 +266,8 @@ func TestPilotAuthTokenExpiry(t *testing.T) {
 		t.Fatalf("failed to get expiration: %v", err)
 	}
 
-	// Token should expire roughly 365 days from now.
-	expectedExp := time.Now().Add(365 * 24 * time.Hour)
+	// Token should expire roughly 90 days from now.
+	expectedExp := time.Now().Add(90 * 24 * time.Hour)
 	diff := exp.Time.Sub(expectedExp)
 	if diff < -time.Minute || diff > time.Minute {
 		t.Errorf("token expiry = %v, want approximately %v", exp.Time, expectedExp)

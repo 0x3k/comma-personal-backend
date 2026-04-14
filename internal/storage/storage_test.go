@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -267,5 +269,56 @@ func TestListSegmentsEmpty(t *testing.T) {
 
 	if len(got) != 0 {
 		t.Errorf("ListSegments() returned %d segments for empty route, want 0", len(got))
+	}
+}
+
+// failAfterReader returns n bytes of data then fails with the given error.
+type failAfterReader struct {
+	n   int
+	err error
+	pos int
+}
+
+func (r *failAfterReader) Read(p []byte) (int, error) {
+	if r.pos >= r.n {
+		return 0, r.err
+	}
+	remaining := r.n - r.pos
+	toWrite := len(p)
+	if toWrite > remaining {
+		toWrite = remaining
+	}
+	for i := 0; i < toWrite; i++ {
+		p[i] = 'x'
+	}
+	r.pos += toWrite
+	return toWrite, nil
+}
+
+var _ io.Reader = (*failAfterReader)(nil)
+
+func TestStoreRemovesPartialFileOnCopyError(t *testing.T) {
+	base := t.TempDir()
+	s := New(base)
+
+	dongleID := "dev50"
+	route := "2024-09-01--12-00-00"
+	segment := "0"
+	filename := "fcamera.hevc"
+
+	copyErr := errors.New("simulated read failure")
+	reader := &failAfterReader{n: 512, err: copyErr}
+
+	err := s.Store(dongleID, route, segment, filename, reader)
+	if err == nil {
+		t.Fatal("Store() returned nil error, want error from failing reader")
+	}
+	if !errors.Is(err, copyErr) {
+		t.Fatalf("Store() error = %v, want wrapped %v", err, copyErr)
+	}
+
+	// The partial file must not remain on disk.
+	if s.Exists(dongleID, route, segment, filename) {
+		t.Error("partial file still exists after failed Store, want it removed")
 	}
 }

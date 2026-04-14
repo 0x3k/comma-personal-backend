@@ -29,10 +29,10 @@ type Transcoder struct {
 	concurrency int
 	ffmpegPath  string
 
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	jobs     chan transcodeJob
-	stopOnce sync.Once
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	jobs   chan transcodeJob
 }
 
 // transcodeJob represents a single segment to be transcoded.
@@ -62,9 +62,18 @@ func (t *Transcoder) SetFFmpegPath(path string) {
 }
 
 // Start launches the background worker goroutines. It blocks until ctx
-// is cancelled or Stop is called.
+// is cancelled or Stop is called. If called while workers are already
+// running, the previous workers are stopped first to prevent leaks.
 func (t *Transcoder) Start(ctx context.Context) {
+	t.mu.Lock()
+	if t.cancel != nil {
+		t.cancel()
+		t.mu.Unlock()
+		t.wg.Wait()
+		t.mu.Lock()
+	}
 	ctx, t.cancel = context.WithCancel(ctx)
+	t.mu.Unlock()
 
 	for i := 0; i < t.concurrency; i++ {
 		t.wg.Add(1)
@@ -76,13 +85,15 @@ func (t *Transcoder) Start(ctx context.Context) {
 }
 
 // Stop signals all workers to shut down and waits for them to finish.
+// It is safe to call multiple times and to call Start again afterwards.
 func (t *Transcoder) Stop() {
-	t.stopOnce.Do(func() {
-		if t.cancel != nil {
-			t.cancel()
-		}
-		t.wg.Wait()
-	})
+	t.mu.Lock()
+	if t.cancel != nil {
+		t.cancel()
+		t.cancel = nil
+	}
+	t.mu.Unlock()
+	t.wg.Wait()
 }
 
 // Enqueue submits a segment for background transcoding. It returns false

@@ -170,6 +170,7 @@ func TestListParams(t *testing.T) {
 			c := e.NewContext(req, rec)
 			c.SetParamNames("dongle_id")
 			c.SetParamValues(tt.dongleID)
+			c.Set(middleware.ContextKeyDongleID, tt.dongleID)
 
 			err := handler.ListParams(c)
 			if err != nil {
@@ -267,6 +268,7 @@ func TestSetParam(t *testing.T) {
 			c := e.NewContext(req, rec)
 			c.SetParamNames("dongle_id", "key")
 			c.SetParamValues(tt.dongleID, tt.key)
+			c.Set(middleware.ContextKeyDongleID, tt.dongleID)
 
 			err := handler.SetParam(c)
 			if err != nil {
@@ -339,6 +341,7 @@ func TestDeleteParam(t *testing.T) {
 			c := e.NewContext(req, rec)
 			c.SetParamNames("dongle_id", "key")
 			c.SetParamValues(tt.dongleID, tt.key)
+			c.Set(middleware.ContextKeyDongleID, tt.dongleID)
 
 			err := handler.DeleteParam(c)
 			if err != nil {
@@ -468,6 +471,7 @@ func TestSetParamPushesWebSocket(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetParamNames("dongle_id", "key")
 	c.SetParamValues("abc123", "OpenpilotEnabledToggle")
+	c.Set(middleware.ContextKeyDongleID, "abc123")
 
 	if err := handler.SetParam(c); err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -527,6 +531,7 @@ func TestDeleteParamPushesWebSocket(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetParamNames("dongle_id", "key")
 	c.SetParamValues("abc123", "OpenpilotEnabledToggle")
+	c.Set(middleware.ContextKeyDongleID, "abc123")
 
 	if err := handler.DeleteParam(c); err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -579,6 +584,7 @@ func TestSetParamNoWebSocketConnection(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetParamNames("dongle_id", "key")
 	c.SetParamValues("abc123", "OpenpilotEnabledToggle")
+	c.Set(middleware.ContextKeyDongleID, "abc123")
 
 	if err := handler.SetParam(c); err != nil {
 		t.Fatalf("handler returned error: %v", err)
@@ -603,6 +609,7 @@ func TestSetParamNilHub(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetParamNames("dongle_id", "key")
 	c.SetParamValues("abc123", "OpenpilotEnabledToggle")
+	c.Set(middleware.ContextKeyDongleID, "abc123")
 
 	if err := handler.SetParam(c); err != nil {
 		t.Fatalf("handler returned error: %v", err)

@@ -3,14 +3,16 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Config holds the application configuration loaded from environment variables.
 type Config struct {
-	DatabaseURL string
-	StoragePath string
-	Port        string
-	JWTSecret   string
+	DatabaseURL      string
+	StoragePath      string
+	Port             string
+	JWTSecret        string
+	AllowedDongleIDs []string
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -21,6 +23,15 @@ func Load() (*Config, error) {
 		StoragePath: os.Getenv("STORAGE_PATH"),
 		Port:        os.Getenv("PORT"),
 		JWTSecret:   os.Getenv("JWT_SECRET"),
+	}
+
+	if v := os.Getenv("ALLOWED_DONGLE_IDS"); v != "" {
+		for _, id := range strings.Split(v, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				cfg.AllowedDongleIDs = append(cfg.AllowedDongleIDs, id)
+			}
+		}
 	}
 
 	if cfg.StoragePath == "" {
@@ -40,4 +51,18 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// IsDongleAllowed reports whether the given dongle_id is permitted to register.
+// If no allowlist is configured, all dongle IDs are allowed.
+func (c *Config) IsDongleAllowed(dongleID string) bool {
+	if len(c.AllowedDongleIDs) == 0 {
+		return true
+	}
+	for _, id := range c.AllowedDongleIDs {
+		if id == dongleID {
+			return true
+		}
+	}
+	return false
 }

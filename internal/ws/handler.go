@@ -29,12 +29,15 @@ type Handler struct {
 	hub       *Hub
 	jwtSecret string
 	handlers  map[string]MethodHandler
+	rpcCaller *RPCCaller
 }
 
 // NewHandler creates a WebSocket handler.
 // The jwtSecret is used to validate HS256 device tokens.
 // The handlers map is passed to each new Client for JSON-RPC method dispatch.
-func NewHandler(hub *Hub, jwtSecret string, handlers map[string]MethodHandler) *Handler {
+// The rpcCaller, if non-nil, is passed to each Client so that RPC responses
+// from the device are routed back to pending RPCCaller.Call invocations.
+func NewHandler(hub *Hub, jwtSecret string, handlers map[string]MethodHandler, rpcCaller *RPCCaller) *Handler {
 	if handlers == nil {
 		handlers = make(map[string]MethodHandler)
 	}
@@ -42,6 +45,7 @@ func NewHandler(hub *Hub, jwtSecret string, handlers map[string]MethodHandler) *
 		hub:       hub,
 		jwtSecret: jwtSecret,
 		handlers:  handlers,
+		rpcCaller: rpcCaller,
 	}
 }
 
@@ -77,7 +81,7 @@ func (h *Handler) HandleWebSocket(c echo.Context) error {
 		return fmt.Errorf("failed to upgrade connection: %w", err)
 	}
 
-	client := NewClient(dongleID, conn, h.hub, h.handlers)
+	client := NewClient(dongleID, conn, h.hub, h.handlers, h.rpcCaller)
 	h.hub.Register(client)
 
 	// Run blocks until the client disconnects, so the handler goroutine is
@@ -153,6 +157,9 @@ func extractDongleIDFromClaims(claims jwt.MapClaims) (string, error) {
 }
 
 // RegisterRoutes wires up the WebSocket route on the given Echo instance.
+// Both paths are registered: /ws/v2/:dongle_id is the path openpilot's
+// athenad connects to, and /ws/:dongle_id is kept for direct use.
 func (h *Handler) RegisterRoutes(e *echo.Echo) {
+	e.GET("/ws/v2/:dongle_id", h.HandleWebSocket)
 	e.GET("/ws/:dongle_id", h.HandleWebSocket)
 }

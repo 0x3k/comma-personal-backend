@@ -19,6 +19,8 @@ interface VideoPlayerProps {
 function VideoPlayer({ src, className = "" }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const mediaRecoveryAttempted = useRef(false);
+  const safariCleanupRef = useRef<(() => void) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,7 +37,12 @@ function VideoPlayer({ src, className = "" }: VideoPlayerProps) {
 
     setLoading(true);
     setError(null);
+    mediaRecoveryAttempted.current = false;
     destroyHls();
+    if (safariCleanupRef.current) {
+      safariCleanupRef.current();
+      safariCleanupRef.current = null;
+    }
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -56,8 +63,14 @@ function VideoPlayer({ src, className = "" }: VideoPlayerProps) {
               setLoading(false);
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              // Attempt recovery once
-              hls.recoverMediaError();
+              if (!mediaRecoveryAttempted.current) {
+                mediaRecoveryAttempted.current = true;
+                hls.recoverMediaError();
+              } else {
+                setError("Failed to recover video stream");
+                setLoading(false);
+                hls.destroy();
+              }
               break;
             default:
               setError("Failed to load video stream");
@@ -83,7 +96,7 @@ function VideoPlayer({ src, className = "" }: VideoPlayerProps) {
       video.addEventListener("loadedmetadata", handleLoaded);
       video.addEventListener("error", handleError);
 
-      return () => {
+      safariCleanupRef.current = () => {
         video.removeEventListener("loadedmetadata", handleLoaded);
         video.removeEventListener("error", handleError);
       };
@@ -95,7 +108,13 @@ function VideoPlayer({ src, className = "" }: VideoPlayerProps) {
 
   useEffect(() => {
     initPlayer();
-    return destroyHls;
+    return () => {
+      destroyHls();
+      if (safariCleanupRef.current) {
+        safariCleanupRef.current();
+        safariCleanupRef.current = null;
+      }
+    };
   }, [initPlayer, destroyHls]);
 
   const handleRetry = useCallback(() => {

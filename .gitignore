@@ -21,6 +21,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Air (hot reload)
+tmp/
+
 # Environment
 .env
 .env.local

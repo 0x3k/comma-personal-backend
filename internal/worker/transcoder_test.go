@@ -369,3 +369,42 @@ func TestStop_Idempotent(t *testing.T) {
 	tr.Stop()
 	tr.Stop()
 }
+
+func TestStopStartStop(t *testing.T) {
+	tmp := t.TempDir()
+	ffmpeg := writeFakeFFmpeg(t, tmp, "success")
+
+	store := storage.New(tmp)
+	tr := New(store, 2)
+	tr.SetFFmpegPath(ffmpeg)
+
+	dongle := "abc123"
+	route1 := "2024-01-15--12-30-00"
+	segment1 := "0"
+	setupTestSegment(t, tmp, dongle, route1, segment1, []string{"fcamera.hevc"})
+
+	ctx := context.Background()
+	tr.Start(ctx)
+	tr.Stop()
+
+	// Set up a second segment with a different route
+	route2 := "2024-01-15--13-00-00"
+	segment2 := "0"
+	setupTestSegment(t, tmp, dongle, route2, segment2, []string{"fcamera.hevc"})
+
+	// Restart workers after stop
+	tr.Start(ctx)
+
+	tr.Enqueue(dongle, route2, segment2)
+
+	// Give workers time to process
+	time.Sleep(500 * time.Millisecond)
+
+	// Second stop must not panic or be a no-op
+	tr.Stop()
+
+	indexPath := filepath.Join(tmp, dongle, route2, segment2, "fcamera", "index.m3u8")
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		t.Error("expected HLS output after stop/start/stop lifecycle")
+	}
+}

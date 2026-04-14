@@ -2,7 +2,20 @@
   "permissions": {
     "allow": [
       "Bash(./.projd/scripts/skill-context.sh:*)",
-      "Bash(git *)"
+      "Bash(./.projd/scripts/*)",
+      "Bash(git *)",
+      "Write",
+      "Edit",
+      "Bash(go *)",
+      "Bash(gofmt *)",
+      "Bash(pnpm *)",
+      "Bash(npx *)",
+      "Bash(gh *)",
+      "Bash(mkdir *)",
+      "Bash(ls *)",
+      "Bash(test *)",
+      "Bash(rm *)",
+      "Bash(python3 *)"
     ]
   },
   "statusLine": {
