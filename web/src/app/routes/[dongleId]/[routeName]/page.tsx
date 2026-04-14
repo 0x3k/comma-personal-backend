@@ -11,6 +11,7 @@ import { Badge, type BadgeVariant } from "@/components/ui/Badge";
 import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Button } from "@/components/ui/Button";
+import TripMap from "@/components/map/TripMap";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
   { key: "fcameraUploaded", label: "fcamera" },
@@ -143,6 +144,21 @@ export default function RouteDetailPage() {
                   <dd>{route.segmentCount}</dd>
                 </div>
               </dl>
+            </CardBody>
+          </Card>
+
+          {/* GPS track map */}
+          <Card className="mb-6">
+            <CardHeader>
+              <h2 className="text-subheading text-[var(--text-primary)]">
+                GPS Track
+              </h2>
+            </CardHeader>
+            <CardBody>
+              <TripMap
+                coordinates={route.geometry ?? []}
+                className="h-[400px] w-full"
+              />
             </CardBody>
           </Card>
 

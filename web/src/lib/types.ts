@@ -38,4 +38,6 @@ export interface RouteDetailResponse {
   endTime: string | null;
   segmentCount: number;
   segments: Segment[];
+  /** GPS track as an array of [lat, lng] coordinate pairs. May be null/empty. */
+  geometry?: [number, number][] | null;
 }
