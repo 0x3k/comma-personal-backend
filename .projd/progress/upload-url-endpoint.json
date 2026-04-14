@@ -12,7 +12,7 @@
     "go build and go vet pass cleanly"
   ],
   "priority": 5,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/upload-url-endpoint",
   "base_branch": "main",
   "blocked_by": ["jwt-auth-middleware", "storage-layer"],
