@@ -2,7 +2,7 @@
   "id": "route-segment-queries",
   "name": "sqlc queries for routes + segments",
   "description": "Extend the sqlc query layer with additional queries needed by the route and segment APIs.",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/route-segment-queries",
   "base_branch": "main",
   "blocked_by": ["database-schema"],
