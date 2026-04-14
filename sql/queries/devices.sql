@@ -12,3 +12,9 @@ RETURNING dongle_id, serial, public_key, created_at, updated_at;
 SELECT dongle_id, serial, public_key, created_at, updated_at
 FROM devices
 ORDER BY created_at DESC;
+
+-- name: UpsertDevice :one
+INSERT INTO devices (dongle_id, serial, public_key)
+VALUES ($1, $2, $3)
+ON CONFLICT (dongle_id) DO UPDATE SET serial = $2, public_key = $3, updated_at = now()
+RETURNING dongle_id, serial, public_key, created_at, updated_at;
