@@ -2,7 +2,7 @@
   "id": "trip-map",
   "name": "Leaflet GPS track map",
   "description": "Map component using Leaflet + OpenStreetMap for GPS tracks.",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/trip-map",
   "blocked_by": [],
   "acceptance_criteria": [
