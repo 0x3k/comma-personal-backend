@@ -67,12 +67,11 @@ psql comma < sql/migrations/002_device_params.up.sql
 
 **3. Configure environment**
 
-Create a `.env` file in the project root (or export directly):
+Copy the example env file and fill in your values:
 
 ```bash
-DATABASE_URL=postgres://localhost:5432/comma
-JWT_SECRET=your-secret-key-here
-STORAGE_PATH=./data
+cp .env.example .env
+# Edit .env with your DATABASE_URL and JWT_SECRET
 ```
 
 | Variable | Required | Default | Description |
@@ -100,7 +99,18 @@ The API server runs on `:8080` and the frontend dev server on `:3000` by default
 
 ## Pointing your device at this server
 
-Configure your comma device to use this backend by setting the API host to your server's address. The endpoint layout is compatible with the official comma API -- no code changes needed on the device side.
+Set two environment variables on your comma device before openpilot starts:
+
+```bash
+export API_HOST="https://your-server.example.com"
+export ATHENA_HOST="wss://your-server.example.com"
+```
+
+See [docs/DEVICE-SETUP.md](docs/DEVICE-SETUP.md) for the full walkthrough -- authentication flow, upload mechanics, WebSocket path rewriting, and troubleshooting.
+
+## Production deployment
+
+The local dev setup above is fine for testing. For an always-on server that receives uploads from your car, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) -- covers TLS with Caddy/nginx, systemd services, storage planning, and database backups.
 
 ## API
 
@@ -128,7 +138,7 @@ Configure your comma device to use this backend by setting the API host to your 
 ### WebSocket
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/ws/:dongle_id` | Persistent device channel (JSON-RPC over WebSocket) |
+| GET | `/ws/v2/:dongle_id` | Persistent device channel (JSON-RPC over WebSocket) |
 
 Supported RPC methods: `uploadFileToUrl`, `getNetworkType`, `getSimInfo`, `setNavDestination`, `setParam`, `deleteParam`.
 

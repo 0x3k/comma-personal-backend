@@ -157,6 +157,9 @@ func extractDongleIDFromClaims(claims jwt.MapClaims) (string, error) {
 }
 
 // RegisterRoutes wires up the WebSocket route on the given Echo instance.
+// Both paths are registered: /ws/v2/:dongle_id is the path openpilot's
+// athenad connects to, and /ws/:dongle_id is kept for direct use.
 func (h *Handler) RegisterRoutes(e *echo.Echo) {
+	e.GET("/ws/v2/:dongle_id", h.HandleWebSocket)
 	e.GET("/ws/:dongle_id", h.HandleWebSocket)
 }
