@@ -1,0 +1,19 @@
+{
+  "id": "websocket-server",
+  "name": "WebSocket + JSON-RPC 2.0 framing",
+  "description": "Implement WebSocket server for device communication using JSON-RPC 2.0 protocol.",
+  "status": "complete",
+  "branch": "agent/websocket-server",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "GET /ws/:dongle_id upgrades to WebSocket connection",
+    "JSON-RPC 2.0 request/response framing is implemented",
+    "Supports method dispatch to registered handlers",
+    "Connection is authenticated via JWT (token in query param or header)",
+    "Connections are tracked per dongle_id (one active connection per device)",
+    "Graceful connection cleanup on disconnect",
+    "Unit tests cover connection lifecycle, JSON-RPC framing, and auth",
+    "go build and go vet pass cleanly"
+  ]
+}
