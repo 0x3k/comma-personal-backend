@@ -1,0 +1,19 @@
+{
+  "id": "device-config-api",
+  "name": "Device config REST API + WebSocket push",
+  "description": "Implement REST endpoints for getting/setting device configuration parameters, and push config changes to connected devices via the WebSocket connection.",
+  "acceptance_criteria": [
+    "GET /v1/devices/:dongle_id/params returns all device parameters",
+    "PUT /v1/devices/:dongle_id/params/:key sets a device parameter value",
+    "DELETE /v1/devices/:dongle_id/params/:key removes a device parameter",
+    "Parameter changes are pushed to connected devices via WebSocket RPC",
+    "Requires JWT authentication",
+    "Unit tests cover CRUD operations and WebSocket push",
+    "go build and go vet pass cleanly"
+  ],
+  "priority": 9,
+  "status": "in_progress",
+  "branch": "agent/device-config-api",
+  "blocked_by": ["device-params-model", "athena-rpc-handlers"],
+  "notes": ""
+}
