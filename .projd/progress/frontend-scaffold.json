@@ -1,7 +1,7 @@
 {
   "id": "frontend-scaffold",
   "name": "Next.js app + layout + API client",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/frontend-scaffold",
   "base_branch": "main",
   "blocked_by": [],
