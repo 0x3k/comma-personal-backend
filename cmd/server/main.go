@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"comma-personal-backend/internal/api"
+	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
 )
@@ -39,6 +40,10 @@ func main() {
 
 	pilotAuth := api.NewPilotAuthHandler(queries, cfg.JWTSecret)
 	pilotAuth.RegisterRoutes(e)
+
+	v11 := e.Group("/v1.1", middleware.JWTAuthHMAC(cfg.JWTSecret))
+	deviceHandler := api.NewDeviceHandler(queries)
+	deviceHandler.RegisterRoutes(v11)
 
 	log.Printf("starting server on :%s", cfg.Port)
 	if err := e.Start(":" + cfg.Port); err != nil {
