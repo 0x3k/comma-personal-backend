@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, BASE_URL } from "@/lib/api";
 import type { RouteDetailResponse, Segment } from "@/lib/types";
+import {
+  MultiCameraPlayer,
+  type CameraType,
+} from "@/components/video/MultiCameraPlayer";
 import { PageWrapper } from "@/components/layout/PageWrapper";
 import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
@@ -58,6 +62,22 @@ function computeUploadProgress(segment: Segment): string {
   return `${uploaded}/${FILE_TYPES.length}`;
 }
 
+function getAvailableCameras(segment: Segment): CameraType[] {
+  const cameras: CameraType[] = [];
+  if (segment.fcameraUploaded) cameras.push("fcamera");
+  if (segment.ecameraUploaded) cameras.push("ecamera");
+  if (segment.dcameraUploaded) cameras.push("dcamera");
+  return cameras;
+}
+
+function buildSegmentBaseUrl(
+  dongleId: string,
+  routeName: string,
+  segmentNumber: number,
+): string {
+  return `${BASE_URL}/storage/${dongleId}/${encodeURIComponent(routeName)}/${segmentNumber}`;
+}
+
 export default function RouteDetailPage() {
   const params = useParams<{ dongleId: string; routeName: string }>();
   const dongleId = params.dongleId;
@@ -66,6 +86,7 @@ export default function RouteDetailPage() {
   const [route, setRoute] = useState<RouteDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedSegment, setSelectedSegment] = useState<number | null>(null);
 
   const fetchRoute = useCallback(async () => {
     setLoading(true);
@@ -162,6 +183,42 @@ export default function RouteDetailPage() {
             </CardBody>
           </Card>
 
+          {/* Video player for selected segment */}
+          {selectedSegment !== null && (() => {
+            const seg = route.segments.find((s) => s.number === selectedSegment);
+            if (!seg) return null;
+            const cameras = getAvailableCameras(seg);
+            if (cameras.length === 0) return null;
+            return (
+              <Card className="mb-6">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-subheading text-[var(--text-primary)]">
+                      Segment {seg.number}
+                    </h2>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setSelectedSegment(null)}
+                    >
+                      Close
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardBody>
+                  <MultiCameraPlayer
+                    segmentBaseUrl={buildSegmentBaseUrl(
+                      dongleId,
+                      routeName,
+                      seg.number,
+                    )}
+                    availableCameras={cameras}
+                  />
+                </CardBody>
+              </Card>
+            );
+          })()}
+
           {/* Segments list */}
           <h2 className="text-subheading mb-3">Segments</h2>
 
@@ -175,30 +232,50 @@ export default function RouteDetailPage() {
             </Card>
           ) : (
             <div className="space-y-2">
-              {route.segments.map((segment) => (
-                <Card key={segment.number}>
-                  <CardBody className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm font-medium text-[var(--text-primary)] tabular-nums">
-                        Segment {segment.number}
-                      </span>
-                      <Badge variant="info">
-                        {computeUploadProgress(segment)} files
-                      </Badge>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {FILE_TYPES.map((ft) => (
-                        <Badge
-                          key={ft.key}
-                          variant={uploadBadgeVariant(segment[ft.key])}
-                        >
-                          {ft.label}
+              {route.segments.map((segment) => {
+                const cameras = getAvailableCameras(segment);
+                const hasVideo = cameras.length > 0;
+                const isSelected = selectedSegment === segment.number;
+                return (
+                  <Card key={segment.number}>
+                    <CardBody className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium text-[var(--text-primary)] tabular-nums">
+                          Segment {segment.number}
+                        </span>
+                        <Badge variant="info">
+                          {computeUploadProgress(segment)} files
                         </Badge>
-                      ))}
-                    </div>
-                  </CardBody>
-                </Card>
-              ))}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap gap-1.5">
+                          {FILE_TYPES.map((ft) => (
+                            <Badge
+                              key={ft.key}
+                              variant={uploadBadgeVariant(segment[ft.key])}
+                            >
+                              {ft.label}
+                            </Badge>
+                          ))}
+                        </div>
+                        {hasVideo && (
+                          <Button
+                            variant={isSelected ? "primary" : "secondary"}
+                            size="sm"
+                            onClick={() =>
+                              setSelectedSegment(
+                                isSelected ? null : segment.number,
+                              )
+                            }
+                          >
+                            {isSelected ? "Playing" : "Play"}
+                          </Button>
+                        )}
+                      </div>
+                    </CardBody>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </>

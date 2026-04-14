@@ -1,0 +1,17 @@
+{
+  "id": "video-player",
+  "name": "Multi-camera HLS player component",
+  "status": "complete",
+  "branch": "agent/video-player",
+  "priority": 10,
+  "blocked_by": ["frontend-scaffold"],
+  "acceptance_criteria": [
+    "web/src/components/video/VideoPlayer.tsx plays HLS streams via hls.js",
+    "Supports switching between fcamera, ecamera, dcamera streams",
+    "Integrated into the route detail page for segment playback",
+    "Loading and error states handled",
+    "Responsive sizing",
+    "pnpm --dir web build passes",
+    "pnpm --dir web lint passes"
+  ]
+}
