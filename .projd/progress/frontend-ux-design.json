@@ -1,0 +1,18 @@
+{
+  "id": "frontend-ux-design",
+  "name": "UI/UX planning + design system",
+  "status": "in_progress",
+  "branch": "agent/frontend-ux-design",
+  "base_branch": "main",
+  "blocked_by": ["frontend-scaffold"],
+  "description": "Establish the frontend design system with shared components and layout patterns.",
+  "acceptance_criteria": [
+    "web/src/components/ui/ contains shared UI components (Button, Card, Badge, etc.)",
+    "Consistent color palette and typography via Tailwind config or CSS variables",
+    "Navigation component with links to routes, devices, and settings",
+    "Responsive layout wrapper component",
+    "Loading and error state components",
+    "pnpm --dir web build passes without errors",
+    "pnpm --dir web lint passes cleanly"
+  ]
+}
