@@ -2,7 +2,7 @@
   "id": "athena-rpc-handlers",
   "name": "JSON-RPC method handlers",
   "description": "Implement JSON-RPC method handlers for athenad communication over WebSocket.",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/athena-rpc-handlers",
   "base_branch": "main",
   "blocked_by": ["websocket-server"],
