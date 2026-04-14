@@ -1,7 +1,7 @@
 {
   "id": "device-registration",
   "name": "POST /v2/pilotauth/ endpoint",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/device-registration",
   "base_branch": "main",
   "blocked_by": [],
