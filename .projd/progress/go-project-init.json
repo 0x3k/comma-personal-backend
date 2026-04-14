@@ -2,7 +2,7 @@
   "id": "go-project-init",
   "name": "Go module + Echo server + config",
   "description": "Initialize the Go module, set up the Echo HTTP server entrypoint in cmd/server/, load configuration from environment variables (DATABASE_URL, STORAGE_PATH, PORT, JWT_SECRET), and expose a GET /health endpoint that returns 200 OK.",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/go-project-init",
   "base_branch": "main",
   "blocked_by": [],
