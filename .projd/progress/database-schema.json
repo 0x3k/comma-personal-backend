@@ -1,0 +1,18 @@
+{
+  "id": "database-schema",
+  "name": "PostgreSQL migrations + sqlc setup",
+  "description": "Create the PostgreSQL schema migrations for devices, routes, and segments tables. Set up sqlc configuration and generate type-safe Go code from SQL queries. Include PostGIS extension for spatial data.",
+  "status": "in_progress",
+  "branch": "agent/database-schema",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "sql/migrations/ contains numbered migration files for the core schema",
+    "Devices table: dongle_id (PK), serial, public_key, created_at, updated_at",
+    "Routes table: dongle_id, route_name (timestamp-based), start_time, end_time, geometry (PostGIS)",
+    "Segments table: route reference, segment_number, file manifest (rlog, qlog, cameras), upload status",
+    "sqlc.yaml configured to generate Go code from sql/queries/",
+    "sql/queries/ contains at least device and route query files",
+    "go generate or sqlc generate produces code in internal/db/ without errors"
+  ]
+}
