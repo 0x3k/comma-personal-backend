@@ -1,0 +1,17 @@
+{
+  "id": "device-registration",
+  "name": "POST /v2/pilotauth/ endpoint",
+  "status": "complete",
+  "branch": "agent/device-registration",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "POST /v2/pilotauth/ accepts dongle_id, public_key, and serial in request body",
+    "Creates or updates the device record in the database",
+    "Returns a JWT token signed with the server's key",
+    "Token contains dongle_id in claims",
+    "Returns proper error responses for invalid input",
+    "Unit tests cover registration, duplicate device, and invalid input",
+    "go build and go vet pass cleanly"
+  ]
+}
