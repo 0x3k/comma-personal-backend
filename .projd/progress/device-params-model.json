@@ -2,7 +2,7 @@
   "id": "device-params-model",
   "name": "Device parameter metadata + DB model",
   "description": "Add a device_params table and sqlc queries for storing and retrieving device configuration parameters (key-value pairs per device).",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/device-params-model",
   "base_branch": "main",
   "blocked_by": [],
