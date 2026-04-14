@@ -1,0 +1,20 @@
+{
+  "id": "upload-url-endpoint",
+  "name": "Upload URL generation + file receiver",
+  "description": "Implement the upload endpoints that comma devices use to upload dashcam files. Generate upload URLs for each segment file type and handle the actual file upload, storing files via the storage layer.",
+  "acceptance_criteria": [
+    "GET /v1.4/{dongle_id}/upload_url/ returns a signed or direct upload URL for the requested file",
+    "PUT endpoint receives the uploaded file and stores it via the storage layer",
+    "Supports all segment file types: rlog, qlog, fcamera.hevc, ecamera.hevc, dcamera.hevc, qcamera.ts",
+    "Validates the requesting device's dongle_id from JWT auth",
+    "Returns proper error responses for missing parameters or unauthorized access",
+    "Unit tests cover URL generation and file upload",
+    "go build and go vet pass cleanly"
+  ],
+  "priority": 5,
+  "status": "in_progress",
+  "branch": "agent/upload-url-endpoint",
+  "base_branch": "main",
+  "blocked_by": ["jwt-auth-middleware", "storage-layer"],
+  "notes": ""
+}
