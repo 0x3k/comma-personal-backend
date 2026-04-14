@@ -1,0 +1,17 @@
+{
+  "id": "log-viewer",
+  "name": "Virtual-scroll log viewer",
+  "description": "Log viewer with TanStack Virtual for efficient rendering of large log files.",
+  "status": "in_progress",
+  "branch": "agent/log-viewer",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "web/src/components/logs/LogViewer.tsx renders logs with virtual scrolling",
+    "Uses TanStack Virtual for efficient rendering",
+    "Supports filtering and searching within logs",
+    "Integrated into route detail page",
+    "Responsive layout",
+    "pnpm --dir web build passes",
+    "pnpm --dir web lint passes"
+  ]
+}
