@@ -1,0 +1,20 @@
+{
+  "id": "video-transcoding",
+  "name": "HEVC-to-HLS background worker",
+  "description": "Implement a background worker that transcodes HEVC video files to HLS format for browser playback using FFmpeg.",
+  "acceptance_criteria": [
+    "internal/worker/ package with a transcoding worker",
+    "Converts HEVC files to HLS (m3u8 + ts segments) using FFmpeg",
+    "Watches for new uploads or processes on-demand",
+    "Outputs HLS files alongside originals in the storage path",
+    "Handles errors gracefully (FFmpeg not found, corrupt files)",
+    "Unit tests cover transcoding logic and error cases",
+    "go build and go vet pass cleanly"
+  ],
+  "priority": 5,
+  "status": "complete",
+  "branch": "agent/video-transcoding",
+  "base_branch": "main",
+  "blocked_by": ["storage-layer"],
+  "notes": ""
+}
