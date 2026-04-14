@@ -1,0 +1,18 @@
+{
+  "id": "ux-polish",
+  "name": "Final UX refinement + polish",
+  "description": "Final pass to ensure consistent styling, smooth interactions, and polished UX across all pages.",
+  "status": "complete",
+  "branch": "agent/ux-polish",
+  "blocked_by": ["frontend-ux-design"],
+  "acceptance_criteria": [
+    "All pages use consistent spacing, typography, and color tokens",
+    "Navigation active states work correctly across all routes",
+    "Dark mode works consistently across all pages and components",
+    "Loading states are smooth with no layout shifts",
+    "Error states provide clear feedback with retry options",
+    "Mobile responsiveness verified on all pages",
+    "pnpm --dir web build passes",
+    "pnpm --dir web lint passes"
+  ]
+}

@@ -49,7 +49,7 @@
   --bg-secondary: var(--color-neutral-100);
   --bg-tertiary: var(--color-neutral-200);
   --bg-surface: #ffffff;
-  --bg-nav: #ffffff;
+  --bg-nav: rgba(255, 255, 255, 0.85);
 
   --text-primary: var(--color-neutral-900);
   --text-secondary: var(--color-neutral-600);
@@ -71,7 +71,7 @@
     --bg-secondary: var(--color-neutral-900);
     --bg-tertiary: var(--color-neutral-800);
     --bg-surface: var(--color-neutral-850);
-    --bg-nav: var(--color-neutral-900);
+    --bg-nav: rgba(24, 24, 27, 0.85);
 
     --text-primary: var(--color-neutral-100);
     --text-secondary: var(--color-neutral-400);
@@ -89,9 +89,29 @@
 }
 
 /* Base styles */
+html {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    color-scheme: dark;
+  }
+}
+
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
+}
+
+/* Smooth focus transitions */
+*:focus-visible {
+  transition: box-shadow 0.15s ease;
+}
+
+/* Ensure scrollable containers work on mobile */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Typography scale */

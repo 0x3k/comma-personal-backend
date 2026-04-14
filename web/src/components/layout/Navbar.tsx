@@ -16,13 +16,19 @@ const navLinks: NavLink[] = [
 
 function Navbar() {
   const pathname = usePathname();
+  const isHomeActive = pathname === "/";
 
   return (
-    <header className="sticky top-0 z-40 border-b border-[var(--border-primary)] bg-[var(--bg-nav)]">
+    <header className="sticky top-0 z-40 border-b border-[var(--border-primary)] bg-[var(--bg-nav)] backdrop-blur-sm">
       <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
         <Link
           href="/"
-          className="text-base font-semibold tracking-tight text-[var(--text-primary)]"
+          className={[
+            "text-base font-semibold tracking-tight transition-colors",
+            isHomeActive
+              ? "text-[var(--accent)]"
+              : "text-[var(--text-primary)] hover:text-[var(--accent)]",
+          ].join(" ")}
         >
           comma personal
         </Link>
