@@ -1,0 +1,17 @@
+{
+  "id": "control-center-page",
+  "name": "Control Center settings UI",
+  "description": "Settings page for managing device configuration parameters.",
+  "status": "in_progress",
+  "branch": "agent/control-center-page",
+  "blocked_by": ["frontend-scaffold"],
+  "acceptance_criteria": [
+    "web/src/app/settings/page.tsx displays device config parameters",
+    "Supports editing parameter values inline or via form",
+    "Shows connection status (device online via WebSocket)",
+    "Uses shared UI components",
+    "Responsive layout",
+    "pnpm --dir web build passes",
+    "pnpm --dir web lint passes"
+  ]
+}
