@@ -2,7 +2,7 @@
   "id": "log-viewer",
   "name": "Virtual-scroll log viewer",
   "description": "Log viewer with TanStack Virtual for efficient rendering of large log files.",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/log-viewer",
   "blocked_by": [],
   "acceptance_criteria": [
