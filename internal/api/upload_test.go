@@ -17,7 +17,7 @@ import (
 
 func TestGetUploadURL(t *testing.T) {
 	store := storage.New(t.TempDir())
-	handler := NewUploadHandler(store)
+	handler := NewUploadHandler(store, nil)
 
 	tests := []struct {
 		name         string
@@ -226,7 +226,7 @@ func TestUploadFile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			store := storage.New(tmpDir)
-			handler := NewUploadHandler(store)
+			handler := NewUploadHandler(store, nil)
 
 			e := echo.New()
 			target := "/upload/" + tt.dongleID + "/" + tt.filePath

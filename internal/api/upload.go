@@ -1,13 +1,20 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
 	"comma-personal-backend/internal/api/middleware"
+	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/storage"
 )
 
@@ -26,14 +33,34 @@ var validFilenames = map[string]bool{
 	"dcamera.hevc~": true,
 }
 
+// filenameToFlag maps uploaded filenames to the corresponding upload flag
+// field on the segment record. Compressed variants (e.g. rlog.bz2) and
+// in-progress markers (e.g. fcamera.hevc~) map to the same base flag.
+var filenameToFlag = map[string]string{
+	"rlog":          "rlog",
+	"rlog.bz2":      "rlog",
+	"qlog":          "qlog",
+	"qlog.bz2":      "qlog",
+	"fcamera.hevc":  "fcamera",
+	"fcamera.hevc~": "fcamera",
+	"ecamera.hevc":  "ecamera",
+	"ecamera.hevc~": "ecamera",
+	"dcamera.hevc":  "dcamera",
+	"dcamera.hevc~": "dcamera",
+	"qcamera.ts":    "qcamera",
+}
+
 // UploadHandler holds the dependencies for upload-related HTTP handlers.
 type UploadHandler struct {
 	storage *storage.Storage
+	queries *db.Queries
 }
 
-// NewUploadHandler creates an UploadHandler with the given storage backend.
-func NewUploadHandler(s *storage.Storage) *UploadHandler {
-	return &UploadHandler{storage: s}
+// NewUploadHandler creates an UploadHandler with the given storage backend
+// and optional database queries. If queries is nil, database tracking is
+// skipped (useful for tests that only exercise storage).
+func NewUploadHandler(s *storage.Storage, queries *db.Queries) *UploadHandler {
+	return &UploadHandler{storage: s, queries: queries}
 }
 
 // uploadURLResponse is the JSON response for the upload URL endpoint.
@@ -133,7 +160,99 @@ func (h *UploadHandler) UploadFile(c echo.Context) error {
 		})
 	}
 
+	// Track the upload in the database if queries are available.
+	if h.queries != nil {
+		if err := h.trackUpload(c.Request().Context(), dongleID, route, segment, filename); err != nil {
+			// Log the error but do not fail the upload -- the file is already
+			// stored on disk. DB tracking can be reconciled later.
+			log.Printf("warning: failed to track upload in database: %v", err)
+		}
+	}
+
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// trackUpload ensures the route and segment records exist in the database and
+// sets the upload flag corresponding to the given filename.
+func (h *UploadHandler) trackUpload(ctx context.Context, dongleID, routeName, segmentStr, filename string) error {
+	segmentNum, err := strconv.Atoi(segmentStr)
+	if err != nil {
+		return fmt.Errorf("invalid segment number %q: %w", segmentStr, err)
+	}
+
+	// Get or create the route record.
+	routeRecord, err := h.queries.GetRoute(ctx, db.GetRouteParams{
+		DongleID:  dongleID,
+		RouteName: routeName,
+	})
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("failed to get route: %w", err)
+		}
+		// Route does not exist; create it.
+		routeRecord, err = h.queries.CreateRoute(ctx, db.CreateRouteParams{
+			DongleID:  dongleID,
+			RouteName: routeName,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create route: %w", err)
+		}
+	}
+
+	// Create the segment if it does not exist. CreateSegmentIfNotExists uses
+	// ON CONFLICT DO NOTHING, which returns no rows when the segment already
+	// exists. In that case we fall back to GetSegment.
+	_, err = h.queries.CreateSegmentIfNotExists(ctx, db.CreateSegmentIfNotExistsParams{
+		RouteID:       routeRecord.ID,
+		SegmentNumber: int32(segmentNum),
+	})
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to create segment: %w", err)
+	}
+
+	// Update the upload flag for this file type.
+	uploadParams := buildUploadParams(routeRecord.ID, int32(segmentNum), filename)
+	if uploadParams != nil {
+		if err := h.queries.UpdateSegmentUpload(ctx, *uploadParams); err != nil {
+			return fmt.Errorf("failed to update segment upload flag: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// buildUploadParams creates UpdateSegmentUploadParams with the appropriate
+// flag set for the given filename. Returns nil if the filename does not map
+// to a known upload flag.
+func buildUploadParams(routeID, segmentNumber int32, filename string) *db.UpdateSegmentUploadParams {
+	flag, ok := filenameToFlag[filename]
+	if !ok {
+		return nil
+	}
+
+	params := db.UpdateSegmentUploadParams{
+		RouteID:       routeID,
+		SegmentNumber: segmentNumber,
+	}
+
+	trueVal := pgtype.Bool{Bool: true, Valid: true}
+
+	switch flag {
+	case "rlog":
+		params.RlogUploaded = trueVal
+	case "qlog":
+		params.QlogUploaded = trueVal
+	case "fcamera":
+		params.FcameraUploaded = trueVal
+	case "ecamera":
+		params.EcameraUploaded = trueVal
+	case "dcamera":
+		params.DcameraUploaded = trueVal
+	case "qcamera":
+		params.QcameraUploaded = trueVal
+	}
+
+	return &params
 }
 
 // parsePath parses the path query parameter from the upload URL request.
