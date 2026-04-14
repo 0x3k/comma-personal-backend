@@ -1,0 +1,17 @@
+{
+  "id": "device-info-api",
+  "name": "GET /v1.1/devices/{dongle_id}",
+  "status": "complete",
+  "branch": "agent/device-info-api",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "GET /v1.1/devices/:dongle_id/ returns device info as JSON",
+    "Response includes dongle_id, serial, public_key, created_at, updated_at",
+    "Requires JWT authentication via the auth middleware",
+    "Returns 404 for unknown devices",
+    "Returns 401 for unauthenticated requests",
+    "Unit tests cover success, not found, and auth cases",
+    "go build and go vet pass cleanly"
+  ]
+}
