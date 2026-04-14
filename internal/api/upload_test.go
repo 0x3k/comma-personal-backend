@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
 	"comma-personal-backend/internal/api/middleware"
@@ -405,5 +406,116 @@ func TestParseUploadPath(t *testing.T) {
 				t.Errorf("filename = %q, want %q", filename, tt.wantFile)
 			}
 		})
+	}
+}
+
+func TestBuildUploadParams(t *testing.T) {
+	trueVal := pgtype.Bool{Bool: true, Valid: true}
+	zeroVal := pgtype.Bool{}
+
+	const routeID int32 = 42
+	const segNum int32 = 3
+
+	tests := []struct {
+		name     string
+		filename string
+		wantNil  bool
+		// wantFlag identifies which single field should be set to trueVal.
+		// Empty string means we expect nil (wantNil == true).
+		wantFlag string
+	}{
+		{name: "rlog sets rlog flag", filename: "rlog", wantFlag: "rlog"},
+		{name: "rlog.bz2 sets rlog flag", filename: "rlog.bz2", wantFlag: "rlog"},
+		{name: "qlog sets qlog flag", filename: "qlog", wantFlag: "qlog"},
+		{name: "qlog.bz2 sets qlog flag", filename: "qlog.bz2", wantFlag: "qlog"},
+		{name: "fcamera.hevc sets fcamera flag", filename: "fcamera.hevc", wantFlag: "fcamera"},
+		{name: "fcamera.hevc~ sets fcamera flag", filename: "fcamera.hevc~", wantFlag: "fcamera"},
+		{name: "ecamera.hevc sets ecamera flag", filename: "ecamera.hevc", wantFlag: "ecamera"},
+		{name: "ecamera.hevc~ sets ecamera flag", filename: "ecamera.hevc~", wantFlag: "ecamera"},
+		{name: "dcamera.hevc sets dcamera flag", filename: "dcamera.hevc", wantFlag: "dcamera"},
+		{name: "dcamera.hevc~ sets dcamera flag", filename: "dcamera.hevc~", wantFlag: "dcamera"},
+		{name: "qcamera.ts sets qcamera flag", filename: "qcamera.ts", wantFlag: "qcamera"},
+		{name: "unknown filename returns nil", filename: "unknown.bin", wantNil: true},
+		{name: "empty filename returns nil", filename: "", wantNil: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := buildUploadParams(routeID, segNum, tt.filename)
+
+			if tt.wantNil {
+				if result != nil {
+					t.Fatalf("expected nil, got %+v", result)
+				}
+				return
+			}
+
+			if result == nil {
+				t.Fatal("expected non-nil result, got nil")
+			}
+
+			if result.RouteID != routeID {
+				t.Errorf("RouteID = %d, want %d", result.RouteID, routeID)
+			}
+			if result.SegmentNumber != segNum {
+				t.Errorf("SegmentNumber = %d, want %d", result.SegmentNumber, segNum)
+			}
+
+			// Build a map of flag name to actual value for easy checking.
+			flags := map[string]pgtype.Bool{
+				"rlog":    result.RlogUploaded,
+				"qlog":    result.QlogUploaded,
+				"fcamera": result.FcameraUploaded,
+				"ecamera": result.EcameraUploaded,
+				"dcamera": result.DcameraUploaded,
+				"qcamera": result.QcameraUploaded,
+			}
+
+			for flagName, flagVal := range flags {
+				if flagName == tt.wantFlag {
+					if flagVal != trueVal {
+						t.Errorf("%s = %+v, want %+v", flagName, flagVal, trueVal)
+					}
+				} else {
+					if flagVal != zeroVal {
+						t.Errorf("%s = %+v, want zero value %+v (only %s should be set)",
+							flagName, flagVal, zeroVal, tt.wantFlag)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestUploadFileUnsupportedFilename(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := storage.New(tmpDir)
+	handler := NewUploadHandler(store, nil)
+
+	e := echo.New()
+	filePath := "2024-03-15--12-30-00/0/unknown.bin"
+	target := "/upload/abc123/" + filePath
+	req := httptest.NewRequest(http.MethodPut, target, strings.NewReader("data"))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id", "*")
+	c.SetParamValues("abc123", filePath)
+	c.Set(middleware.ContextKeyDongleID, "abc123")
+
+	err := handler.UploadFile(c)
+	if err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	var body errorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to parse error body: %v", err)
+	}
+	if !strings.Contains(body.Error, "unsupported file type") {
+		t.Errorf("error = %q, want substring %q", body.Error, "unsupported file type")
 	}
 }

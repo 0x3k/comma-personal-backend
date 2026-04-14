@@ -4,15 +4,19 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
+	echomw "github.com/labstack/echo/v4/middleware"
 
 	"comma-personal-backend/internal/api"
 	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/storage"
+	"comma-personal-backend/internal/ws"
 )
 
 func main() {
@@ -24,29 +28,71 @@ func main() {
 		log.Fatalf("failed to load configuration: %v", err)
 	}
 
-	conn, err := pgx.Connect(context.Background(), cfg.DatabaseURL)
+	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
-	defer conn.Close(context.Background())
+	defer pool.Close()
 
-	queries := db.New(conn)
+	queries := db.New(pool)
+	store := storage.New(cfg.StoragePath)
 
 	e := echo.New()
+
+	// Global rate limiter: 20 requests/second per IP.
+	e.Use(echomw.RateLimiter(echomw.NewRateLimiterMemoryStore(20)))
+
+	// Default body limit for JSON endpoints (1MB).
+	e.Use(echomw.BodyLimit("1M"))
 
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	pilotAuth := api.NewPilotAuthHandler(queries, cfg.JWTSecret)
+	// Device registration (unauthenticated).
+	pilotAuth := api.NewPilotAuthHandler(queries, cfg.JWTSecret, cfg)
 	pilotAuth.RegisterRoutes(e)
 
+	// Authenticated API groups.
 	v11 := e.Group("/v1.1", middleware.JWTAuthHMAC(cfg.JWTSecret))
 	deviceHandler := api.NewDeviceHandler(queries)
 	deviceHandler.RegisterRoutes(v11)
 
+	// Route listing and detail.
+	v1Route := e.Group("/v1/route", middleware.JWTAuthHMAC(cfg.JWTSecret))
+	routeHandler := api.NewRouteHandler(queries)
+	routeHandler.RegisterRoutes(v1Route)
+
+	// Upload URL and file upload.
+	v14 := e.Group("/v1.4", middleware.JWTAuthHMAC(cfg.JWTSecret))
+	uploadHandler := api.NewUploadHandler(store, queries)
+	v14.GET("/:dongle_id/upload_url/", uploadHandler.GetUploadURL)
+	v14.GET("/:dongle_id/upload_url", uploadHandler.GetUploadURL)
+
+	uploadGroup := e.Group("/upload", middleware.JWTAuthHMAC(cfg.JWTSecret), echomw.BodyLimit("100M"))
+	uploadGroup.PUT("/:dongle_id/*", uploadHandler.UploadFile)
+
+	// Device config parameters.
+	hub := ws.NewHub()
+	rpcCaller := ws.NewRPCCaller()
+
+	v1Config := e.Group("/v1", middleware.JWTAuthHMAC(cfg.JWTSecret))
+	configHandler := api.NewConfigHandler(queries, hub, rpcCaller)
+	configHandler.RegisterRoutes(v1Config)
+
+	// WebSocket for device communication.
+	wsHandler := ws.NewHandler(hub, cfg.JWTSecret, nil, rpcCaller)
+	wsHandler.RegisterRoutes(e)
+
+	s := &http.Server{
+		Addr:              ":" + cfg.Port,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      5 * time.Minute, // allows time for large uploads
+		IdleTimeout:       120 * time.Second,
+	}
+
 	log.Printf("starting server on :%s", cfg.Port)
-	if err := e.Start(":" + cfg.Port); err != nil {
+	if err := e.StartServer(s); err != nil {
 		log.Fatalf("failed to start server: %v", err)
 	}
 }

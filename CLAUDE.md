@@ -97,6 +97,7 @@ These repos contain the device-side code (athenad, uploader, API client) that th
 | `STORAGE_PATH` | yes | `./data` | Local filesystem path for video/log files |
 | `PORT` | no | `8080` | API server listen port |
 | `COMMA_DONGLE_ID` | no | - | Restrict to specific device (if multi-device) |
+| `ALLOWED_DONGLE_IDS` | no | - | Comma-separated allowlist of dongle IDs permitted to register via pilotauth. If unset, all devices are allowed. |
 | `JWT_SECRET` | yes | - | Token signing for device auth |
 
 ## Key Patterns

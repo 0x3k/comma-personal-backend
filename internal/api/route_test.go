@@ -31,7 +31,6 @@ type routeMockDB struct {
 	segments    []db.Segment
 	segmentsErr error
 	segCount    int64
-	segCountErr error
 }
 
 func (m *routeMockDB) Exec(_ context.Context, _ string, _ ...interface{}) (pgconn.CommandTag, error) {
@@ -39,6 +38,12 @@ func (m *routeMockDB) Exec(_ context.Context, _ string, _ ...interface{}) (pgcon
 }
 
 func (m *routeMockDB) Query(_ context.Context, sql string, _ ...interface{}) (pgx.Rows, error) {
+	if strings.Contains(sql, "segment_count") {
+		if m.routesErr != nil {
+			return nil, m.routesErr
+		}
+		return &mockRouteWithCountRows{routes: m.routes, segCount: m.segCount}, nil
+	}
 	if strings.Contains(sql, "FROM routes") {
 		if m.routesErr != nil {
 			return nil, m.routesErr
@@ -60,12 +65,6 @@ func (m *routeMockDB) QueryRow(_ context.Context, sql string, _ ...interface{}) 
 			return &mockCountRow{err: m.countErr}
 		}
 		return &mockCountRow{count: m.routeCount}
-	}
-	if strings.Contains(sql, "count(*)") && strings.Contains(sql, "segments") {
-		if m.segCountErr != nil {
-			return &mockCountRow{err: m.segCountErr}
-		}
-		return &mockCountRow{count: m.segCount}
 	}
 	if strings.Contains(sql, "FROM routes") {
 		if m.routeErr != nil {
@@ -151,6 +150,44 @@ func (r *mockRouteRows) Scan(dest ...interface{}) error {
 }
 
 func (r *mockRouteRows) Values() ([]interface{}, error) { return nil, nil }
+
+// mockRouteWithCountRows implements pgx.Rows for ListRoutesByDeviceWithCounts.
+type mockRouteWithCountRows struct {
+	routes   []db.Route
+	segCount int64
+	idx      int
+	closed   bool
+}
+
+func (r *mockRouteWithCountRows) Close()                                       { r.closed = true }
+func (r *mockRouteWithCountRows) Err() error                                   { return nil }
+func (r *mockRouteWithCountRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *mockRouteWithCountRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *mockRouteWithCountRows) RawValues() [][]byte                          { return nil }
+func (r *mockRouteWithCountRows) Conn() *pgx.Conn                              { return nil }
+
+func (r *mockRouteWithCountRows) Next() bool {
+	if r.idx < len(r.routes) {
+		r.idx++
+		return true
+	}
+	return false
+}
+
+func (r *mockRouteWithCountRows) Scan(dest ...interface{}) error {
+	route := r.routes[r.idx-1]
+	*dest[0].(*int32) = route.ID
+	*dest[1].(*string) = route.DongleID
+	*dest[2].(*string) = route.RouteName
+	*dest[3].(*pgtype.Timestamptz) = route.StartTime
+	*dest[4].(*pgtype.Timestamptz) = route.EndTime
+	*dest[5].(*interface{}) = route.Geometry
+	*dest[6].(*pgtype.Timestamptz) = route.CreatedAt
+	*dest[7].(*int64) = r.segCount
+	return nil
+}
+
+func (r *mockRouteWithCountRows) Values() ([]interface{}, error) { return nil, nil }
 
 // mockSegmentRows implements pgx.Rows for listing segments.
 type mockSegmentRows struct {
@@ -285,19 +322,6 @@ func TestGetRoute(t *testing.T) {
 			},
 			wantStatus: http.StatusInternalServerError,
 			wantError:  "failed to retrieve segments",
-		},
-		{
-			name:         "database error on segment count",
-			dongleID:     "abc123",
-			routeName:    "2024-03-15--12-30-00",
-			authDongleID: "abc123",
-			mock: &routeMockDB{
-				route:       newTestRoute(1, "abc123", "2024-03-15--12-30-00"),
-				segments:    []db.Segment{},
-				segCountErr: fmt.Errorf("connection refused"),
-			},
-			wantStatus: http.StatusInternalServerError,
-			wantError:  "failed to count segments",
 		},
 		{
 			name:         "route with no segments",

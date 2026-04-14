@@ -35,7 +35,7 @@ func setupTestServer(t *testing.T, handlers map[string]MethodHandler) (*httptest
 	t.Helper()
 	hub := NewHub()
 	e := echo.New()
-	h := NewHandler(hub, testJWTSecret, handlers)
+	h := NewHandler(hub, testJWTSecret, handlers, nil)
 	h.RegisterRoutes(e)
 
 	server := httptest.NewServer(e)

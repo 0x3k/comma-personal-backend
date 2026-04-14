@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 
+	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/db"
 )
 
@@ -40,6 +41,14 @@ func (h *DeviceHandler) GetDevice(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, errorResponse{
 			Error: "dongle_id is required",
 			Code:  http.StatusBadRequest,
+		})
+	}
+
+	authDongleID, _ := c.Get(middleware.ContextKeyDongleID).(string)
+	if authDongleID != dongleID {
+		return c.JSON(http.StatusForbidden, errorResponse{
+			Error: "dongle_id does not match authenticated device",
+			Code:  http.StatusForbidden,
 		})
 	}
 

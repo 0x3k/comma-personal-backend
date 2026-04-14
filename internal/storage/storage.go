@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // Storage manages dashcam files on the local filesystem.
@@ -24,6 +25,19 @@ func New(basePath string) *Storage {
 // creating any necessary directories along the way.
 func (s *Storage) Store(dongleID, route, segment, filename string, data io.Reader) error {
 	dir := filepath.Join(s.basePath, dongleID, route, segment)
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve path: %w", err)
+	}
+	absBase, err := filepath.Abs(s.basePath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve base path: %w", err)
+	}
+	if !strings.HasPrefix(absDir, absBase+string(filepath.Separator)) && absDir != absBase {
+		return fmt.Errorf("path traversal detected")
+	}
+
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create directories: %w", err)
 	}
@@ -33,10 +47,17 @@ func (s *Storage) Store(dongleID, route, segment, filename string, data io.Reade
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
-	defer f.Close()
 
-	if _, err := io.Copy(f, data); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
+	_, copyErr := io.Copy(f, data)
+	closeErr := f.Close()
+
+	if copyErr != nil {
+		os.Remove(path)
+		return fmt.Errorf("failed to write file: %w", copyErr)
+	}
+	if closeErr != nil {
+		os.Remove(path)
+		return fmt.Errorf("failed to close file: %w", closeErr)
 	}
 
 	return nil

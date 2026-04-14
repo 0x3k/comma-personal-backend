@@ -108,14 +108,6 @@ func (h *RouteHandler) GetRoute(c echo.Context) error {
 		})
 	}
 
-	segCount, err := h.queries.CountSegmentsByRoute(ctx, route.ID)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, errorResponse{
-			Error: "failed to count segments",
-			Code:  http.StatusInternalServerError,
-		})
-	}
-
 	segResponses := make([]segmentResponse, 0, len(segments))
 	for _, s := range segments {
 		segResponses = append(segResponses, segmentResponse{
@@ -142,7 +134,7 @@ func (h *RouteHandler) GetRoute(c echo.Context) error {
 		RouteName:    route.RouteName,
 		StartTime:    startTime,
 		EndTime:      endTime,
-		SegmentCount: segCount,
+		SegmentCount: int64(len(segments)),
 		Segments:     segResponses,
 	})
 }
@@ -193,7 +185,7 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 		})
 	}
 
-	routes, err := h.queries.ListRoutesByDevicePaginated(ctx, db.ListRoutesByDevicePaginatedParams{
+	routes, err := h.queries.ListRoutesByDeviceWithCounts(ctx, db.ListRoutesByDevicePaginatedParams{
 		DongleID: dongleID,
 		Limit:    limit,
 		Offset:   offset,
@@ -207,14 +199,6 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 
 	items := make([]routeListItem, 0, len(routes))
 	for _, r := range routes {
-		segCount, err := h.queries.CountSegmentsByRoute(ctx, r.ID)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, errorResponse{
-				Error: "failed to count segments",
-				Code:  http.StatusInternalServerError,
-			})
-		}
-
 		var startTime, endTime *time.Time
 		if r.StartTime.Valid {
 			startTime = &r.StartTime.Time
@@ -228,7 +212,7 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 			RouteName:    r.RouteName,
 			StartTime:    startTime,
 			EndTime:      endTime,
-			SegmentCount: segCount,
+			SegmentCount: r.SegmentCount,
 		})
 	}
 

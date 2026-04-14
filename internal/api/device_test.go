@@ -86,6 +86,7 @@ func TestGetDevice(t *testing.T) {
 			c := e.NewContext(req, rec)
 			c.SetParamNames("dongle_id")
 			c.SetParamValues(tt.dongleID)
+			c.Set(middleware.ContextKeyDongleID, tt.dongleID)
 
 			err := handler.GetDevice(c)
 			if err != nil {

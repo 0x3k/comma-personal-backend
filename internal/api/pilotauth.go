@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
+	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
 )
 
@@ -18,13 +19,15 @@ import (
 type PilotAuthHandler struct {
 	queries   *db.Queries
 	jwtSecret string
+	cfg       *config.Config
 }
 
 // NewPilotAuthHandler creates a handler for the pilotauth endpoint.
-func NewPilotAuthHandler(queries *db.Queries, jwtSecret string) *PilotAuthHandler {
+func NewPilotAuthHandler(queries *db.Queries, jwtSecret string, cfg *config.Config) *PilotAuthHandler {
 	return &PilotAuthHandler{
 		queries:   queries,
 		jwtSecret: jwtSecret,
+		cfg:       cfg,
 	}
 }
 
@@ -71,6 +74,13 @@ func (h *PilotAuthHandler) Handle(c echo.Context) error {
 		})
 	}
 
+	if !h.cfg.IsDongleAllowed(req.DongleID) {
+		return c.JSON(http.StatusForbidden, errorResponse{
+			Error: "device not allowed to register",
+			Code:  http.StatusForbidden,
+		})
+	}
+
 	device, err := h.queries.UpsertDevice(c.Request().Context(), db.UpsertDeviceParams{
 		DongleID:  req.DongleID,
 		Serial:    pgtype.Text{String: req.Serial, Valid: req.Serial != ""},
@@ -103,7 +113,7 @@ func (h *PilotAuthHandler) signToken(dongleID string) (string, error) {
 		"dongle_id": dongleID,
 		"identity":  dongleID,
 		"iat":       now.Unix(),
-		"exp":       now.Add(365 * 24 * time.Hour).Unix(),
+		"exp":       now.Add(90 * 24 * time.Hour).Unix(),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

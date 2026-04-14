@@ -150,6 +150,13 @@ func (h *UploadHandler) UploadFile(c echo.Context) error {
 		})
 	}
 
+	if !validFilenames[filename] {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: fmt.Sprintf("unsupported file type: %s", filename),
+			Code:  http.StatusBadRequest,
+		})
+	}
+
 	body := c.Request().Body
 	defer body.Close()
 
@@ -195,7 +202,15 @@ func (h *UploadHandler) trackUpload(ctx context.Context, dongleID, routeName, se
 			RouteName: routeName,
 		})
 		if err != nil {
-			return fmt.Errorf("failed to create route: %w", err)
+			// A concurrent upload may have created the route between our
+			// GetRoute and CreateRoute calls. Fetch it again.
+			routeRecord, err = h.queries.GetRoute(ctx, db.GetRouteParams{
+				DongleID:  dongleID,
+				RouteName: routeName,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to get or create route: %w", err)
+			}
 		}
 	}
 
