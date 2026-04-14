@@ -1,0 +1,16 @@
+{
+  "id": "route-segment-queries",
+  "name": "sqlc queries for routes + segments",
+  "description": "Extend the sqlc query layer with additional queries needed by the route and segment APIs.",
+  "status": "complete",
+  "branch": "agent/route-segment-queries",
+  "base_branch": "main",
+  "blocked_by": ["database-schema"],
+  "acceptance_criteria": [
+    "sql/queries/ has extended route queries: list with pagination, get by full name, count by device",
+    "sql/queries/ has extended segment queries: batch status update, list with file status, get by route and number",
+    "sqlc generate produces updated code in internal/db/ without errors",
+    "Queries use appropriate indexes and avoid N+1 patterns",
+    "go build and go vet pass cleanly"
+  ]
+}

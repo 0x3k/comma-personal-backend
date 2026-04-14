@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSegmentsByRoute = `-- name: CountSegmentsByRoute :one
+SELECT count(*) FROM segments WHERE route_id = $1
+`
+
+func (q *Queries) CountSegmentsByRoute(ctx context.Context, routeID int32) (int64, error) {
+	row := q.db.QueryRow(ctx, countSegmentsByRoute, routeID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createSegment = `-- name: CreateSegment :one
 INSERT INTO segments (route_id, segment_number)
 VALUES ($1, $2)
@@ -28,6 +39,40 @@ type CreateSegmentParams struct {
 
 func (q *Queries) CreateSegment(ctx context.Context, arg CreateSegmentParams) (Segment, error) {
 	row := q.db.QueryRow(ctx, createSegment, arg.RouteID, arg.SegmentNumber)
+	var i Segment
+	err := row.Scan(
+		&i.ID,
+		&i.RouteID,
+		&i.SegmentNumber,
+		&i.RlogUploaded,
+		&i.QlogUploaded,
+		&i.FcameraUploaded,
+		&i.EcameraUploaded,
+		&i.DcameraUploaded,
+		&i.QcameraUploaded,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createSegmentIfNotExists = `-- name: CreateSegmentIfNotExists :one
+INSERT INTO segments (route_id, segment_number)
+VALUES ($1, $2)
+ON CONFLICT (route_id, segment_number) DO NOTHING
+RETURNING id, route_id, segment_number,
+          rlog_uploaded, qlog_uploaded,
+          fcamera_uploaded, ecamera_uploaded,
+          dcamera_uploaded, qcamera_uploaded,
+          created_at
+`
+
+type CreateSegmentIfNotExistsParams struct {
+	RouteID       int32 `json:"routeId"`
+	SegmentNumber int32 `json:"segmentNumber"`
+}
+
+func (q *Queries) CreateSegmentIfNotExists(ctx context.Context, arg CreateSegmentIfNotExistsParams) (Segment, error) {
+	row := q.db.QueryRow(ctx, createSegmentIfNotExists, arg.RouteID, arg.SegmentNumber)
 	var i Segment
 	err := row.Scan(
 		&i.ID,
