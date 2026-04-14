@@ -1,0 +1,17 @@
+{
+  "id": "route-list-page",
+  "name": "Frontend route browsing page",
+  "status": "complete",
+  "branch": "agent/route-list-page",
+  "blocked_by": ["frontend-scaffold", "route-api"],
+  "acceptance_criteria": [
+    "web/src/app/routes/page.tsx lists routes fetched from the API",
+    "Each route shows name, date, segment count, upload status",
+    "Clicking a route navigates to detail page",
+    "web/src/app/routes/[dongleId]/[routeName]/page.tsx shows route detail with segments",
+    "Uses shared UI components (Card, Badge, Spinner, ErrorMessage)",
+    "Responsive layout",
+    "pnpm --dir web build passes",
+    "pnpm --dir web lint passes"
+  ]
+}
