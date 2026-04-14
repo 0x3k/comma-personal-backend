@@ -1,7 +1,7 @@
 {
   "id": "frontend-ux-design",
   "name": "UI/UX planning + design system",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/frontend-ux-design",
   "base_branch": "main",
   "blocked_by": ["frontend-scaffold"],
