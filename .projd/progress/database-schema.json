@@ -2,7 +2,7 @@
   "id": "database-schema",
   "name": "PostgreSQL migrations + sqlc setup",
   "description": "Create the PostgreSQL schema migrations for devices, routes, and segments tables. Set up sqlc configuration and generate type-safe Go code from SQL queries. Include PostGIS extension for spatial data.",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/database-schema",
   "base_branch": "main",
   "blocked_by": [],
