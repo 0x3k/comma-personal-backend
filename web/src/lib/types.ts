@@ -47,3 +47,18 @@ export interface DeviceParam {
   key: string;
   value: string;
 }
+
+/** Severity level for a log entry. */
+export type LogSeverity = "info" | "warning" | "error";
+
+/** A single parsed log entry for display in the log viewer. */
+export interface LogEntry {
+  /** Monotonic index for keying. */
+  id: number;
+  /** ISO timestamp or relative time string. */
+  timestamp: string;
+  /** Severity level. */
+  severity: LogSeverity;
+  /** The log message text. */
+  message: string;
+}
