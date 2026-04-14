@@ -39,3 +39,9 @@ export interface RouteDetailResponse {
   segmentCount: number;
   segments: Segment[];
 }
+
+/** A single device configuration parameter as returned by the config API. */
+export interface DeviceParam {
+  key: string;
+  value: string;
+}
