@@ -8,6 +8,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type DeviceParam struct {
+	ID        int32              `json:"id"`
+	DongleID  string             `json:"dongleId"`
+	Key       string             `json:"key"`
+	Value     string             `json:"value"`
+	UpdatedAt pgtype.Timestamptz `json:"updatedAt"`
+}
+
 type Device struct {
 	DongleID  string             `json:"dongleId"`
 	Serial    pgtype.Text        `json:"serial"`
