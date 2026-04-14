@@ -6,8 +6,6 @@ import { usePathname } from "next/navigation";
 interface NavLink {
   href: string;
   label: string;
-  /** When true, only exact pathname match counts as active. */
-  exact?: boolean;
 }
 
 const navLinks: NavLink[] = [
