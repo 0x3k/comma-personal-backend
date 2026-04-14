@@ -12,7 +12,7 @@
     "go build and go vet pass cleanly"
   ],
   "priority": 9,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/device-config-api",
   "blocked_by": ["device-params-model", "athena-rpc-handlers"],
   "notes": ""
