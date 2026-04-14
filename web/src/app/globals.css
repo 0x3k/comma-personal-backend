@@ -89,9 +89,29 @@
 }
 
 /* Base styles */
+html {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  html {
+    color-scheme: dark;
+  }
+}
+
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
+}
+
+/* Smooth focus transitions */
+*:focus-visible {
+  transition: box-shadow 0.15s ease;
+}
+
+/* Ensure scrollable containers work on mobile */
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Typography scale */

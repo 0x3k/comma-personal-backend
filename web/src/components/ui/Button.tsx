@@ -34,7 +34,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
       ref={ref}
       className={[
         "inline-flex items-center justify-center font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 ring-offset-[var(--bg-surface)]",
         "disabled:pointer-events-none disabled:opacity-50",
         variantStyles[variant],
         sizeStyles[size],
