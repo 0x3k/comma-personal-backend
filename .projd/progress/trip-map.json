@@ -1,0 +1,17 @@
+{
+  "id": "trip-map",
+  "name": "Leaflet GPS track map",
+  "description": "Map component using Leaflet + OpenStreetMap for GPS tracks.",
+  "status": "in_progress",
+  "branch": "agent/trip-map",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "web/src/components/map/TripMap.tsx renders Leaflet map with OSM tiles",
+    "Displays GPS track as a polyline",
+    "Integrated into route detail page",
+    "Handles missing GPS data gracefully",
+    "Responsive sizing",
+    "pnpm --dir web build passes",
+    "pnpm --dir web lint passes"
+  ]
+}
