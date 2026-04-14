@@ -1,0 +1,20 @@
+{
+  "id": "route-api",
+  "name": "GET /v1/route/ endpoints",
+  "description": "Implement route API endpoints for listing and retrieving route details with segment info.",
+  "status": "in_progress",
+  "branch": "agent/route-api",
+  "base_branch": "main",
+  "priority": 1,
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "GET /v1/route/:dongle_id/:route_name returns route details with segment list",
+    "GET /v1/route/:dongle_id returns paginated list of routes for a device",
+    "Response includes route metadata: name, start_time, end_time, segment count",
+    "Segment list includes upload status for each file type",
+    "Requires JWT authentication",
+    "Uses existing sqlc queries",
+    "Unit tests cover route retrieval, listing, pagination, and not-found cases",
+    "go build and go vet pass cleanly"
+  ]
+}
