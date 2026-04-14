@@ -1,0 +1,48 @@
+# lefthook.yml -- Pre-commit and pre-push hooks.
+#
+# To configure manually: uncomment the block for your language,
+
+pre-commit:
+  parallel: true
+  commands:
+
+    lint:
+      glob: "src/**/*.{ts,tsx}"
+      run: npx eslint {staged_files} --no-error-on-unmatched-pattern
+    type-check:
+      glob: "src/**/*.{ts,tsx}"
+      run: npx tsc --noEmit
+
+    vet:
+      glob: "**/*.go"
+      run: go vet ./...
+    fmt:
+      glob: "**/*.go"
+      run: test -z "$(gofmt -l {staged_files})"
+
+
+pre-push:
+  commands:
+    push-guard:
+      run: |
+        if [ -f .projd/agent.json ]; then
+          ALLOW=$(jq -r '.git.allow_push // "false"' .projd/agent.json)
+          if [ "$ALLOW" = "false" ]; then
+            echo "Push blocked by .projd/agent.json (allow_push: false)"
+            echo "Operator override: git push --no-verify"
+            exit 1
+          elif [ "$ALLOW" = "feature" ]; then
+            PREFIX=$(jq -r '.git.branch_prefix // ""' .projd/agent.json)
+            BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+            if [ -n "$PREFIX" ] && [ -n "$BRANCH" ]; then
+              case "$BRANCH" in
+                "$PREFIX"*) ;;
+                *)
+                  echo "Push blocked: branch '$BRANCH' does not match prefix '$PREFIX' (allow_push: feature)"
+                  echo "Operator override: git push --no-verify"
+                  exit 1
+                  ;;
+              esac
+            fi
+          fi
+        fi

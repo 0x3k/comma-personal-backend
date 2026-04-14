@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+.venv/
+vendor/
+
+# Build output
+dist/
+build/
+*.o
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Lefthook
+lefthook-local.yml
+
+# Session state (ephemeral, not committed)
+.projd/HANDOFF.md
+
+# Claude Code local overrides
+.claude/settings.local.json
+
+# projd ephemeral state
+.projd/manifest
+.projd/mode
+.projd/source
+.projd/no-init

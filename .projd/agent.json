@@ -1,0 +1,13 @@
+{
+  "git": {
+    "branch_prefix": "agent/",
+    "protected_branches": ["main", "master"],
+    "allow_push": "feature",
+    "allow_force_push": false,
+    "auto_commit": true
+  },
+  "dispatch": {
+    "max_agents": 20,
+    "auto_review": true
+  }
+}
