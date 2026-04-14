@@ -2,7 +2,7 @@
   "id": "ux-polish",
   "name": "Final UX refinement + polish",
   "description": "Final pass to ensure consistent styling, smooth interactions, and polished UX across all pages.",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/ux-polish",
   "blocked_by": ["frontend-ux-design"],
   "acceptance_criteria": [
