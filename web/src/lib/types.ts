@@ -38,4 +38,12 @@ export interface RouteDetailResponse {
   endTime: string | null;
   segmentCount: number;
   segments: Segment[];
+  /** GPS track as an array of [lat, lng] coordinate pairs. May be null/empty. */
+  geometry?: [number, number][] | null;
+}
+
+/** A single device configuration parameter as returned by the config API. */
+export interface DeviceParam {
+  key: string;
+  value: string;
 }
