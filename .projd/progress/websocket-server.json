@@ -2,7 +2,7 @@
   "id": "websocket-server",
   "name": "WebSocket + JSON-RPC 2.0 framing",
   "description": "Implement WebSocket server for device communication using JSON-RPC 2.0 protocol.",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/websocket-server",
   "base_branch": "main",
   "blocked_by": [],
