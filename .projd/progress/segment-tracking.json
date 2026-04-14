@@ -1,0 +1,20 @@
+{
+  "id": "segment-tracking",
+  "name": "Track uploaded files, update route/segment DB",
+  "description": "When files are uploaded via the upload endpoint, automatically create route and segment records in the database and update upload status flags. This bridges the storage layer with the database layer.",
+  "acceptance_criteria": [
+    "When a file is uploaded, the route record is created if it does not exist",
+    "When a file is uploaded, the segment record is created if it does not exist",
+    "The appropriate upload flag is set on the segment (e.g. fcamera_uploaded = true)",
+    "Integrates with the existing upload handler in internal/api/upload.go",
+    "Uses existing sqlc queries (CreateRoute, CreateSegmentIfNotExists, UpdateSegmentUpload, GetRoute)",
+    "Unit tests cover route creation, segment creation, and upload status updates",
+    "go build and go vet pass cleanly"
+  ],
+  "priority": 6,
+  "status": "in_progress",
+  "branch": "agent/segment-tracking",
+  "base_branch": "main",
+  "blocked_by": ["upload-url-endpoint", "route-segment-queries"],
+  "notes": ""
+}
