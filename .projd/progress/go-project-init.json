@@ -1,0 +1,17 @@
+{
+  "id": "go-project-init",
+  "name": "Go module + Echo server + config",
+  "description": "Initialize the Go module, set up the Echo HTTP server entrypoint in cmd/server/, load configuration from environment variables (DATABASE_URL, STORAGE_PATH, PORT, JWT_SECRET), and expose a GET /health endpoint that returns 200 OK.",
+  "status": "in_progress",
+  "branch": "agent/go-project-init",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "go.mod exists with module name and Go 1.22+ requirement",
+    "cmd/server/main.go starts an Echo server on the configured PORT (default 8080)",
+    "Environment variables DATABASE_URL, STORAGE_PATH, PORT, JWT_SECRET are loaded from .env or OS env",
+    "GET /health returns HTTP 200 with JSON body {\"status\": \"ok\"}",
+    "go build -o server ./cmd/server succeeds without errors",
+    "go vet ./... passes cleanly"
+  ]
+}
