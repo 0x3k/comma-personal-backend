@@ -35,3 +35,16 @@ SET rlog_uploaded = COALESCE(sqlc.narg('rlog_uploaded'), rlog_uploaded),
     dcamera_uploaded = COALESCE(sqlc.narg('dcamera_uploaded'), dcamera_uploaded),
     qcamera_uploaded = COALESCE(sqlc.narg('qcamera_uploaded'), qcamera_uploaded)
 WHERE route_id = sqlc.arg('route_id') AND segment_number = sqlc.arg('segment_number');
+
+-- name: CountSegmentsByRoute :one
+SELECT count(*) FROM segments WHERE route_id = $1;
+
+-- name: CreateSegmentIfNotExists :one
+INSERT INTO segments (route_id, segment_number)
+VALUES ($1, $2)
+ON CONFLICT (route_id, segment_number) DO NOTHING
+RETURNING id, route_id, segment_number,
+          rlog_uploaded, qlog_uploaded,
+          fcamera_uploaded, ecamera_uploaded,
+          dcamera_uploaded, qcamera_uploaded,
+          created_at;

@@ -13,3 +13,18 @@ SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
 FROM routes
 WHERE dongle_id = $1
 ORDER BY created_at DESC;
+
+-- name: ListRoutesByDevicePaginated :many
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
+FROM routes
+WHERE dongle_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CountRoutesByDevice :one
+SELECT count(*) FROM routes WHERE dongle_id = $1;
+
+-- name: GetRouteByID :one
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
+FROM routes
+WHERE id = $1;

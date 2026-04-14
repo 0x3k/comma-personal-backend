@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countRoutesByDevice = `-- name: CountRoutesByDevice :one
+SELECT count(*) FROM routes WHERE dongle_id = $1
+`
+
+func (q *Queries) CountRoutesByDevice(ctx context.Context, dongleID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countRoutesByDevice, dongleID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createRoute = `-- name: CreateRoute :one
 INSERT INTO routes (dongle_id, route_name, start_time, end_time)
 VALUES ($1, $2, $3, $4)
@@ -70,6 +81,27 @@ func (q *Queries) GetRoute(ctx context.Context, arg GetRouteParams) (Route, erro
 	return i, err
 }
 
+const getRouteByID = `-- name: GetRouteByID :one
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
+FROM routes
+WHERE id = $1
+`
+
+func (q *Queries) GetRouteByID(ctx context.Context, id int32) (Route, error) {
+	row := q.db.QueryRow(ctx, getRouteByID, id)
+	var i Route
+	err := row.Scan(
+		&i.ID,
+		&i.DongleID,
+		&i.RouteName,
+		&i.StartTime,
+		&i.EndTime,
+		&i.Geometry,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listRoutesByDevice = `-- name: ListRoutesByDevice :many
 SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
 FROM routes
@@ -79,6 +111,48 @@ ORDER BY created_at DESC
 
 func (q *Queries) ListRoutesByDevice(ctx context.Context, dongleID string) ([]Route, error) {
 	rows, err := q.db.Query(ctx, listRoutesByDevice, dongleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Route
+	for rows.Next() {
+		var i Route
+		if err := rows.Scan(
+			&i.ID,
+			&i.DongleID,
+			&i.RouteName,
+			&i.StartTime,
+			&i.EndTime,
+			&i.Geometry,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoutesByDevicePaginated = `-- name: ListRoutesByDevicePaginated :many
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
+FROM routes
+WHERE dongle_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListRoutesByDevicePaginatedParams struct {
+	DongleID string `json:"dongleId"`
+	Limit    int32  `json:"limit"`
+	Offset   int32  `json:"offset"`
+}
+
+func (q *Queries) ListRoutesByDevicePaginated(ctx context.Context, arg ListRoutesByDevicePaginatedParams) ([]Route, error) {
+	rows, err := q.db.Query(ctx, listRoutesByDevicePaginated, arg.DongleID, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
