@@ -1,0 +1,18 @@
+{
+  "id": "frontend-scaffold",
+  "name": "Next.js app + layout + API client",
+  "status": "in_progress",
+  "branch": "agent/frontend-scaffold",
+  "base_branch": "main",
+  "blocked_by": [],
+  "description": "Initialize a Next.js app in web/ with the app router, TypeScript, Tailwind CSS, and a root layout. Create an API client module that points at the Go backend. Verify the dev server starts and renders a placeholder home page.",
+  "acceptance_criteria": [
+    "web/ contains a Next.js project with TypeScript and Tailwind CSS configured",
+    "web/src/app/layout.tsx defines a root layout with html/body structure",
+    "web/src/app/page.tsx renders a placeholder home page",
+    "web/src/lib/api.ts exports an API client with a configurable base URL",
+    "pnpm --dir web dev starts the dev server without errors",
+    "pnpm --dir web build produces a production build without errors",
+    "pnpm --dir web lint passes cleanly"
+  ]
+}
