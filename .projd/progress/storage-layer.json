@@ -13,7 +13,7 @@
     "go build and go vet pass cleanly"
   ],
   "priority": 3,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/storage-layer",
   "base_branch": "main",
   "blocked_by": ["go-project-init"],
