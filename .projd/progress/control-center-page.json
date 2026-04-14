@@ -2,7 +2,7 @@
   "id": "control-center-page",
   "name": "Control Center settings UI",
   "description": "Settings page for managing device configuration parameters.",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/control-center-page",
   "blocked_by": ["frontend-scaffold"],
   "acceptance_criteria": [
