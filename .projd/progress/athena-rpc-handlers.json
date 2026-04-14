@@ -1,0 +1,19 @@
+{
+  "id": "athena-rpc-handlers",
+  "name": "JSON-RPC method handlers",
+  "description": "Implement JSON-RPC method handlers for athenad communication over WebSocket.",
+  "status": "in_progress",
+  "branch": "agent/athena-rpc-handlers",
+  "base_branch": "main",
+  "blocked_by": ["websocket-server"],
+  "acceptance_criteria": [
+    "JSON-RPC handlers registered with the WebSocket hub for core methods",
+    "Method: uploadFileToUrl -- instructs device to upload a file",
+    "Method: getNetworkType -- returns network status",
+    "Method: getSimInfo -- returns SIM info",
+    "Method: setNavDestination -- sets nav destination",
+    "Handlers follow JSON-RPC 2.0 response format",
+    "Unit tests cover each handler",
+    "go build and go vet pass cleanly"
+  ]
+}
