@@ -1,10 +1,14 @@
 # comma-personal-backend
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Next.js](https://img.shields.io/badge/Next.js-15-000000?logo=nextdotjs&logoColor=white)](https://nextjs.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-PostGIS-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-A self-hosted backend for [comma.ai](https://comma.ai) devices running [openpilot](https://github.com/commaai/openpilot) or [sunnypilot](https://github.com/sunnypilot/sunnypilot). Collects dashcam video, driving logs, GPS tracks, and device telemetry -- then lets you review everything through a built-in web UI.
+> Self-hosted backend for [comma.ai](https://comma.ai) devices running [openpilot](https://github.com/commaai/openpilot) or [sunnypilot](https://github.com/sunnypilot/sunnypilot). Collects dashcam video, driving logs, GPS tracks, and device telemetry -- then lets you review everything through a built-in web UI.
 
-Devices connect to this server instead of comma's cloud. No account required, no data leaves your network.
+**No account required. No data leaves your network.**
 
 ## What it does
 

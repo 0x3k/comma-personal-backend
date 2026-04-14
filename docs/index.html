@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>comma-personal-backend</title>
+<meta name="description" content="Self-hosted backend for comma.ai devices. Collect dashcam video, driving logs, GPS tracks, and device telemetry. No account required, no data leaves your network.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:       #0a0a0a;
+  --bg-card:  #111111;
+  --bg-code:  #0d1117;
+  --border:   #1e1e1e;
+  --border-hl:#2a2a2a;
+  --text:     #e4e4e7;
+  --text-dim: #a1a1aa;
+  --accent:   #3b82f6;
+  --accent-2: #8b5cf6;
+  --green:    #22c55e;
+  --amber:    #f59e0b;
+  --font:     'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono:     'JetBrains Mono', 'Fira Code', monospace;
+}
+html{scroll-behavior:smooth;font-size:16px}
+body{
+  font-family:var(--font);
+  background:var(--bg);
+  color:var(--text);
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+
+/* ---- NAV ---- */
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:100;
+  backdrop-filter:blur(16px) saturate(1.4);
+  -webkit-backdrop-filter:blur(16px) saturate(1.4);
+  background:rgba(10,10,10,.75);
+  border-bottom:1px solid var(--border);
+  transition:background .3s;
+}
+nav .inner{
+  max-width:1120px;margin:0 auto;padding:.75rem 1.5rem;
+  display:flex;align-items:center;justify-content:space-between;
+}
+nav .logo{font-weight:700;font-size:1rem;color:var(--text);text-decoration:none;letter-spacing:-.02em}
+nav .logo span{color:var(--accent)}
+nav .links{display:flex;gap:1.75rem;align-items:center}
+nav .links a{color:var(--text-dim);text-decoration:none;font-size:.875rem;font-weight:500;transition:color .2s}
+nav .links a:hover{color:var(--text)}
+nav .gh-btn{
+  display:inline-flex;align-items:center;gap:.5rem;
+  padding:.45rem 1rem;border-radius:8px;
+  background:var(--bg-card);border:1px solid var(--border-hl);
+  color:var(--text);font-size:.8125rem;font-weight:500;
+  text-decoration:none;transition:border-color .2s,background .2s;
+}
+nav .gh-btn:hover{border-color:var(--accent);background:#161616}
+nav .gh-btn svg{width:16px;height:16px;fill:currentColor}
+
+/* ---- HERO ---- */
+.hero{
+  padding:10rem 1.5rem 6rem;
+  text-align:center;
+  position:relative;
+  overflow:hidden;
+}
+.hero::before{
+  content:'';position:absolute;
+  top:-40%;left:50%;transform:translateX(-50%);
+  width:800px;height:800px;
+  background:radial-gradient(circle,rgba(59,130,246,.08) 0%,transparent 70%);
+  pointer-events:none;
+}
+.hero h1{
+  font-size:clamp(2.5rem,6vw,4rem);
+  font-weight:700;letter-spacing:-.04em;
+  line-height:1.1;
+  background:linear-gradient(135deg,var(--text) 0%,var(--text-dim) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.hero .tagline{
+  margin-top:1.25rem;
+  font-size:clamp(1.05rem,2.5vw,1.25rem);
+  color:var(--text-dim);
+  max-width:640px;margin-left:auto;margin-right:auto;
+  line-height:1.55;
+}
+.hero .tagline strong{color:var(--text);font-weight:600}
+.hero-badges{
+  display:flex;flex-wrap:wrap;justify-content:center;gap:.5rem;
+  margin-top:2rem;
+}
+.badge{
+  display:inline-flex;align-items:center;gap:.4rem;
+  padding:.3rem .75rem;border-radius:9999px;
+  font-size:.75rem;font-weight:500;
+  border:1px solid var(--border-hl);
+  background:var(--bg-card);color:var(--text-dim);
+}
+.badge .dot{width:6px;height:6px;border-radius:50%}
+.badge .dot.blue{background:var(--accent)}
+.badge .dot.purple{background:var(--accent-2)}
+.badge .dot.green{background:var(--green)}
+.badge .dot.amber{background:var(--amber)}
+.hero-actions{
+  display:flex;gap:.75rem;justify-content:center;flex-wrap:wrap;
+  margin-top:2.5rem;
+}
+.btn{
+  display:inline-flex;align-items:center;gap:.5rem;
+  padding:.7rem 1.5rem;border-radius:10px;
+  font-size:.9rem;font-weight:600;
+  text-decoration:none;transition:all .2s;cursor:pointer;border:none;
+}
+.btn-primary{
+  background:var(--accent);color:#fff;
+  box-shadow:0 0 20px rgba(59,130,246,.25);
+}
+.btn-primary:hover{background:#2563eb;box-shadow:0 0 30px rgba(59,130,246,.35)}
+.btn-secondary{
+  background:var(--bg-card);color:var(--text);
+  border:1px solid var(--border-hl);
+}
+.btn-secondary:hover{border-color:var(--text-dim);background:#161616}
+
+/* ---- SECTIONS ---- */
+section{padding:5rem 1.5rem}
+.container{max-width:1120px;margin:0 auto}
+.section-label{
+  font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;
+  color:var(--accent);margin-bottom:.5rem;
+}
+.section-title{
+  font-size:clamp(1.75rem,4vw,2.25rem);font-weight:700;letter-spacing:-.03em;
+  line-height:1.2;
+}
+.section-desc{color:var(--text-dim);margin-top:.75rem;max-width:560px;font-size:1.05rem}
+
+/* ---- FEATURES ---- */
+.features-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
+  gap:1rem;margin-top:3rem;
+}
+.feature-card{
+  padding:1.75rem;border-radius:14px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  transition:border-color .25s,transform .25s;
+}
+.feature-card:hover{border-color:var(--border-hl);transform:translateY(-2px)}
+.feature-icon{
+  width:40px;height:40px;border-radius:10px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.15rem;margin-bottom:1rem;
+}
+.feature-card h3{font-size:1.05rem;font-weight:600;margin-bottom:.5rem}
+.feature-card p{font-size:.9rem;color:var(--text-dim);line-height:1.55}
+
+.icon-api{background:rgba(59,130,246,.12);color:#3b82f6}
+.icon-video{background:rgba(139,92,246,.12);color:#8b5cf6}
+.icon-ws{background:rgba(34,197,94,.12);color:#22c55e}
+.icon-config{background:rgba(245,158,11,.12);color:#f59e0b}
+.icon-gps{background:rgba(236,72,153,.12);color:#ec4899}
+.icon-ui{background:rgba(6,182,212,.12);color:#06b6d4}
+
+/* ---- ARCHITECTURE ---- */
+.arch-section{background:var(--bg-card);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.arch-diagram{
+  margin-top:2.5rem;
+  background:var(--bg-code);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:2rem;
+  overflow-x:auto;
+}
+.arch-diagram pre{
+  font-family:var(--mono);font-size:.8125rem;
+  color:var(--text-dim);line-height:1.7;
+  white-space:pre;
+}
+.arch-diagram .hl{color:var(--accent);font-weight:500}
+.arch-diagram .hl2{color:var(--accent-2);font-weight:500}
+.arch-diagram .hl3{color:var(--green);font-weight:500}
+
+.tech-row{
+  display:flex;flex-wrap:wrap;gap:2.5rem;margin-top:2.5rem;
+}
+.tech-col{flex:1;min-width:280px}
+.tech-col h3{font-size:.95rem;font-weight:600;margin-bottom:.75rem;display:flex;align-items:center;gap:.5rem}
+.tech-col ul{list-style:none;display:flex;flex-direction:column;gap:.4rem}
+.tech-col li{
+  font-size:.875rem;color:var(--text-dim);
+  padding-left:1.2rem;position:relative;
+}
+.tech-col li::before{
+  content:'';position:absolute;left:0;top:.55rem;
+  width:5px;height:5px;border-radius:50%;
+  background:var(--border-hl);
+}
+
+/* ---- QUICKSTART ---- */
+.steps{margin-top:3rem;display:flex;flex-direction:column;gap:1.5rem}
+.step{display:flex;gap:1.25rem;align-items:flex-start}
+.step-num{
+  flex-shrink:0;width:32px;height:32px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:.8rem;font-weight:700;
+  background:rgba(59,130,246,.12);color:var(--accent);
+  border:1px solid rgba(59,130,246,.25);
+  margin-top:.15rem;
+}
+.step-body{flex:1}
+.step-body h3{font-size:1rem;font-weight:600;margin-bottom:.5rem}
+.step-body p{font-size:.9rem;color:var(--text-dim);margin-bottom:.75rem}
+pre.code-block{
+  background:var(--bg-code);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:1rem 1.25rem;
+  overflow-x:auto;
+  font-family:var(--mono);font-size:.8125rem;
+  color:var(--text-dim);line-height:1.65;
+  position:relative;
+}
+pre.code-block .comment{color:#6e7681}
+pre.code-block .cmd{color:var(--text)}
+
+/* ---- API TABLE ---- */
+.api-section .section-desc{max-width:none}
+.api-group{margin-top:2rem}
+.api-group h3{
+  font-size:.9rem;font-weight:600;margin-bottom:.75rem;
+  color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;
+}
+.api-table{
+  width:100%;border-collapse:collapse;
+  font-size:.875rem;
+}
+.api-table th{
+  text-align:left;padding:.6rem 1rem;
+  font-weight:600;font-size:.75rem;
+  color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;
+  border-bottom:1px solid var(--border);
+}
+.api-table td{
+  padding:.6rem 1rem;
+  border-bottom:1px solid var(--border);
+  color:var(--text-dim);
+}
+.api-table tr:last-child td{border-bottom:none}
+.api-table .method{
+  font-family:var(--mono);font-size:.75rem;font-weight:600;
+  padding:.2rem .5rem;border-radius:4px;
+  display:inline-block;
+}
+.method-get{background:rgba(34,197,94,.12);color:#22c55e}
+.method-post{background:rgba(59,130,246,.12);color:#3b82f6}
+.method-put{background:rgba(245,158,11,.12);color:#f59e0b}
+.method-delete{background:rgba(239,68,68,.12);color:#ef4444}
+.api-table .path{font-family:var(--mono);font-size:.8125rem;color:var(--text)}
+.api-table-wrap{
+  background:var(--bg-card);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;margin-bottom:1.5rem;
+}
+
+/* ---- FOOTER ---- */
+footer{
+  border-top:1px solid var(--border);
+  padding:3rem 1.5rem;
+  text-align:center;
+}
+footer .footer-links{
+  display:flex;flex-wrap:wrap;justify-content:center;gap:1.5rem;
+  margin-bottom:1.25rem;
+}
+footer .footer-links a{
+  color:var(--text-dim);text-decoration:none;font-size:.875rem;font-weight:500;
+  transition:color .2s;
+}
+footer .footer-links a:hover{color:var(--text)}
+footer .copy{font-size:.8rem;color:#52525b}
+
+/* ---- RESPONSIVE ---- */
+@media(max-width:768px){
+  .hero{padding:8rem 1.25rem 4rem}
+  section{padding:3.5rem 1.25rem}
+  .features-grid{grid-template-columns:1fr}
+  .tech-row{flex-direction:column;gap:1.5rem}
+  nav .links a:not(.gh-btn){display:none}
+  .api-table{font-size:.8rem}
+  .api-table th,.api-table td{padding:.5rem .6rem}
+  .step{flex-direction:column;gap:.75rem}
+}
+
+/* ---- ANIMATIONS ---- */
+.fade-in{opacity:0;transform:translateY(16px);transition:opacity .5s ease,transform .5s ease}
+.fade-in.visible{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="inner">
+    <a href="#" class="logo"><span>comma</span>-personal-backend</a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#quickstart">Quick Start</a>
+      <a href="#api">API</a>
+      <a href="https://github.com/0x3k/comma-personal-backend" class="gh-btn">
+        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <h1>Own your driving data</h1>
+  <p class="tagline">
+    A self-hosted backend for <strong>comma.ai</strong> devices.
+    Collect dashcam video, driving logs, GPS tracks, and telemetry --
+    <strong>no data leaves your network</strong>.
+  </p>
+  <div class="hero-badges">
+    <span class="badge"><span class="dot blue"></span>Go</span>
+    <span class="badge"><span class="dot purple"></span>Next.js</span>
+    <span class="badge"><span class="dot green"></span>PostgreSQL + PostGIS</span>
+    <span class="badge"><span class="dot amber"></span>FFmpeg</span>
+  </div>
+  <div class="hero-actions">
+    <a href="#quickstart" class="btn btn-primary">Get started</a>
+    <a href="https://github.com/0x3k/comma-personal-backend" class="btn btn-secondary">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      View on GitHub
+    </a>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="container">
+    <div class="fade-in">
+      <p class="section-label">Features</p>
+      <h2 class="section-title">Everything you need, nothing you don't</h2>
+      <p class="section-desc">Drop-in replacement for the comma cloud. Point your device at your server and everything just works.</p>
+    </div>
+    <div class="features-grid">
+      <div class="feature-card fade-in">
+        <div class="feature-icon icon-api">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>
+        </div>
+        <h3>Drop-in API replacement</h3>
+        <p>Mirrors official comma endpoints so openpilot and sunnypilot connect without any client-side patches. Just change the host URL.</p>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="feature-icon icon-video">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/></svg>
+        </div>
+        <h3>Video ingestion and transcoding</h3>
+        <p>Receives HEVC uploads from three cameras and transcodes to HLS for browser playback, with automatic codec fallback.</p>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="feature-icon icon-ws">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4"/></svg>
+        </div>
+        <h3>Live device communication</h3>
+        <p>Persistent WebSocket channel per device for real-time JSON-RPC. Push configs, request uploads, set nav destinations.</p>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="feature-icon icon-config">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        </div>
+        <h3>Device configuration</h3>
+        <p>Read and write device parameters through the API or web UI, with changes pushed to the device in real time over WebSocket.</p>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="feature-icon icon-gps">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+        </div>
+        <h3>GPS track storage</h3>
+        <p>Stores route geometry as PostGIS LineStrings for spatial queries. View your drives on a map with full track detail.</p>
+      </div>
+      <div class="feature-card fade-in">
+        <div class="feature-icon icon-ui">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+        </div>
+        <h3>Web dashboard</h3>
+        <p>Browse routes, play back multi-camera video, view GPS tracks on OpenStreetMap, inspect uploads, and manage device settings.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section id="architecture" class="arch-section">
+  <div class="container">
+    <div class="fade-in">
+      <p class="section-label">Architecture</p>
+      <h2 class="section-title">Simple, self-contained stack</h2>
+    </div>
+    <div class="arch-diagram fade-in">
+<pre>
+<span class="hl">comma device</span>                                       <span class="hl2">this server</span>
+
+  athenad   ---- WebSocket (JSON-RPC) -------->   <span class="hl3">ws/hub</span>
+  uploader  ---- PUT /upload/... ------------>   <span class="hl3">storage layer</span>  -->  FFmpeg transcoder
+                                                  <span class="hl3">PostgreSQL</span> + PostGIS
+                                                       |
+                                                  <span class="hl3">Next.js web UI</span>
+</pre>
+    </div>
+    <div class="tech-row fade-in">
+      <div class="tech-col">
+        <h3>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>
+          Backend (Go)
+        </h3>
+        <ul>
+          <li>Echo HTTP framework</li>
+          <li>pgx + sqlc for type-safe database access</li>
+          <li>gorilla/websocket for device connections</li>
+          <li>FFmpeg for HEVC-to-HLS transcoding</li>
+        </ul>
+      </div>
+      <div class="tech-col">
+        <h3>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+          Frontend (TypeScript)
+        </h3>
+        <ul>
+          <li>Next.js + React</li>
+          <li>hls.js for multi-camera HLS playback</li>
+          <li>Leaflet + OpenStreetMap for GPS maps</li>
+          <li>TanStack Table + Virtual for log viewing</li>
+        </ul>
+      </div>
+      <div class="tech-col">
+        <h3>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>
+          Data
+        </h3>
+        <ul>
+          <li>PostgreSQL 14+ with PostGIS</li>
+          <li>Local filesystem storage</li>
+          <li>JWT device authentication</li>
+          <li>sqlc code generation from SQL</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- QUICKSTART -->
+<section id="quickstart">
+  <div class="container">
+    <div class="fade-in">
+      <p class="section-label">Quick Start</p>
+      <h2 class="section-title">Up and running in five minutes</h2>
+      <p class="section-desc">Prerequisites: Go 1.22+, Node.js 18+, pnpm, PostgreSQL 14+ with PostGIS, FFmpeg.</p>
+    </div>
+    <div class="steps">
+      <div class="step fade-in">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Create the database</h3>
+<pre class="code-block"><span class="cmd">createdb comma</span>
+<span class="cmd">psql comma -c "CREATE EXTENSION IF NOT EXISTS postgis;"</span>
+<span class="cmd">psql comma &lt; sql/migrations/001_init.up.sql</span>
+<span class="cmd">psql comma &lt; sql/migrations/002_device_params.up.sql</span></pre>
+        </div>
+      </div>
+      <div class="step fade-in">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>Configure environment</h3>
+<pre class="code-block"><span class="cmd">cp .env.example .env</span>
+<span class="comment"># Edit .env -- set DATABASE_URL and JWT_SECRET</span></pre>
+        </div>
+      </div>
+      <div class="step fade-in">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Start the server</h3>
+<pre class="code-block"><span class="cmd">go run ./cmd/server</span>               <span class="comment"># backend on :8080</span>
+<span class="cmd">pnpm install --dir web</span>
+<span class="cmd">pnpm --dir web dev</span>                <span class="comment"># frontend on :3000</span></pre>
+        </div>
+      </div>
+      <div class="step fade-in">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h3>Point your device</h3>
+          <p>Set these on your comma device before openpilot starts:</p>
+<pre class="code-block"><span class="cmd">export API_HOST="https://your-server.example.com"</span>
+<span class="cmd">export ATHENA_HOST="wss://your-server.example.com"</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- API -->
+<section id="api">
+  <div class="container">
+    <div class="fade-in">
+      <p class="section-label">API Reference</p>
+      <h2 class="section-title">Compatible with openpilot and sunnypilot</h2>
+      <p class="section-desc">All endpoints mirror the official comma backend so devices connect without patches.</p>
+    </div>
+
+    <div class="api-group fade-in">
+      <h3>Authentication</h3>
+      <div class="api-table-wrap">
+        <table class="api-table">
+          <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><span class="method method-post">POST</span></td><td class="path">/v2/pilotauth/</td><td>Device registration, returns signed JWT</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="api-group fade-in">
+      <h3>Devices</h3>
+      <div class="api-table-wrap">
+        <table class="api-table">
+          <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><span class="method method-get">GET</span></td><td class="path">/v1.1/devices/:dongle_id/</td><td>Device info</td></tr>
+            <tr><td><span class="method method-get">GET</span></td><td class="path">/v1/devices/:dongle_id/params</td><td>List device config params</td></tr>
+            <tr><td><span class="method method-put">PUT</span></td><td class="path">/v1/devices/:dongle_id/params/:key</td><td>Set a config param</td></tr>
+            <tr><td><span class="method method-delete">DELETE</span></td><td class="path">/v1/devices/:dongle_id/params/:key</td><td>Delete a config param</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="api-group fade-in">
+      <h3>Routes &amp; Uploads</h3>
+      <div class="api-table-wrap">
+        <table class="api-table">
+          <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><span class="method method-get">GET</span></td><td class="path">/v1/route/:dongle_id</td><td>List routes (paginated)</td></tr>
+            <tr><td><span class="method method-get">GET</span></td><td class="path">/v1/route/:dongle_id/:route_name</td><td>Route detail with segments</td></tr>
+            <tr><td><span class="method method-get">GET</span></td><td class="path">/v1.4/:dongle_id/upload_url/</td><td>Get upload URL for a segment file</td></tr>
+            <tr><td><span class="method method-put">PUT</span></td><td class="path">/upload/:dongle_id/*</td><td>Upload a segment file (up to 100 MB)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="api-group fade-in">
+      <h3>WebSocket</h3>
+      <div class="api-table-wrap">
+        <table class="api-table">
+          <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><span class="method method-get">GET</span></td><td class="path">/ws/v2/:dongle_id</td><td>Persistent device channel (JSON-RPC)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="container">
+    <div class="footer-links">
+      <a href="https://github.com/0x3k/comma-personal-backend">GitHub</a>
+      <a href="https://github.com/0x3k/comma-personal-backend/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://github.com/0x3k/comma-personal-backend/blob/main/SECURITY.md">Security</a>
+      <a href="https://github.com/0x3k/comma-personal-backend/blob/main/LICENSE">MIT License</a>
+    </div>
+    <p class="copy">Built for the comma.ai community</p>
+  </div>
+</footer>
+
+<script>
+// Intersection observer for fade-in animations
+const observer = new IntersectionObserver(
+  (entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  },
+  { threshold: 0.1, rootMargin: '0px 0px -40px 0px' }
+);
+document.querySelectorAll('.fade-in').forEach((el) => observer.observe(el));
+
+// Smooth nav background on scroll
+const nav = document.querySelector('nav');
+window.addEventListener('scroll', () => {
+  nav.style.background = window.scrollY > 40
+    ? 'rgba(10,10,10,.92)'
+    : 'rgba(10,10,10,.75)';
+}, { passive: true });
+</script>
+</body>
+</html>
