@@ -1,7 +1,7 @@
 {
   "id": "route-list-page",
   "name": "Frontend route browsing page",
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/route-list-page",
   "blocked_by": ["frontend-scaffold", "route-api"],
   "acceptance_criteria": [
