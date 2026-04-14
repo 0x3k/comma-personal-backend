@@ -454,7 +454,7 @@ func TestSetParamPushesWebSocket(t *testing.T) {
 
 	// Start a responder goroutine that reads RPC requests from the client's
 	// send channel and sends back successful responses.
-	methods, params := ws.TestDrainResponder(client, rpc)
+	recorder := ws.TestDrainResponder(client, rpc)
 
 	setP := newTestParam(1, "abc123", "OpenpilotEnabledToggle", "1")
 	mock := &configMockDBTX{setParam: &setP}
@@ -480,22 +480,22 @@ func TestSetParamPushesWebSocket(t *testing.T) {
 	// Wait for the async RPC push to be processed.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(*methods) > 0 {
+		if recorder.Len() > 0 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if len(*methods) == 0 {
+	if recorder.Len() == 0 {
 		t.Fatal("expected at least one RPC call to be sent")
 	}
 
-	if (*methods)[0] != "setParam" {
-		t.Errorf("RPC method = %q, want %q", (*methods)[0], "setParam")
+	if recorder.Method(0) != "setParam" {
+		t.Errorf("RPC method = %q, want %q", recorder.Method(0), "setParam")
 	}
 
 	var p map[string]string
-	if err := json.Unmarshal((*params)[0], &p); err != nil {
+	if err := json.Unmarshal(recorder.Params(0), &p); err != nil {
 		t.Fatalf("failed to unmarshal RPC params: %v", err)
 	}
 	if p["key"] != "OpenpilotEnabledToggle" {
@@ -516,7 +516,7 @@ func TestDeleteParamPushesWebSocket(t *testing.T) {
 	hub.Register(client)
 	t.Cleanup(func() { client.Close() })
 
-	methods, params := ws.TestDrainResponder(client, rpc)
+	recorder := ws.TestDrainResponder(client, rpc)
 
 	mock := &configMockDBTX{}
 	handler := newConfigHandler(mock, hub, rpc)
@@ -538,22 +538,22 @@ func TestDeleteParamPushesWebSocket(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if len(*methods) > 0 {
+		if recorder.Len() > 0 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if len(*methods) == 0 {
+	if recorder.Len() == 0 {
 		t.Fatal("expected at least one RPC call to be sent")
 	}
 
-	if (*methods)[0] != "deleteParam" {
-		t.Errorf("RPC method = %q, want %q", (*methods)[0], "deleteParam")
+	if recorder.Method(0) != "deleteParam" {
+		t.Errorf("RPC method = %q, want %q", recorder.Method(0), "deleteParam")
 	}
 
 	var p map[string]string
-	if err := json.Unmarshal((*params)[0], &p); err != nil {
+	if err := json.Unmarshal(recorder.Params(0), &p); err != nil {
 		t.Fatalf("failed to unmarshal RPC params: %v", err)
 	}
 	if p["key"] != "OpenpilotEnabledToggle" {
