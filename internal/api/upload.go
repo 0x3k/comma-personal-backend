@@ -36,12 +36,6 @@ func NewUploadHandler(s *storage.Storage) *UploadHandler {
 	return &UploadHandler{storage: s}
 }
 
-// errorResponse is the JSON envelope returned on error.
-type errorResponse struct {
-	Error string `json:"error"`
-	Code  int    `json:"code"`
-}
-
 // uploadURLResponse is the JSON response for the upload URL endpoint.
 type uploadURLResponse struct {
 	URL string `json:"url"`
