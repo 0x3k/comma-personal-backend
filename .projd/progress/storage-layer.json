@@ -1,0 +1,21 @@
+{
+  "id": "storage-layer",
+  "name": "Filesystem storage module",
+  "description": "Implement the filesystem storage layer that manages dashcam files on disk. Follows the layout STORAGE_PATH/dongle_id/route/segment/filename. Provides methods for storing uploaded files, retrieving file paths, checking existence, and listing segments for a route.",
+  "acceptance_criteria": [
+    "internal/storage/storage.go exports a Storage type with configurable base path",
+    "Store(dongleID, route, segment, filename string, data io.Reader) writes file to correct path",
+    "Path(dongleID, route, segment, filename string) returns the absolute file path",
+    "Exists(dongleID, route, segment, filename string) checks if a file exists",
+    "ListSegments(dongleID, route string) returns segment numbers for a route",
+    "Creates directories automatically when storing files",
+    "Unit tests using t.TempDir() cover store, retrieve, exists, and list operations",
+    "go build and go vet pass cleanly"
+  ],
+  "priority": 3,
+  "status": "complete",
+  "branch": "agent/storage-layer",
+  "base_branch": "main",
+  "blocked_by": ["go-project-init"],
+  "notes": ""
+}
