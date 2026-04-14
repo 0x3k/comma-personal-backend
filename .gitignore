@@ -8,6 +8,7 @@ dist/
 build/
 *.o
 *.exe
+/server
 
 # IDE
 .idea/
