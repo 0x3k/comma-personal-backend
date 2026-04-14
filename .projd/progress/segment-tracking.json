@@ -12,9 +12,12 @@
     "go build and go vet pass cleanly"
   ],
   "priority": 6,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/segment-tracking",
   "base_branch": "main",
-  "blocked_by": ["upload-url-endpoint", "route-segment-queries"],
+  "blocked_by": [
+    "upload-url-endpoint",
+    "route-segment-queries"
+  ],
   "notes": ""
 }
