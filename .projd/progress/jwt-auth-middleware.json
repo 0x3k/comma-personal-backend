@@ -1,0 +1,17 @@
+{
+  "id": "jwt-auth-middleware",
+  "name": "JWT validation middleware (RS256/ES256)",
+  "status": "in_progress",
+  "branch": "agent/jwt-auth-middleware",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/api/middleware/auth.go exports an Echo middleware function",
+    "Validates JWT tokens signed with RS256 or ES256",
+    "Extracts dongle_id from token claims into Echo context",
+    "Returns 401 JSON error for missing, expired, or invalid tokens",
+    "Supports token via Authorization: Bearer header",
+    "Unit tests cover valid token, expired token, wrong algorithm, and missing token cases",
+    "go build and go vet pass cleanly"
+  ]
+}
