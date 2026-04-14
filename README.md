@@ -1,5 +1,7 @@
 # comma-personal-backend
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A self-hosted backend for [comma.ai](https://comma.ai) devices running [openpilot](https://github.com/commaai/openpilot) or [sunnypilot](https://github.com/sunnypilot/sunnypilot). Collects dashcam video, driving logs, GPS tracks, and device telemetry -- then lets you review everything through a built-in web UI.
 
 Devices connect to this server instead of comma's cloud. No account required, no data leaves your network.
