@@ -3,8 +3,9 @@
   "name": "Athena RPC: takeSnapshot",
   "description": "Add the takeSnapshot openpilot athenad RPC method. Asks the device to capture a still image from its cameras and return it base64-encoded. Reference: openpilot/system/athena/athenad.py lines 560-577 (../../openpilot/system/athena/athenad.py). The return shape is either a single base64 string or an object like {jpegBack, jpegFront} depending on device -- handle both. This unlocks the snapshot-ui feature.",
   "priority": 4,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/athena-rpc-take-snapshot",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/ws/methods.go defines a SnapshotResult struct with optional JpegBack, JpegFront, and RawString fields so either response shape can be returned",
