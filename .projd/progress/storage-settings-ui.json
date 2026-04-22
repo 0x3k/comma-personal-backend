@@ -3,7 +3,7 @@
   "name": "Storage + retention settings UI panel",
   "description": "Add a 'Storage' panel to the existing web/src/app/settings/page.tsx that shows disk usage (total, per-device, filesystem available) and lets the operator edit the retention window. Pulls from /v1/storage/usage and /v1/settings/retention.",
   "priority": 5,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/storage-settings-ui",
   "base_branch": "main",
   "blocked_by": ["disk-usage-api", "retention-policy-config"],
