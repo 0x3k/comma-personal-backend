@@ -3,8 +3,9 @@
   "name": "Route export: MP4 download",
   "description": "Expose an endpoint that returns a single MP4 file for a given route + camera (front/driver/wide). Internally concatenates the HLS segments already produced by the transcoder (we don't re-encode). Uses FFmpeg's concat demuxer or '-c copy' mux from ts to mp4. Streams the result so we don't buffer the whole mp4 in memory or on disk.",
   "priority": 4,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/route-export-mp4",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "GET /v1/routes/:dongle_id/:route_name/export.mp4?camera=f|e|d (default f) streams an MP4 built from the route's HLS .ts segments in order",
