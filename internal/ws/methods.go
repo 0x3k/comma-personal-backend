@@ -321,6 +321,44 @@ func CallSetNavDestination(caller *RPCCaller, client *Client, lat, lng float64, 
 	return nil
 }
 
+// ListDataDirectoryParams are the parameters for the listDataDirectory RPC method.
+// Prefix is optional; when empty, the device lists every file in its data
+// directory. This mirrors the default argument in openpilot's athenad.
+type ListDataDirectoryParams struct {
+	Prefix string `json:"prefix,omitempty"`
+}
+
+// CallListDataDirectory asks the device for the list of filenames under its
+// data directory (typically /data/media/0/realdata). When prefix is empty, no
+// params are sent so the device applies its default of listing everything.
+func CallListDataDirectory(caller *RPCCaller, client *Client, prefix string) ([]string, error) {
+	var params interface{}
+	if prefix != "" {
+		params = ListDataDirectoryParams{Prefix: prefix}
+	}
+
+	resp, err := caller.Call(client, "listDataDirectory", params)
+	if err != nil {
+		return nil, fmt.Errorf("listDataDirectory failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("listDataDirectory returned error: %w", resp.Error)
+	}
+
+	raw, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("listDataDirectory: failed to marshal result: %w", err)
+	}
+
+	var files []string
+	if err := json.Unmarshal(raw, &files); err != nil {
+		return nil, fmt.Errorf("listDataDirectory: unexpected result type: %w", err)
+	}
+
+	return files, nil
+}
+
 // takeSnapshotTimeout is the RPC timeout for takeSnapshot. Snapshots can be
 // slow on a cold start (camerad has to hand off buffers), so a longer deadline
 // than the default is used.
@@ -429,6 +467,7 @@ func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["getNetworks"] = handleGetNetworks
 	handlers["getSimInfo"] = handleGetSimInfo
 	handlers["setNavDestination"] = handleSetNavDestination
+	handlers["listDataDirectory"] = handleListDataDirectory
 	handlers["takeSnapshot"] = handleTakeSnapshot
 }
 
@@ -514,6 +553,44 @@ func handleSetNavDestination(_ string, params json.RawMessage) (interface{}, *RP
 	}
 
 	return map[string]bool{"success": true}, nil
+}
+
+// stubDataDirectoryFiles is the fixed list returned by the device-side stub.
+// It mimics a handful of segment artifacts that openpilot's athenad would
+// surface under /data/media/0/realdata.
+var stubDataDirectoryFiles = []string{
+	"2024-01-01--12-00-00--0/rlog.bz2",
+	"2024-01-01--12-00-00--0/qlog.bz2",
+	"2024-01-01--12-00-00--0/qcamera.ts",
+	"2024-01-01--12-00-00--1/rlog.bz2",
+	"boot/boot.log",
+}
+
+// handleListDataDirectory is a device-side stub handler for listDataDirectory.
+// It returns the stub file list, filtered by the optional prefix. Params are
+// optional; an empty or missing body is treated as no filter, matching the
+// athenad default where prefix defaults to an empty string.
+func handleListDataDirectory(_ string, params json.RawMessage) (interface{}, *RPCError) {
+	var p ListDataDirectoryParams
+	if len(params) > 0 && string(params) != "null" {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid params: %v", err))
+		}
+	}
+
+	if p.Prefix == "" {
+		files := make([]string, len(stubDataDirectoryFiles))
+		copy(files, stubDataDirectoryFiles)
+		return files, nil
+	}
+
+	filtered := make([]string, 0, len(stubDataDirectoryFiles))
+	for _, f := range stubDataDirectoryFiles {
+		if strings.HasPrefix(f, p.Prefix) {
+			filtered = append(filtered, f)
+		}
+	}
+	return filtered, nil
 }
 
 // handleTakeSnapshot is a device-side stub handler for takeSnapshot. It
