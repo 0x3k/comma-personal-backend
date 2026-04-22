@@ -3,7 +3,7 @@
   "name": "Trip model: schema migration + sqlc queries",
   "description": "Introduce a 'trip' as a derived summary of a route, holding aggregate stats (distance, duration, speeds, engagement, start/end addresses). Every route has at most one trip. This feature only adds the schema and data-access layer -- the aggregation worker, API, and UI are separate features. Why a separate table from routes: routes represent raw ingest state (what segments uploaded); trips represent human-meaningful drive summaries that are recomputed when inputs change.",
   "priority": 1,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/trip-model",
   "base_branch": "main",
   "blocked_by": [],
@@ -15,5 +15,5 @@
     "The migration applies cleanly against a fresh database: psql -c 'CREATE EXTENSION postgis;' then apply 001, 002, 003",
     "go build ./... and go vet ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "Migration 003_trips.up/down.sql add a trips table with UNIQUE FK to routes. sqlc queries cover UpsertTrip (ON CONFLICT route_id), GetTripByRouteID, ListTripsByDongleID (paginated join on routes returning dongle_id/route_name/start_time), SumTripStatsByDongleID (lifetime totals). Verified end-to-end against the docker-compose postgis image: CREATE EXTENSION postgis + 001+002+003 apply cleanly, upsert insert/update paths work, ON DELETE CASCADE works, sums return 0 when no trips. go build ./... and go vet ./... pass."
 }
