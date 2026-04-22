@@ -3,7 +3,7 @@
   "name": "On-demand snapshot button + modal",
   "description": "Add a 'Take Snapshot' button on the devices page that calls takeSnapshot on the connected device and shows the returned JPEG(s) in a modal. Useful for 'is the car OK?' moments.",
   "priority": 4,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/snapshot-ui",
   "base_branch": "main",
   "blocked_by": ["athena-rpc-take-snapshot"],
