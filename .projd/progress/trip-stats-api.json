@@ -3,7 +3,7 @@
   "name": "Trip stats API endpoints",
   "description": "Expose the trip data computed by trip-aggregator-worker over HTTP so the frontend can render summaries. Two endpoints: one for a single device's lifetime totals + recent trip list (dashboard-home consumes this), and one for a single trip by route_id (route detail page can overlay stats).",
   "priority": 2,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/trip-stats-api",
   "base_branch": "main",
   "blocked_by": ["trip-model"],
