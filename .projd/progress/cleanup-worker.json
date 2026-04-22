@@ -3,8 +3,9 @@
   "name": "Cleanup background worker (retention-based deletion)",
   "description": "Background worker that deletes routes (and their files on disk) that are older than the configured retention window AND not marked preserved. Runs on a daily tick by default. Safety rails: dry-run mode by default on first start, a hard cap of N deletions per run, and structured logging of every deletion so operators can audit.",
   "priority": 3,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/cleanup-worker",
+  "base_branch": "main",
   "blocked_by": ["preserve-flag", "retention-policy-config"],
   "acceptance_criteria": [
     "internal/worker/cleanup.go defines CleanupWorker { Queries *db.Queries; Storage *storage.Storage; Settings *settings.Store; Interval time.Duration; MaxDeletionsPerRun int; DryRun bool }",
@@ -17,5 +18,5 @@
     "go test ./internal/worker/... passes",
     "go vet ./... and go build ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "Implemented CleanupWorker in internal/worker/cleanup.go with Queries/Storage/Settings/Interval/MaxDeletionsPerRun/DryRun fields, plus EnvRetentionDays for the settings fallback and an overridable now() for deterministic tests. CLEANUP_ENABLED (default true) and DELETE_DRY_RUN (default true) gate the worker in cmd/server/main.go. Added ListStaleRoutes and DeleteRoute via sqlc; segments/trips/events already cascade on route delete. Storage gained RouteDir/RouteBytes/RemoveRoute (with path-traversal guard). Tests apply sql/migrations/*.up.sql into a per-test schema against a real Postgres+PostGIS instance (gated on TEST_DATABASE_URL so CI without a DB still passes) and cover stale delete, preserved skip, dry-run no-op, retention=0 no-op, MaxDeletionsPerRun cap, and empty-result pass. Verified: go test ./... clean, go vet ./... clean, go build ./... clean, gofmt clean. Smoke lint/typecheck failures are pre-existing (script runs eslint/tsc at repo root instead of web/) and unrelated."
 }
