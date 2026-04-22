@@ -3,8 +3,9 @@
   "name": "Reverse geocoding client (Nominatim)",
   "description": "Add a reusable reverse-geocoding client that turns (lat, lng) into a short human-readable address string. Use OpenStreetMap Nominatim by default (https://nominatim.openstreetmap.org/reverse) because we already use OSM for the map and it is free. The client must be pluggable (take a base URL) so operators on a high-volume server can point at their own Nominatim instance. This feature only adds the client library; consumers (trip-aggregator-worker) pull it in.",
   "priority": 3,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/reverse-geocode",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/geocode/geocode.go defines a Client struct with fields: BaseURL string, UserAgent string, HTTP *http.Client",
