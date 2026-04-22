@@ -3,8 +3,9 @@
   "name": "Web UI authentication backend (login, bcrypt, session cookie)",
   "description": "The backend currently has no login for the dashboard -- anyone reachable on the network sees every drive. Add single-user login: an admin credential (username + password) is configured via env var and/or initial DB row; login returns an HttpOnly, SameSite=Lax, Secure session cookie signed + encrypted server-side. Keep this strictly separate from the device-facing JWT auth (which stays on /v1/* device endpoints). The dashboard auth gates the web UI's read endpoints and the settings mutation endpoints.",
   "priority": 1,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/web-ui-auth-backend",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "sql/migrations/006_ui_users.up.sql creates a ui_users table (id SERIAL PK, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TIMESTAMPTZ); .down drops it",
