@@ -112,7 +112,7 @@ func main() {
 	// they do not collide with /v1/route/:dongle_id.
 	v1Routes := e.Group("/v1/routes", auth)
 	routeHandler.RegisterPreservedRoute(v1Routes)
-	exportHandler := api.NewExportHandler(queries)
+	exportHandler := api.NewExportHandler(queries, store)
 	exportHandler.RegisterRoutes(v1Routes)
 
 	// Upload URL and file upload.

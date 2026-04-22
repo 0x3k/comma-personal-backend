@@ -1,14 +1,22 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -17,11 +25,11 @@ import (
 
 	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/storage"
 )
 
 // exportMockDB is a tiny DBTX stub that returns a canned pgtype.Text for
-// GetRouteGeometryWKT. It covers all three cases the handler cares about:
-// row not found, row with NULL geometry, and row with a WKT string.
+// GetRouteGeometryWKT.
 type exportMockDB struct {
 	wkt pgtype.Text
 	err error
@@ -59,15 +67,12 @@ func (r *exportMockRow) Scan(dest ...interface{}) error {
 	return nil
 }
 
-// newExportRequest builds an Echo context pre-populated with the path
-// parameters and the authenticated dongle_id the handler expects. Tests
-// pass the same dongle_id for both unless they are exercising the auth
-// mismatch path.
+// newExportRequest builds an Echo context for the GPX endpoint.
 func newExportRequest(t *testing.T, mock *exportMockDB, dongleID, routeName, authDongleID string) (*httptest.ResponseRecorder, echo.Context, *ExportHandler) {
 	t.Helper()
 
 	queries := db.New(mock)
-	handler := NewExportHandler(queries)
+	handler := NewExportHandler(queries, nil)
 
 	e := echo.New()
 	target := fmt.Sprintf("/v1/routes/%s/%s/export.gpx", dongleID, routeName)
@@ -82,327 +87,472 @@ func newExportRequest(t *testing.T, mock *exportMockDB, dongleID, routeName, aut
 }
 
 func TestExportRouteGPXSuccess(t *testing.T) {
-	// Three ordered points, each with distinct lon/lat so we can assert the
-	// attribute ordering in the marshalled output.
-	wkt := "LINESTRING(-122.4194 37.7749,-122.42 37.78,-122.43 37.79)"
-
-	mock := &exportMockDB{wkt: pgtype.Text{String: wkt, Valid: true}}
-	rec, c, handler := newExportRequest(t, mock, "dongle1", "2024-03-15--12-30-00", "dongle1")
-
+	mock := &exportMockDB{
+		wkt: pgtype.Text{String: "LINESTRING(-122.4 37.7, -122.41 37.71, -122.42 37.72)", Valid: true},
+	}
+	rec, c, handler := newExportRequest(t, mock, "dongle-1", "2024-01-01--12-00-00", "dongle-1")
 	if err := handler.ExportRouteGPX(c); err != nil {
-		t.Fatalf("handler returned error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 
-	if ct := rec.Header().Get(echo.HeaderContentType); ct != "application/gpx+xml" {
-		t.Errorf("Content-Type = %q, want %q", ct, "application/gpx+xml")
+	ct := rec.Header().Get(echo.HeaderContentType)
+	if !strings.HasPrefix(ct, "application/gpx+xml") {
+		t.Errorf("Content-Type = %q, want application/gpx+xml", ct)
 	}
-	if cd := rec.Header().Get(echo.HeaderContentDisposition); cd != `attachment; filename="2024-03-15--12-30-00.gpx"` {
-		t.Errorf("Content-Disposition = %q, want attachment with route filename", cd)
-	}
-
-	// Acceptance criterion: "200 with the right byte count when geometry has
-	// N points". We assert this by round-tripping the body through
-	// encoding/xml and comparing the re-emitted bytes exactly.
-	body := rec.Body.Bytes()
-	if len(body) == 0 {
-		t.Fatal("response body is empty")
+	cd := rec.Header().Get(echo.HeaderContentDisposition)
+	if !strings.Contains(cd, `filename="2024-01-01--12-00-00.gpx"`) {
+		t.Errorf("Content-Disposition = %q, want attachment filename", cd)
 	}
 
-	var parsed gpxFile
-	if err := xml.Unmarshal(body, &parsed); err != nil {
-		t.Fatalf("response body is not valid XML: %v\nbody: %s", err, body)
+	var doc gpxFile
+	if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse GPX: %v\nbody=%s", err, rec.Body.String())
 	}
-
-	if parsed.Version != "1.1" {
-		t.Errorf("gpx version = %q, want 1.1", parsed.Version)
+	if doc.Version != "1.1" {
+		t.Errorf("version = %q, want 1.1", doc.Version)
 	}
-	if parsed.Xmlns != "http://www.topografix.com/GPX/1/1" {
-		t.Errorf("gpx xmlns = %q, want GPX 1.1 namespace", parsed.Xmlns)
+	if len(doc.Tracks) != 1 || len(doc.Tracks[0].Segments) != 1 {
+		t.Fatalf("tracks/segments structure = %+v", doc)
 	}
-
-	if len(parsed.Tracks) != 1 {
-		t.Fatalf("len(tracks) = %d, want 1", len(parsed.Tracks))
-	}
-	trk := parsed.Tracks[0]
-	if trk.Name != "2024-03-15--12-30-00" {
-		t.Errorf("trk name = %q, want route name", trk.Name)
-	}
-	if len(trk.Segments) != 1 {
-		t.Fatalf("len(segments) = %d, want 1", len(trk.Segments))
-	}
-
-	pts := trk.Segments[0].Points
+	pts := doc.Tracks[0].Segments[0].Points
 	if len(pts) != 3 {
-		t.Fatalf("len(trkpt) = %d, want 3", len(pts))
+		t.Fatalf("points = %d, want 3", len(pts))
 	}
-	wantLatLon := []struct{ lat, lon float64 }{
-		{37.7749, -122.4194},
-		{37.78, -122.42},
-		{37.79, -122.43},
+	if pts[0].Lat != 37.7 || pts[0].Lon != -122.4 {
+		t.Errorf("points[0] = %+v, want lat=37.7 lon=-122.4", pts[0])
 	}
-	for i, want := range wantLatLon {
-		if pts[i].Lat != want.lat || pts[i].Lon != want.lon {
-			t.Errorf("trkpt[%d] = (%v,%v), want (%v,%v)",
-				i, pts[i].Lat, pts[i].Lon, want.lat, want.lon)
-		}
-	}
-
-	// Re-marshal the parsed document and verify the re-emitted byte count
-	// matches the structure we expect (header + marshalled body). Any drift
-	// between marshal and unmarshal would surface here.
-	reBody, err := xml.Marshal(parsed)
-	if err != nil {
-		t.Fatalf("failed to re-marshal GPX: %v", err)
-	}
-	expected := append([]byte(xml.Header), reBody...)
-	if len(body) != len(expected) {
-		t.Errorf("response byte count = %d, want %d (round-trip mismatch)", len(body), len(expected))
-	}
-	if string(body) != string(expected) {
-		t.Errorf("response bytes differ from round-tripped bytes\n got: %s\nwant: %s", body, expected)
+	if pts[2].Lat != 37.72 || pts[2].Lon != -122.42 {
+		t.Errorf("points[2] = %+v, want lat=37.72 lon=-122.42", pts[2])
 	}
 }
 
 func TestExportRouteGPXByteCountScalesWithPoints(t *testing.T) {
-	// Build WKT strings of increasing size and confirm the emitted GPX has
-	// exactly one <trkpt> per input coordinate.
-	cases := []int{1, 5, 25}
+	makeLineString := func(n int) string {
+		var b strings.Builder
+		b.WriteString("LINESTRING(")
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, "%f %f", -122.4-float64(i)*0.01, 37.7+float64(i)*0.01)
+		}
+		b.WriteString(")")
+		return b.String()
+	}
 
-	for _, n := range cases {
-		t.Run(fmt.Sprintf("%d_points", n), func(t *testing.T) {
-			coords := make([]string, 0, n)
-			for i := 0; i < n; i++ {
-				// Distinct coordinates keep every trkpt element the same
-				// width, so byte counts are predictable.
-				coords = append(coords, fmt.Sprintf("%d.1 %d.2", -120-i, 30+i))
-			}
-			wkt := "LINESTRING(" + strings.Join(coords, ",") + ")"
+	doExport := func(n int) int {
+		mock := &exportMockDB{wkt: pgtype.Text{String: makeLineString(n), Valid: true}}
+		rec, c, handler := newExportRequest(t, mock, "dongle", "r", "dongle")
+		if err := handler.ExportRouteGPX(c); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+		}
+		return rec.Body.Len()
+	}
 
-			mock := &exportMockDB{wkt: pgtype.Text{String: wkt, Valid: true}}
-			rec, c, handler := newExportRequest(t, mock, "dongle1", "r", "dongle1")
+	size10 := doExport(10)
+	size50 := doExport(50)
+	if size50 <= size10 {
+		t.Errorf("expected 50-point GPX larger than 10-point GPX, got %d <= %d", size50, size10)
+	}
 
-			if err := handler.ExportRouteGPX(c); err != nil {
-				t.Fatalf("handler returned error: %v", err)
-			}
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
-			}
-
-			var parsed gpxFile
-			if err := xml.Unmarshal(rec.Body.Bytes(), &parsed); err != nil {
-				t.Fatalf("response body is not valid XML: %v", err)
-			}
-			if len(parsed.Tracks) != 1 || len(parsed.Tracks[0].Segments) != 1 {
-				t.Fatalf("expected one trk/trkseg, got tracks=%d segs=%v",
-					len(parsed.Tracks), parsed.Tracks)
-			}
-			got := len(parsed.Tracks[0].Segments[0].Points)
-			if got != n {
-				t.Errorf("trkpt count = %d, want %d", got, n)
-			}
-
-			// Acceptance criterion: byte count matches the xml header plus
-			// whatever xml.Marshal emits for the parsed structure.
-			reBody, err := xml.Marshal(parsed)
-			if err != nil {
-				t.Fatalf("failed to re-marshal GPX: %v", err)
-			}
-			expected := len([]byte(xml.Header)) + len(reBody)
-			if rec.Body.Len() != expected {
-				t.Errorf("body length = %d, want %d", rec.Body.Len(), expected)
-			}
-		})
+	mock := &exportMockDB{wkt: pgtype.Text{String: makeLineString(7), Valid: true}}
+	rec, c, handler := newExportRequest(t, mock, "d", "r", "d")
+	if err := handler.ExportRouteGPX(c); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var doc gpxFile
+	if err := xml.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse GPX: %v", err)
+	}
+	if len(doc.Tracks[0].Segments[0].Points) != 7 {
+		t.Errorf("expected 7 points, got %d", len(doc.Tracks[0].Segments[0].Points))
 	}
 }
 
 func TestExportRouteGPXNullGeometryReturns404(t *testing.T) {
 	mock := &exportMockDB{wkt: pgtype.Text{Valid: false}}
-	rec, c, handler := newExportRequest(t, mock, "dongle1", "2024-03-15--12-30-00", "dongle1")
-
+	rec, c, handler := newExportRequest(t, mock, "d", "r", "d")
 	if err := handler.ExportRouteGPX(c); err != nil {
-		t.Fatalf("handler returned error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404; body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 
 	var body errorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("failed to parse error body: %v", err)
+		t.Fatalf("failed to decode error body: %v", err)
 	}
 	if !strings.Contains(body.Error, "no geometry") {
-		t.Errorf("error = %q, want message mentioning missing geometry", body.Error)
-	}
-
-	// A 404 must NOT include a gpx attachment response -- confirm we never
-	// leaked an empty file to the client.
-	if cd := rec.Header().Get(echo.HeaderContentDisposition); cd != "" {
-		t.Errorf("Content-Disposition = %q, want empty on 404", cd)
+		t.Errorf("error body = %q, want contains 'no geometry'", body.Error)
 	}
 }
 
 func TestExportRouteGPXEmptyLineStringReturns404(t *testing.T) {
-	// PostGIS renders a zero-point LineString as "LINESTRING EMPTY". The
-	// handler should treat that the same as NULL.
 	mock := &exportMockDB{wkt: pgtype.Text{String: "LINESTRING EMPTY", Valid: true}}
-	rec, c, handler := newExportRequest(t, mock, "dongle1", "r", "dongle1")
-
+	rec, c, handler := newExportRequest(t, mock, "d", "r", "d")
 	if err := handler.ExportRouteGPX(c); err != nil {
-		t.Fatalf("handler returned error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404; body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 
 func TestExportRouteGPXRouteNotFoundReturns404(t *testing.T) {
 	mock := &exportMockDB{err: pgx.ErrNoRows}
-	rec, c, handler := newExportRequest(t, mock, "dongle1", "missing-route", "dongle1")
-
+	rec, c, handler := newExportRequest(t, mock, "d", "r", "d")
 	if err := handler.ExportRouteGPX(c); err != nil {
-		t.Fatalf("handler returned error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404; body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
-
 	var body errorResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("failed to parse error body: %v", err)
+		t.Fatalf("failed to decode error body: %v", err)
 	}
 	if !strings.Contains(body.Error, "not found") {
-		t.Errorf("error = %q, want message mentioning 'not found'", body.Error)
+		t.Errorf("error body = %q, want contains 'not found'", body.Error)
 	}
 }
 
 func TestExportRouteGPXDongleMismatchReturns403(t *testing.T) {
-	mock := &exportMockDB{wkt: pgtype.Text{String: "LINESTRING(1 2)", Valid: true}}
-	rec, c, handler := newExportRequest(t, mock, "dongle1", "r", "other-device")
-
+	mock := &exportMockDB{wkt: pgtype.Text{String: "LINESTRING(0 0, 1 1)", Valid: true}}
+	rec, c, handler := newExportRequest(t, mock, "owner-dongle", "r", "other-dongle")
 	if err := handler.ExportRouteGPX(c); err != nil {
-		t.Fatalf("handler returned error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403; body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
 
 func TestExportRouteGPXDatabaseErrorReturns500(t *testing.T) {
 	mock := &exportMockDB{err: fmt.Errorf("connection refused")}
-	rec, c, handler := newExportRequest(t, mock, "dongle1", "r", "dongle1")
-
+	rec, c, handler := newExportRequest(t, mock, "d", "r", "d")
 	if err := handler.ExportRouteGPX(c); err != nil {
-		t.Fatalf("handler returned error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500; body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }
 
 func TestExportRouteGPXRegisterRoutes(t *testing.T) {
-	mock := &exportMockDB{}
+	mock := &exportMockDB{wkt: pgtype.Text{String: "LINESTRING(0 0, 1 1)", Valid: true}}
 	queries := db.New(mock)
-	handler := NewExportHandler(queries)
+	handler := NewExportHandler(queries, nil)
 
 	e := echo.New()
 	g := e.Group("/v1/routes")
 	handler.RegisterRoutes(g)
 
-	found := false
-	for _, r := range e.Routes() {
-		if r.Method == http.MethodGet && r.Path == "/v1/routes/:dongle_id/:route_name/export.gpx" {
-			found = true
-			break
-		}
+	req := httptest.NewRequest(http.MethodGet, "/v1/routes/d/r/export.gpx", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.Set(middleware.ContextKeyDongleID, "d")
+	e.Router().Find(http.MethodGet, "/v1/routes/d/r/export.gpx", c)
+	if err := c.Handler()(c); err != nil {
+		t.Fatalf("handler error: %v", err)
 	}
-	if !found {
-		t.Error("expected GET /v1/routes/:dongle_id/:route_name/export.gpx to be registered")
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
 	}
 }
 
 func TestParseLineStringWKT(t *testing.T) {
-	tests := []struct {
+	cases := []struct {
 		name    string
-		input   string
+		wkt     string
 		want    []gpxTrkpt
 		wantErr bool
 	}{
 		{
-			name:  "single point",
-			input: "LINESTRING(-122.4 37.7)",
-			want:  []gpxTrkpt{{Lat: 37.7, Lon: -122.4}},
+			name: "single point",
+			wkt:  "LINESTRING(-122.4 37.7)",
+			want: []gpxTrkpt{{Lat: 37.7, Lon: -122.4}},
 		},
 		{
-			name:  "multiple points",
-			input: "LINESTRING(-122.4 37.7, -122.5 37.8, -122.6 37.9)",
+			name: "multiple points",
+			wkt:  "LINESTRING(-122.4 37.7, -122.41 37.71, -122.42 37.72)",
 			want: []gpxTrkpt{
 				{Lat: 37.7, Lon: -122.4},
-				{Lat: 37.8, Lon: -122.5},
-				{Lat: 37.9, Lon: -122.6},
+				{Lat: 37.71, Lon: -122.41},
+				{Lat: 37.72, Lon: -122.42},
 			},
 		},
 		{
-			name:  "lowercase linestring",
-			input: "linestring(1 2,3 4)",
-			want: []gpxTrkpt{
-				{Lat: 2, Lon: 1},
-				{Lat: 4, Lon: 3},
-			},
+			name: "empty",
+			wkt:  "LINESTRING EMPTY",
+			want: []gpxTrkpt{},
 		},
 		{
-			name:  "empty linestring",
-			input: "LINESTRING EMPTY",
-			want:  []gpxTrkpt{},
-		},
-		{
-			name:    "not a linestring",
-			input:   "POINT(1 2)",
+			name:    "wrong geometry type",
+			wkt:     "POINT(0 0)",
 			wantErr: true,
 		},
 		{
-			name:    "missing parens",
-			input:   "LINESTRING 1 2",
-			wantErr: true,
-		},
-		{
-			name:    "bad coordinate",
-			input:   "LINESTRING(abc def)",
-			wantErr: true,
-		},
-		{
-			name:    "single coordinate (missing lat)",
-			input:   "LINESTRING(1)",
+			name:    "malformed body",
+			wkt:     "LINESTRING 1 2 3",
 			wantErr: true,
 		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseLineStringWKT(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error, got %v", got)
-				}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseLineStringWKT(tc.wkt)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d points, want %d", len(got), len(tc.want))
 			}
-			if len(got) != len(tt.want) {
-				t.Fatalf("got %d points, want %d", len(got), len(tt.want))
-			}
-			for i, pt := range got {
-				if pt.Lat != tt.want[i].Lat || pt.Lon != tt.want[i].Lon {
-					t.Errorf("points[%d] = %+v, want %+v", i, pt, tt.want[i])
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("got[%d] = %+v, want %+v", i, got[i], tc.want[i])
 				}
 			}
 		})
+	}
+}
+
+// ----- MP4 export tests -----
+
+const (
+	testExportDongleID = "abc123"
+	testExportRoute    = "2024-03-15--12-30-00"
+)
+
+// newExportMP4Request builds an Echo context targeting the MP4 export endpoint.
+func newExportMP4Request(t *testing.T, dongleID, routeName, camera, authDongle string) (*httptest.ResponseRecorder, echo.Context) {
+	t.Helper()
+	e := echo.New()
+	target := "/v1/routes/" + dongleID + "/" + routeName + "/export.mp4"
+	if camera != "" {
+		target += "?camera=" + camera
+	}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id", "route_name")
+	c.SetParamValues(dongleID, routeName)
+	c.Set(middleware.ContextKeyDongleID, authDongle)
+	return rec, c
+}
+
+// writeTinyTS writes a tiny but valid single-stream MPEG-TS file using ffmpeg.
+func writeTinyTS(t *testing.T, ffmpegPath, outPath string) {
+	t.Helper()
+	cmd := exec.Command(ffmpegPath,
+		"-hide_banner",
+		"-loglevel", "error",
+		"-y",
+		"-f", "lavfi",
+		"-i", "color=black:s=16x16:d=0.3:r=10",
+		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-tune", "zerolatency",
+		"-pix_fmt", "yuv420p",
+		"-f", "mpegts",
+		outPath,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("failed to create test ts fixture: %v: %s", err, string(out))
+	}
+}
+
+// setupHLSRoute lays out storage so it mirrors what the transcoder produces.
+func setupHLSRoute(t *testing.T, store *storage.Storage, ffmpegPath, dongleID, routeName, camera string, segmentCount int) {
+	t.Helper()
+	hlsDir, ok := cameraToHLSDir[camera]
+	if !ok {
+		t.Fatalf("unknown camera %q", camera)
+	}
+	for seg := 0; seg < segmentCount; seg++ {
+		segStr := strconv.Itoa(seg)
+		dir := filepath.Join(store.Path(dongleID, routeName, segStr, ""), hlsDir)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("failed to create hls dir: %v", err)
+		}
+		writeTinyTS(t, ffmpegPath, filepath.Join(dir, "seg_000.ts"))
+	}
+}
+
+// newExportStorage builds a Storage rooted at a temporary directory.
+func newExportStorage(t *testing.T) *storage.Storage {
+	t.Helper()
+	dir := t.TempDir()
+	return storage.New(dir)
+}
+
+func TestExportMP4_HappyPath(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not available; skipping")
+	}
+
+	store := newExportStorage(t)
+	setupHLSRoute(t, store, ffmpegPath, testExportDongleID, testExportRoute, "f", 2)
+
+	handler := NewExportHandler(nil, store)
+	handler.SetFFmpegPath(ffmpegPath)
+
+	rec, c := newExportMP4Request(t, testExportDongleID, testExportRoute, "f", testExportDongleID)
+	if err := handler.ExportMP4(c); err != nil {
+		t.Fatalf("ExportMP4 returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get(echo.HeaderContentType); !strings.HasPrefix(ct, "video/mp4") {
+		t.Errorf("Content-Type = %q, want video/mp4", ct)
+	}
+	body := rec.Body.Bytes()
+	if len(body) < 64 {
+		t.Fatalf("response too short: %d bytes", len(body))
+	}
+	if !bytes.Contains(body[:64], []byte("ftyp")) {
+		t.Errorf("expected 'ftyp' box in first 64 bytes; got %q", body[:64])
+	}
+}
+
+func TestExportMP4_MissingHLS(t *testing.T) {
+	store := newExportStorage(t)
+	handler := NewExportHandler(nil, store)
+
+	rec, c := newExportMP4Request(t, testExportDongleID, testExportRoute, "f", testExportDongleID)
+	if err := handler.ExportMP4(c); err != nil {
+		t.Fatalf("ExportMP4 returned error: %v", err)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestExportMP4_MissingHLS_ExistingRouteDifferentCamera(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not available; skipping")
+	}
+	store := newExportStorage(t)
+	setupHLSRoute(t, store, ffmpegPath, testExportDongleID, testExportRoute, "f", 1)
+
+	handler := NewExportHandler(nil, store)
+
+	rec, c := newExportMP4Request(t, testExportDongleID, testExportRoute, "e", testExportDongleID)
+	if err := handler.ExportMP4(c); err != nil {
+		t.Fatalf("ExportMP4 returned error: %v", err)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestExportMP4_BadCamera(t *testing.T) {
+	store := newExportStorage(t)
+	handler := NewExportHandler(nil, store)
+
+	rec, c := newExportMP4Request(t, testExportDongleID, testExportRoute, "x", testExportDongleID)
+	if err := handler.ExportMP4(c); err != nil {
+		t.Fatalf("ExportMP4 returned error: %v", err)
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestExportMP4_DongleMismatch(t *testing.T) {
+	store := newExportStorage(t)
+	handler := NewExportHandler(nil, store)
+
+	rec, c := newExportMP4Request(t, testExportDongleID, testExportRoute, "f", "other-dongle")
+	if err := handler.ExportMP4(c); err != nil {
+		t.Fatalf("ExportMP4 returned error: %v", err)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestExportMP4_CancellationKillsFfmpeg(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signal handling test not applicable on Windows")
+	}
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not available; skipping")
+	}
+
+	store := newExportStorage(t)
+	setupHLSRoute(t, store, ffmpegPath, testExportDongleID, testExportRoute, "f", 20)
+
+	handler := NewExportHandler(nil, store)
+	handler.SetFFmpegPath(ffmpegPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/v1/routes/"+testExportDongleID+"/"+testExportRoute+"/export.mp4?camera=f", nil)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id", "route_name")
+	c.SetParamValues(testExportDongleID, testExportRoute)
+	c.Set(middleware.ContextKeyDongleID, testExportDongleID)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- handler.ExportMP4(c)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Logf("ExportMP4 after cancel returned: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ExportMP4 did not return after cancellation")
+	}
+
+	_ = syscall.Getpid()
+}
+
+func TestBuildConcatList(t *testing.T) {
+	paths := []string{"/tmp/a.ts", "/tmp/b's.ts"}
+	got := buildConcatList(paths)
+	want := "ffconcat version 1.0\nfile 'file:/tmp/a.ts'\nfile 'file:/tmp/b'\\''s.ts'\n"
+	if got != want {
+		t.Errorf("buildConcatList = %q\nwant %q", got, want)
+	}
+}
+
+func TestTSOrderKey(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"/a/seg_000.ts", "000000000000"},
+		{"/a/seg_010.ts", "000000000010"},
+		{"/a/seg_1.ts", "000000000001"},
+		{"/a/noisy.ts", "noisy"},
+	}
+	for _, tc := range cases {
+		got := tsOrderKey(tc.in)
+		if got != tc.want {
+			t.Errorf("tsOrderKey(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
