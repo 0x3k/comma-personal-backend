@@ -11,6 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countEventsByDongleID = `-- name: CountEventsByDongleID :one
+SELECT COUNT(*)::BIGINT
+FROM events e
+JOIN routes r ON r.id = e.route_id
+WHERE r.dongle_id = $1
+  AND ($2::text IS NULL OR e.type = $2)
+  AND ($3::text IS NULL OR e.severity = $3)
+`
+
+type CountEventsByDongleIDParams struct {
+	DongleID       string      `json:"dongleId"`
+	TypeFilter     pgtype.Text `json:"typeFilter"`
+	SeverityFilter pgtype.Text `json:"severityFilter"`
+}
+
+// Total count matching the same filters as ListEventsByDongleID, so the UI
+// can paginate without repeatedly scanning the full set. Pass NULL for
+// @type_filter or @severity_filter to disable that filter.
+func (q *Queries) CountEventsByDongleID(ctx context.Context, arg CountEventsByDongleIDParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countEventsByDongleID, arg.DongleID, arg.TypeFilter, arg.SeverityFilter)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countEventsByType = `-- name: CountEventsByType :many
 SELECT type, count(*) AS count
 FROM events
@@ -97,7 +122,8 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (Event
 
 const listEventsByDongleID = `-- name: ListEventsByDongleID :many
 SELECT e.id, e.route_id, e.type, e.severity, e.route_offset_seconds,
-       e.occurred_at, e.payload, e.created_at
+       e.occurred_at, e.payload, e.created_at,
+       r.route_name, r.dongle_id
 FROM events e
 JOIN routes r ON r.id = e.route_id
 WHERE r.dongle_id = $1
@@ -115,9 +141,24 @@ type ListEventsByDongleIDParams struct {
 	LimitCount     int32       `json:"limitCount"`
 }
 
-// Paginated, filterable list of events for a device. Pass NULL for
-// @type_filter or @severity_filter to disable that filter.
-func (q *Queries) ListEventsByDongleID(ctx context.Context, arg ListEventsByDongleIDParams) ([]Event, error) {
+type ListEventsByDongleIDRow struct {
+	ID                 int32              `json:"id"`
+	RouteID            int32              `json:"routeId"`
+	Type               string             `json:"type"`
+	Severity           string             `json:"severity"`
+	RouteOffsetSeconds float64            `json:"routeOffsetSeconds"`
+	OccurredAt         pgtype.Timestamptz `json:"occurredAt"`
+	Payload            []byte             `json:"payload"`
+	CreatedAt          pgtype.Timestamptz `json:"createdAt"`
+	RouteName          string             `json:"routeName"`
+	DongleID           string             `json:"dongleId"`
+}
+
+// Paginated, filterable list of events for a device, joined with the owning
+// route so the UI can render the route_name alongside the event without a
+// second round trip. Pass NULL for @type_filter or @severity_filter to
+// disable that filter.
+func (q *Queries) ListEventsByDongleID(ctx context.Context, arg ListEventsByDongleIDParams) ([]ListEventsByDongleIDRow, error) {
 	rows, err := q.db.Query(ctx, listEventsByDongleID,
 		arg.DongleID,
 		arg.TypeFilter,
@@ -129,9 +170,9 @@ func (q *Queries) ListEventsByDongleID(ctx context.Context, arg ListEventsByDong
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Event
+	var items []ListEventsByDongleIDRow
 	for rows.Next() {
-		var i Event
+		var i ListEventsByDongleIDRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.RouteID,
@@ -141,6 +182,8 @@ func (q *Queries) ListEventsByDongleID(ctx context.Context, arg ListEventsByDong
 			&i.OccurredAt,
 			&i.Payload,
 			&i.CreatedAt,
+			&i.RouteName,
+			&i.DongleID,
 		); err != nil {
 			return nil, err
 		}

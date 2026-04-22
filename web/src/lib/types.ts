@@ -117,6 +117,7 @@ export interface CreateShareResponse {
   expires_at: string;
 }
 
+
 /**
  * A single aggregated trip row as returned by the stats and trip endpoints.
  * snake_case field names match the Go handler in internal/api/trip.go
@@ -155,6 +156,33 @@ export interface DeviceStatsTotals {
 export interface DeviceStats {
   totals: DeviceStatsTotals;
   recent: Trip[];
+  limit: number;
+  offset: number;
+}
+
+/**
+ * A single detected event ("moment") as returned by
+ * GET /v1/devices/:dongle_id/events. Field names are snake_case to match
+ * the device-facing API surface in internal/api/events.go.
+ *
+ * `payload` is the raw JSONB blob the detector stored -- its shape depends
+ * on the event type (e.g. hard_brake has `{ "deceleration_mps2": ... }`).
+ * Consumers should feature-detect known keys rather than assume a schema.
+ */
+export interface MomentEvent {
+  id: number;
+  route_name: string;
+  type: string;
+  severity: string;
+  route_offset_seconds: number;
+  occurred_at: string | null;
+  payload: unknown;
+}
+
+/** Paginated response from GET /v1/devices/:dongle_id/events. */
+export interface MomentsListResponse {
+  events: MomentEvent[];
+  total: number;
   limit: number;
   offset: number;
 }

@@ -23,10 +23,13 @@ WHERE route_id = $1
 ORDER BY route_offset_seconds ASC, id ASC;
 
 -- name: ListEventsByDongleID :many
--- Paginated, filterable list of events for a device. Pass NULL for
--- @type_filter or @severity_filter to disable that filter.
+-- Paginated, filterable list of events for a device, joined with the owning
+-- route so the UI can render the route_name alongside the event without a
+-- second round trip. Pass NULL for @type_filter or @severity_filter to
+-- disable that filter.
 SELECT e.id, e.route_id, e.type, e.severity, e.route_offset_seconds,
-       e.occurred_at, e.payload, e.created_at
+       e.occurred_at, e.payload, e.created_at,
+       r.route_name, r.dongle_id
 FROM events e
 JOIN routes r ON r.id = e.route_id
 WHERE r.dongle_id = sqlc.arg('dongle_id')
@@ -34,6 +37,17 @@ WHERE r.dongle_id = sqlc.arg('dongle_id')
   AND (sqlc.narg('severity_filter')::text IS NULL OR e.severity = sqlc.narg('severity_filter'))
 ORDER BY e.occurred_at DESC NULLS LAST, e.id DESC
 LIMIT sqlc.arg('limit_count') OFFSET sqlc.arg('offset_count');
+
+-- name: CountEventsByDongleID :one
+-- Total count matching the same filters as ListEventsByDongleID, so the UI
+-- can paginate without repeatedly scanning the full set. Pass NULL for
+-- @type_filter or @severity_filter to disable that filter.
+SELECT COUNT(*)::BIGINT
+FROM events e
+JOIN routes r ON r.id = e.route_id
+WHERE r.dongle_id = sqlc.arg('dongle_id')
+  AND (sqlc.narg('type_filter')::text IS NULL OR e.type = sqlc.narg('type_filter'))
+  AND (sqlc.narg('severity_filter')::text IS NULL OR e.severity = sqlc.narg('severity_filter'));
 
 -- name: CountEventsByType :many
 -- Aggregate count of events grouped by type for a single route.
