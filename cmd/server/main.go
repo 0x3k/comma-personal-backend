@@ -72,6 +72,12 @@ func main() {
 	routeHandler := api.NewRouteHandler(queries)
 	routeHandler.RegisterRoutes(v1Route)
 
+	// Route export (MP4 download). Mounted under /v1/routes (plural) to
+	// keep the export surface separate from the JSON listing endpoints.
+	v1Routes := e.Group("/v1/routes", auth)
+	exportHandler := api.NewExportHandler(store)
+	exportHandler.RegisterRoutes(v1Routes)
+
 	// Upload URL and file upload.
 	v14 := e.Group("/v1.4", auth)
 	uploadHandler := api.NewUploadHandler(store, queries)
