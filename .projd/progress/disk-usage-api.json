@@ -3,8 +3,9 @@
   "name": "Disk usage API endpoint",
   "description": "Report storage consumption so operators can monitor growth and the UI can surface it. Returns bytes used per device plus the filesystem total/available. Uses os.Stat walks behind a small cache (60s) so it never becomes a hot path.",
   "priority": 4,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/disk-usage-api",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/storage/usage.go adds Storage.Usage(ctx) (*UsageReport, error) returning { Devices: []{DongleID, Bytes, RouteCount}, TotalBytes, FilesystemTotalBytes, FilesystemAvailableBytes, ComputedAt time.Time }",
