@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch, BASE_URL } from "@/lib/api";
 import type { LogEntry, RouteDetailResponse, Segment } from "@/lib/types";
@@ -83,6 +83,7 @@ type DetailTab = "segments" | "logs";
 
 export default function RouteDetailPage() {
   const params = useParams<{ dongleId: string; routeName: string }>();
+  const searchParams = useSearchParams();
   const dongleId = params.dongleId;
   const routeName = decodeURIComponent(params.routeName);
 
@@ -92,6 +93,13 @@ export default function RouteDetailPage() {
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>("segments");
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  // Deep-link support for /moments: when the URL carries ?t=<seconds>, we
+  // auto-select the segment that contains that offset. The in-segment
+  // playhead position is stored in `pendingSeekSec` and flushed to the
+  // <video> element once it mounts (the VideoPlayer does not currently
+  // expose an imperative seek handle; we reach into the DOM instead to
+  // keep this feature independent of the log-overlay-ui work).
+  const [pendingSeekSec, setPendingSeekSec] = useState<number | null>(null);
 
   const fetchRoute = useCallback(async () => {
     setLoading(true);
@@ -124,6 +132,63 @@ export default function RouteDetailPage() {
     const sample: LogEntry[] = generatePlaceholderLogs(route);
     setLogs(sample);
   }, [route]);
+
+  // Read ?t=<seconds> once the route loads and pick the matching segment.
+  // Segments are 1-minute chunks by comma convention so the floor(t/60)
+  // computes the segment index. If the exact segment isn't present (e.g.
+  // partial upload), fall back to the first segment with video so the
+  // user at least lands somewhere watchable.
+  useEffect(() => {
+    if (!route) return;
+    const tRaw = searchParams.get("t");
+    if (tRaw === null) return;
+    const t = parseFloat(tRaw);
+    if (!Number.isFinite(t) || t < 0) return;
+    const targetNum = Math.floor(t / 60);
+    const preferred = route.segments.find(
+      (s) => s.number === targetNum && getAvailableCameras(s).length > 0,
+    );
+    const fallback = route.segments.find(
+      (s) => getAvailableCameras(s).length > 0,
+    );
+    const chosen = preferred ?? fallback;
+    if (!chosen) return;
+    setSelectedSegment(chosen.number);
+    const segLocal = Math.max(0, Math.min(60, t - chosen.number * 60));
+    setPendingSeekSec(segLocal);
+  }, [route, searchParams]);
+
+  // Best-effort seek: once the video element has mounted and reports a
+  // readyState good enough to seek, set currentTime. Retries briefly so
+  // hls.js has time to attach the media element.
+  useEffect(() => {
+    if (pendingSeekSec === null) return;
+    let cancelled = false;
+    let attempts = 0;
+    const tryFlush = () => {
+      if (cancelled) return;
+      const video = document.querySelector<HTMLVideoElement>("video");
+      if (video && !Number.isNaN(video.duration)) {
+        try {
+          video.currentTime = pendingSeekSec;
+        } catch {
+          // ignored: next play will retry
+        }
+        setPendingSeekSec(null);
+        return;
+      }
+      if (attempts++ < 40) {
+        window.setTimeout(tryFlush, 100);
+      } else {
+        // Give up so we don't loop forever if video never loads.
+        setPendingSeekSec(null);
+      }
+    };
+    tryFlush();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingSeekSec, selectedSegment]);
 
   return (
     <PageWrapper>
