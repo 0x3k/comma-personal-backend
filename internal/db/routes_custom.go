@@ -16,11 +16,12 @@ type RouteWithSegmentCount struct {
 	EndTime      pgtype.Timestamptz
 	Geometry     interface{}
 	CreatedAt    pgtype.Timestamptz
+	Preserved    bool
 	SegmentCount int64
 }
 
 const listRoutesByDeviceWithCounts = `
-SELECT r.id, r.dongle_id, r.route_name, r.start_time, r.end_time, r.geometry, r.created_at,
+SELECT r.id, r.dongle_id, r.route_name, r.start_time, r.end_time, r.geometry, r.created_at, r.preserved,
        (SELECT count(*) FROM segments s WHERE s.route_id = r.id) AS segment_count
 FROM routes r
 WHERE r.dongle_id = $1
@@ -47,6 +48,7 @@ func (q *Queries) ListRoutesByDeviceWithCounts(ctx context.Context, arg ListRout
 			&i.EndTime,
 			&i.Geometry,
 			&i.CreatedAt,
+			&i.Preserved,
 			&i.SegmentCount,
 		); err != nil {
 			return nil, err
@@ -57,4 +59,35 @@ func (q *Queries) ListRoutesByDeviceWithCounts(ctx context.Context, arg ListRout
 		return nil, err
 	}
 	return items, nil
+}
+
+const getRouteGeometryWKT = `
+SELECT ST_AsText(geometry)
+FROM routes
+WHERE dongle_id = $1 AND route_name = $2
+`
+
+// GetRouteGeometryWKTParams identifies the route whose geometry should be
+// serialized to GPX.
+type GetRouteGeometryWKTParams struct {
+	DongleID  string
+	RouteName string
+}
+
+// GetRouteGeometryWKT returns the route's LineString rendered as WKT
+// (e.g. "LINESTRING(lon lat, lon lat, ...)").
+//
+// The returned pgtype.Text is invalid when either:
+//   - the route does not exist (pgx.ErrNoRows); or
+//   - the route exists but its geometry column is NULL (Valid = false).
+//
+// Callers should distinguish these two cases explicitly so the GPX handler
+// can return a 404 for "no track to export" without surfacing an empty file.
+func (q *Queries) GetRouteGeometryWKT(ctx context.Context, arg GetRouteGeometryWKTParams) (pgtype.Text, error) {
+	row := q.db.QueryRow(ctx, getRouteGeometryWKT, arg.DongleID, arg.RouteName)
+	var wkt pgtype.Text
+	if err := row.Scan(&wkt); err != nil {
+		return pgtype.Text{}, err
+	}
+	return wkt, nil
 }

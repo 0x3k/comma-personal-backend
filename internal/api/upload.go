@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -15,8 +16,22 @@ import (
 
 	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/storage"
 )
+
+// countingReader tallies bytes read through the upload path so the metrics
+// layer can record upload_bytes_total without reading Content-Length.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (cr *countingReader) Read(p []byte) (int, error) {
+	n, err := cr.r.Read(p)
+	cr.n += int64(n)
+	return n, err
+}
 
 // validFilenames lists the segment file types that comma devices may upload.
 var validFilenames = map[string]bool{
@@ -54,13 +69,21 @@ var filenameToFlag = map[string]string{
 type UploadHandler struct {
 	storage *storage.Storage
 	queries *db.Queries
+	metrics *metrics.Metrics
 }
 
 // NewUploadHandler creates an UploadHandler with the given storage backend
 // and optional database queries. If queries is nil, database tracking is
 // skipped (useful for tests that only exercise storage).
 func NewUploadHandler(s *storage.Storage, queries *db.Queries) *UploadHandler {
-	return &UploadHandler{storage: s, queries: queries}
+	return NewUploadHandlerWithMetrics(s, queries, nil)
+}
+
+// NewUploadHandlerWithMetrics creates an UploadHandler that also records the
+// number of bytes received per device via the provided metrics. A nil m is
+// treated as a no-op.
+func NewUploadHandlerWithMetrics(s *storage.Storage, queries *db.Queries, m *metrics.Metrics) *UploadHandler {
+	return &UploadHandler{storage: s, queries: queries, metrics: m}
 }
 
 // uploadURLResponse is the JSON response for the upload URL endpoint.
@@ -160,12 +183,17 @@ func (h *UploadHandler) UploadFile(c echo.Context) error {
 	body := c.Request().Body
 	defer body.Close()
 
-	if err := h.storage.Store(dongleID, route, segment, filename, body); err != nil {
+	// Count bytes through the body reader so the metric reflects what was
+	// actually received (Content-Length can be missing for chunked uploads).
+	counter := &countingReader{r: body}
+	if err := h.storage.Store(dongleID, route, segment, filename, counter); err != nil {
+		h.metrics.AddUploadBytes(dongleID, counter.n)
 		return c.JSON(http.StatusInternalServerError, errorResponse{
 			Error: "failed to store uploaded file",
 			Code:  http.StatusInternalServerError,
 		})
 	}
+	h.metrics.AddUploadBytes(dongleID, counter.n)
 
 	// Track the upload in the database if queries are available.
 	if h.queries != nil {
