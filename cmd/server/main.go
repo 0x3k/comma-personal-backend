@@ -72,6 +72,11 @@ func main() {
 	routeHandler := api.NewRouteHandler(queries)
 	routeHandler.RegisterRoutes(v1Route)
 
+	// Route mutation endpoints live under /v1/routes (plural) to mirror
+	// comma connect's URL convention. Currently only the preserved toggle.
+	v1Routes := e.Group("/v1/routes", auth)
+	routeHandler.RegisterPreservedRoute(v1Routes)
+
 	// Upload URL and file upload.
 	v14 := e.Group("/v1.4", auth)
 	uploadHandler := api.NewUploadHandler(store, queries)

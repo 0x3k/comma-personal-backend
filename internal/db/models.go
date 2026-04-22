@@ -43,6 +43,7 @@ type Route struct {
 	EndTime   pgtype.Timestamptz `json:"endTime"`
 	Geometry  interface{}        `json:"geometry"`
 	CreatedAt pgtype.Timestamptz `json:"createdAt"`
+	Preserved bool               `json:"preserved"`
 }
 
 type Segment struct {
