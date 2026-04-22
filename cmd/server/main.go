@@ -120,6 +120,11 @@ func main() {
 	signalsHandler := api.NewSignalsHandler(queries, store)
 	signalsHandler.RegisterRoutes(v1Routes)
 
+	// Trip stats: per-device lifetime totals + recent trip list on /v1, and
+	// per-route aggregated trip detail on /v1/routes.
+	tripHandler := api.NewTripHandler(queries)
+	tripHandler.RegisterTripRoute(v1Routes)
+
 	// Upload URL and file upload.
 	v14 := e.Group("/v1.4", auth)
 	uploadHandler := api.NewUploadHandlerWithMetrics(store, queries, m)
@@ -140,6 +145,10 @@ func main() {
 	// Retention and other operator settings. Shares the /v1 auth group.
 	settingsHandler := api.NewSettingsHandler(settingsStore, cfg.RetentionDays)
 	settingsHandler.RegisterRoutes(v1Config)
+
+	// Per-device trip stats live at /v1/devices/:dongle_id/stats, so they
+	// share the /v1 auth group with config params and settings.
+	tripHandler.RegisterStatsRoute(v1Config)
 
 	// Live device status panel feeds the web UI; it accepts either a session
 	// cookie (browser dashboard) or a device JWT (CLI/ad-hoc), so it lives on
