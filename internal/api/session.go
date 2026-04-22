@@ -2,15 +2,11 @@ package api
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +16,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/sessioncookie"
 )
 
 // BcryptCost is the cost factor used when hashing UI user passwords. 12 is
@@ -28,11 +25,14 @@ import (
 const BcryptCost = 12
 
 // SessionCookieName is the HTTP cookie name that carries the signed token.
-const SessionCookieName = "session"
+// It aliases sessioncookie.Name so api handlers and the session middleware
+// agree on a single source of truth.
+const SessionCookieName = sessioncookie.Name
 
 // SessionTTL is how long a session remains valid after login. The cookie
-// Max-Age and the signed expiresAt field both use this duration.
-const SessionTTL = 7 * 24 * time.Hour
+// Max-Age and the signed expiresAt field both use this duration. It aliases
+// sessioncookie.TTL for the same reason as SessionCookieName.
+const SessionTTL = sessioncookie.TTL
 
 // loginRateLimit defines the per-IP sliding-window cap on login attempts.
 // We keep it small because there is only one admin account in this service.
@@ -156,64 +156,17 @@ func (h *SessionHandler) Logout(c echo.Context) error {
 
 // ParseSessionCookie verifies a cookie value against secret and returns the
 // authenticated user ID if the signature matches and the expiry has not
-// passed. The returned error is intentionally opaque: callers log it but
-// do not expose it to clients.
+// passed. It delegates to sessioncookie.Parse; see that package for the
+// canonical implementation. The returned error is intentionally opaque:
+// callers log it but do not expose it to clients.
 func ParseSessionCookie(secret []byte, value string) (int32, error) {
-	if len(secret) == 0 {
-		return 0, errors.New("session secret is empty")
-	}
-	if value == "" {
-		return 0, errors.New("session cookie is empty")
-	}
-
-	parts := strings.Split(value, ".")
-	if len(parts) != 2 {
-		return 0, errors.New("malformed session cookie")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return 0, fmt.Errorf("failed to decode session payload: %w", err)
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return 0, fmt.Errorf("failed to decode session signature: %w", err)
-	}
-
-	mac := hmac.New(sha256.New, secret)
-	mac.Write(payload)
-	expected := mac.Sum(nil)
-	if !hmac.Equal(expected, sig) {
-		return 0, errors.New("session signature mismatch")
-	}
-
-	fields := strings.SplitN(string(payload), "|", 2)
-	if len(fields) != 2 {
-		return 0, errors.New("malformed session payload")
-	}
-	userID64, err := strconv.ParseInt(fields[0], 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse user id: %w", err)
-	}
-	expUnix, err := strconv.ParseInt(fields[1], 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse expiry: %w", err)
-	}
-	if time.Now().After(time.Unix(expUnix, 0)) {
-		return 0, errors.New("session expired")
-	}
-	return int32(userID64), nil
+	return sessioncookie.Parse(secret, value)
 }
 
-// SignSessionToken builds a signed token of the form base64(payload).base64(sig)
-// where payload is "userID|expiresAtUnix" and sig is HMAC-SHA256(payload) under
-// the server's session secret.
+// SignSessionToken builds a signed session token. See sessioncookie.Sign
+// for the canonical implementation.
 func SignSessionToken(secret []byte, userID int32, expiresAt time.Time) string {
-	payload := fmt.Sprintf("%d|%d", userID, expiresAt.Unix())
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(payload))
-	sig := mac.Sum(nil)
-	return base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." +
-		base64.RawURLEncoding.EncodeToString(sig)
+	return sessioncookie.Sign(secret, userID, expiresAt)
 }
 
 // BootstrapAdmin creates or updates the ui_users row for the operator's
