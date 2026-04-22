@@ -17,7 +17,50 @@ fi
 
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 
-# Load .projd/agent.json from project directory
+# Determine the *effective* CWD for branch checks. The session CWD (what Claude
+# Code sends) can lag behind the directory where the command actually runs --
+# e.g., a parallel-agent worktree -- causing false blocks on merge/commit when
+# the command is `cd <worktree> && git ...` but the session is still on main.
+#
+# Honor two shapes:
+#   1. Leading `cd <path> &&|;|...`
+#   2. `git -C <path> ...`
+EFFECTIVE_CWD="$CWD"
+
+_cd_target=""
+if [[ "$COMMAND" =~ ^[[:space:]]*cd[[:space:]]+\"([^\"]+)\" ]]; then
+    _cd_target="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ ^[[:space:]]*cd[[:space:]]+\'([^\']+)\' ]]; then
+    _cd_target="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ ^[[:space:]]*cd[[:space:]]+([^[:space:]\&\|\;]+) ]]; then
+    _cd_target="${BASH_REMATCH[1]}"
+fi
+if [ -n "$_cd_target" ]; then
+    if [[ "$_cd_target" == /* ]]; then
+        EFFECTIVE_CWD="$_cd_target"
+    else
+        EFFECTIVE_CWD="$CWD/$_cd_target"
+    fi
+fi
+
+_gitc_target=""
+if [[ "$COMMAND" =~ git[[:space:]]+-C[[:space:]]+\"([^\"]+)\" ]]; then
+    _gitc_target="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ git[[:space:]]+-C[[:space:]]+\'([^\']+)\' ]]; then
+    _gitc_target="${BASH_REMATCH[1]}"
+elif [[ "$COMMAND" =~ git[[:space:]]+-C[[:space:]]+([^[:space:]\&\|\;]+) ]]; then
+    _gitc_target="${BASH_REMATCH[1]}"
+fi
+if [ -n "$_gitc_target" ]; then
+    if [[ "$_gitc_target" == /* ]]; then
+        EFFECTIVE_CWD="$_gitc_target"
+    else
+        EFFECTIVE_CWD="$CWD/$_gitc_target"
+    fi
+fi
+
+# Load .projd/agent.json from the session CWD (the policy file belongs to the
+# project root, not the worktree copy).
 AGENT_JSON="${CWD}/.projd/agent.json"
 if [ ! -f "$AGENT_JSON" ]; then
     exit 0
@@ -72,8 +115,8 @@ if echo "$COMMAND" | grep -qE 'git\s+push'; then
             deny "Push blocked by .projd/agent.json (allow_push: false). The operator handles pushing."
             ;;
         feature)
-            # Get the current branch
-            CURRENT_BRANCH=$(cd "$CWD" && git branch --show-current 2>/dev/null || echo "")
+            # Get the current branch from the effective CWD (honors `cd <worktree> &&`)
+            CURRENT_BRANCH=$(git -C "$EFFECTIVE_CWD" branch --show-current 2>/dev/null || echo "")
             if [ -n "$BRANCH_PREFIX" ] && [ -n "$CURRENT_BRANCH" ]; then
                 if [[ "$CURRENT_BRANCH" != "${BRANCH_PREFIX}"* ]]; then
                     deny "Push blocked: branch '$CURRENT_BRANCH' does not start with prefix '$BRANCH_PREFIX'. Only feature branches can be pushed (allow_push: feature)."
@@ -111,9 +154,9 @@ fi
 
 # --- Check c: Commit on protected branch ---
 if echo "$COMMAND" | grep -qE 'git\s+commit'; then
-    CURRENT_BRANCH=$(cd "$CWD" && git branch --show-current 2>/dev/null || echo "")
+    CURRENT_BRANCH=$(git -C "$EFFECTIVE_CWD" branch --show-current 2>/dev/null || echo "")
     # Allow initial commit in empty repos (no HEAD yet)
-    if (cd "$CWD" && git rev-parse HEAD &>/dev/null); then
+    if git -C "$EFFECTIVE_CWD" rev-parse HEAD &>/dev/null; then
         if [ -n "$CURRENT_BRANCH" ] && is_protected "$CURRENT_BRANCH"; then
             deny "Cannot commit directly to protected branch '$CURRENT_BRANCH'. Create a feature branch first: git checkout -b ${BRANCH_PREFIX}<name>"
         fi
@@ -142,7 +185,7 @@ fi
 
 # --- Check e: Merge into protected branch ---
 if echo "$COMMAND" | grep -qE 'git\s+merge'; then
-    CURRENT_BRANCH=$(cd "$CWD" && git branch --show-current 2>/dev/null || echo "")
+    CURRENT_BRANCH=$(git -C "$EFFECTIVE_CWD" branch --show-current 2>/dev/null || echo "")
     if [ -n "$CURRENT_BRANCH" ] && is_protected "$CURRENT_BRANCH"; then
         deny "Cannot merge into protected branch '$CURRENT_BRANCH'. Merge via PR instead."
     fi

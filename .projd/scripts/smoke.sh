@@ -53,8 +53,24 @@ fi
 
 # --- Local checks (activated by ./setup.sh) ---
 
-run_check "lint" npx eslint src --ext .ts
-run_check "typecheck" npx tsc --noEmit
+# Autodetect the TS project dir: repo root or a common frontend subdir.
+_ts_dir="."
+for _d in . web frontend client app ui; do
+    if [ -f "$_d/package.json" ]; then _ts_dir="$_d"; break; fi
+done
+_ts_has() { [ -f "$_ts_dir/package.json" ] && jq -e --arg s "$1" '.scripts[$s] // empty' "$_ts_dir/package.json" >/dev/null 2>&1; }
+if _ts_has lint; then
+    run_check "lint" sh -c "cd '$_ts_dir' && npm run lint"
+elif [ -d "$_ts_dir/src" ]; then
+    run_check "lint" sh -c "cd '$_ts_dir' && npx eslint src --ext .ts,.tsx"
+fi
+if _ts_has type-check; then
+    run_check "typecheck" sh -c "cd '$_ts_dir' && npm run type-check"
+elif _ts_has typecheck; then
+    run_check "typecheck" sh -c "cd '$_ts_dir' && npm run typecheck"
+else
+    run_check "typecheck" sh -c "cd '$_ts_dir' && npx tsc --noEmit"
+fi
 
 run_check "vet" go vet ./...
 run_check "fmt" bash -c 'test -z "$(gofmt -l .)"'

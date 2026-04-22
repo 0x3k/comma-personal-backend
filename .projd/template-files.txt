@@ -18,6 +18,7 @@
 .projd/scripts/validate.sh
 .projd/scripts/upgrade.sh
 .projd/scripts/activate-langs.sh
+.projd/scripts/cleanup-agent.sh
 .projd/agent.json
 lefthook.yml
 .projd/template-files.txt

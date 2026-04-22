@@ -99,7 +99,8 @@ For each worker that completed successfully and created a PR, spawn a **review a
 
 Each review agent prompt must include:
 - The PR number and URL
-- The feature ID and all acceptance criteria
+- The feature ID, feature branch name, and all acceptance criteria
+- The **main repo path** (absolute path to the main clone -- the agent's own working dir is a review worktree, so it must `cd` to this path for any `gh pr merge` or cleanup work)
 - Instructions to:
 
   **Step A -- Checkout and verify:**
@@ -109,10 +110,11 @@ Each review agent prompt must include:
   4. Determine: PASS (all criteria met, smoke passes) or FAIL (with specific issues)
 
   **Step B -- If PASS:**
-  1. Merge the PR: `gh pr merge <number> --squash --delete-branch`
-  2. In the **main repo** (not the worktree), pull the latest base branch and update `.projd/progress/{feature-id}.json`: set `"status": "complete"`; commit this update to the base branch
-  3. Remove the feature's worktree: `git worktree remove --force <path>` (if it exists)
-  4. Report: merged successfully
+  1. `cd <main-repo-path>` (in its own Bash call, so the session CWD updates -- `gh pr merge` fails when run from inside a worktree, and chained `cd && gh` in one call does not update the session CWD that the git-policy hook sees)
+  2. Merge the PR: `gh pr merge <number> --squash --delete-branch`
+  3. Pull the latest base branch and update `.projd/progress/{feature-id}.json`: set `"status": "complete"`; commit this update to the base branch
+  4. Clean up the feature worktree and branch: `./.projd/scripts/cleanup-agent.sh <feature-branch>`
+  5. Report: merged successfully
 
   **Step C -- If FAIL:**
   1. Assess each issue: is the fix trivial (1 line change) or non-trivial?
@@ -124,9 +126,10 @@ Each review agent prompt must include:
      - Instructions to: check out the branch, fix the issues, run smoke, commit, and push
   4. After fixes (direct or via subagent): re-run `./.projd/scripts/smoke.sh`
   5. If smoke passes now:
-     a. Merge the PR via `gh pr merge <number> --squash --delete-branch`
-     b. In the **main repo** (not the worktree), pull the latest base branch and update `.projd/progress/{feature-id}.json`: set `"status": "complete"`; commit this update to the base branch
-     c. Remove the feature's worktree: `git worktree remove --force <path>` (if it exists)
+     a. `cd <main-repo-path>` (separate Bash call -- see Step B.1)
+     b. Merge the PR via `gh pr merge <number> --squash --delete-branch`
+     c. Pull the latest base branch and update `.projd/progress/{feature-id}.json`: set `"status": "complete"`; commit this update to the base branch
+     d. Clean up: `./.projd/scripts/cleanup-agent.sh <feature-branch>`
   6. If still failing: leave a review comment on the PR (`gh pr review <number> --comment --body "<issues>"`) and report as needs-attention
 
 ### 8. Collect review results
