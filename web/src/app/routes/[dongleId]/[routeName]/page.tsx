@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch, BASE_URL } from "@/lib/api";
@@ -9,6 +9,8 @@ import {
   MultiCameraPlayer,
   type CameraType,
 } from "@/components/video/MultiCameraPlayer";
+import { SignalTimeline } from "@/components/video/SignalTimeline";
+import type { VideoPlayerHandle } from "@/components/video/VideoPlayer";
 import { PageWrapper } from "@/components/layout/PageWrapper";
 import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
@@ -92,6 +94,12 @@ export default function RouteDetailPage() {
   const [selectedSegment, setSelectedSegment] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>("segments");
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  // Video player -- `playerRef` lets us imperatively seek the selected segment,
+  // while `currentTime` is the native (segment-relative) playback position
+  // mirrored from the player's timeupdate callback. `setCurrentTime` fires
+  // many times per second during playback, so downstream code is kept light.
+  const playerRef = useRef<VideoPlayerHandle | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
 
   const fetchRoute = useCallback(async () => {
     setLoading(true);
@@ -113,6 +121,12 @@ export default function RouteDetailPage() {
   useEffect(() => {
     void fetchRoute();
   }, [fetchRoute]);
+
+  // Reset the playhead whenever the selected segment changes, so the signal
+  // timeline doesn't briefly render a stale position from the previous clip.
+  useEffect(() => {
+    setCurrentTime(0);
+  }, [selectedSegment]);
 
   // Populate placeholder log entries when the route loads.
   // Replace with a real API call once the backend exposes parsed log data.
@@ -205,6 +219,11 @@ export default function RouteDetailPage() {
             if (!seg) return null;
             const cameras = getAvailableCameras(seg);
             if (cameras.length === 0) return null;
+            // Segments are 1-minute chunks per the comma convention, so
+            // segment N starts at N*60 seconds into the route. The timeline
+            // uses that offset to map the segment-relative playhead to a
+            // route-relative time.
+            const segmentOffsetSec = seg.number * 60;
             return (
               <Card className="mb-6">
                 <CardHeader>
@@ -222,14 +241,34 @@ export default function RouteDetailPage() {
                   </div>
                 </CardHeader>
                 <CardBody>
-                  <MultiCameraPlayer
-                    segmentBaseUrl={buildSegmentBaseUrl(
-                      dongleId,
-                      routeName,
-                      seg.number,
-                    )}
-                    availableCameras={cameras}
-                  />
+                  <div className="flex flex-col gap-4">
+                    <MultiCameraPlayer
+                      ref={playerRef}
+                      segmentBaseUrl={buildSegmentBaseUrl(
+                        dongleId,
+                        routeName,
+                        seg.number,
+                      )}
+                      availableCameras={cameras}
+                      onTimeUpdate={setCurrentTime}
+                    />
+                    <SignalTimeline
+                      dongleId={dongleId}
+                      routeName={routeName}
+                      currentTime={currentTime}
+                      segmentOffsetSec={segmentOffsetSec}
+                      onSeek={(routeRelativeSec) => {
+                        // Convert route-relative seek target back into the
+                        // current segment's local time. If the click lands
+                        // outside this segment we just clamp to its own
+                        // range -- a multi-segment player would route the
+                        // seek to the correct segment instead.
+                        const segLocal = routeRelativeSec - segmentOffsetSec;
+                        const clamped = Math.max(0, Math.min(segLocal, 60));
+                        playerRef.current?.seek(clamped);
+                      }}
+                    />
+                  </div>
                 </CardBody>
               </Card>
             );
