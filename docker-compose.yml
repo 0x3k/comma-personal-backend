@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: comma-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-comma}
+      POSTGRES_USER: ${POSTGRES_USER:-comma}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-comma}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-comma} -d ${POSTGRES_DB:-comma}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: comma-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-comma}:${POSTGRES_PASSWORD:-comma}@postgres:5432/${POSTGRES_DB:-comma}?sslmode=disable
+      STORAGE_PATH: /data
+      PORT: "8080"
+      COMMA_DONGLE_ID: ${COMMA_DONGLE_ID:-}
+      ALLOWED_SERIALS: ${ALLOWED_SERIALS:-}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - storage:/data
+
+  frontend:
+    profiles: ["prod"]
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+    container_name: comma-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+volumes:
+  pgdata:
+  storage:

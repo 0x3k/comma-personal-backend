@@ -43,6 +43,7 @@ lefthook-local.yml
 
 # Claude Code local overrides
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # projd ephemeral state
 .projd/manifest

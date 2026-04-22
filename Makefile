@@ -3,7 +3,9 @@
        build build-backend build-frontend \
        test test-backend test-frontend \
        lint lint-backend lint-frontend type-check \
-       sqlc db-migrate clean
+       sqlc db-migrate clean \
+       db-up db-down db-logs \
+       prod-up prod-down prod-build prod-logs
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -90,6 +92,35 @@ sqlc: ## Regenerate sqlc database code
 db-migrate: ## Run database migrations (requires golang-migrate)
 	@command -v migrate >/dev/null 2>&1 || { echo "golang-migrate not found. Install: brew install golang-migrate"; exit 1; }
 	migrate -path sql/migrations -database "$$DATABASE_URL" up
+
+# ---------------------------------------------------------------------------
+# Docker: dev database
+# ---------------------------------------------------------------------------
+
+db-up: ## Start Postgres+PostGIS in Docker (dev)
+	docker compose up -d postgres
+
+db-down: ## Stop Postgres container
+	docker compose down
+
+db-logs: ## Tail Postgres logs
+	docker compose logs -f postgres
+
+# ---------------------------------------------------------------------------
+# Docker: prod (full stack in containers)
+# ---------------------------------------------------------------------------
+
+prod-build: ## Build backend + frontend images
+	docker compose --profile prod build
+
+prod-up: ## Start full stack (postgres + backend + frontend)
+	docker compose --profile prod up -d
+
+prod-down: ## Stop full stack
+	docker compose --profile prod down
+
+prod-logs: ## Tail logs from all prod services
+	docker compose --profile prod logs -f
 
 # ---------------------------------------------------------------------------
 # Cleanup

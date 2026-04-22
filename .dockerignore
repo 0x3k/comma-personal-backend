@@ -1,0 +1,33 @@
+.git
+.github
+.idea
+.vscode
+.claude
+.projd
+
+# Build artifacts
+server
+tmp/
+bin/
+
+# Data / storage
+data/
+*.log
+
+# Frontend (built in its own image)
+web/
+
+# Local env
+.env
+.env.*
+!.env.example
+
+# Docs / meta
+*.md
+!README.md
+LICENSE
+Makefile
+lefthook.yml
+
+# OS
+.DS_Store
