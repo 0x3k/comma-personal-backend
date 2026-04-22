@@ -1,0 +1,12 @@
+-- Add events_computed_at to trips to track event detection per route.
+--
+-- Design note: we add a nullable column on trips rather than introducing a
+-- separate event_detection_runs table for two reasons:
+--   1. There is exactly one logical "last run" per route, so the relation is
+--      strictly 1:1 with trips -- no history, no per-rule breakdown required.
+--   2. Claiming candidate routes is a single UPDATE ... WHERE events_computed_at
+--      IS NULL on the existing trips row, which is atomic without needing a
+--      join against a second table. A separate runs table would be useful if we
+--      later wanted per-detector versioning or historical re-run metadata, in
+--      which case this column can be dropped in favor of that table.
+ALTER TABLE trips ADD COLUMN events_computed_at TIMESTAMPTZ;

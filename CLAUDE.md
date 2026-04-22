@@ -102,6 +102,8 @@ These repos contain the device-side code (athenad, uploader, API client) that th
 | `ADMIN_USERNAME` | no | - | Together with `ADMIN_PASSWORD`, bootstraps/updates a single admin row in `ui_users` on startup. Only used when `SESSION_SECRET` is set. |
 | `ADMIN_PASSWORD` | no | - | Plaintext password for the bootstrap admin user. Hashed with bcrypt (cost 12) before storage. Only used when `SESSION_SECRET` is set. |
 | `RETENTION_DAYS` | no | `0` | Default retention window (in days) for non-preserved routes; `0` means never delete. Used as a fallback for the `retention_days` row in the `settings` table, which may be overridden at runtime via `PUT /v1/settings/retention`. |
+| `CLEANUP_ENABLED` | no | `true` | When `true`, starts the background cleanup worker that deletes non-preserved routes older than the effective retention window. Set to `false` to disable the worker entirely (e.g. when running multiple backend replicas against one database and only one should run cleanup). |
+| `DELETE_DRY_RUN` | no | `true` | When `true` (the default, for safety on first boot), the cleanup worker logs what it would delete but does not touch the filesystem or the database. Set to `false` to enable real deletion. |
 
 ## Key Patterns
 

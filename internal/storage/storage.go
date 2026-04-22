@@ -81,6 +81,74 @@ func (s *Storage) Exists(dongleID, route, segment, filename string) bool {
 	return err == nil
 }
 
+// RouteDir returns the absolute on-disk path for a route (the directory
+// that contains every segment folder for that route). It does not check
+// for existence.
+func (s *Storage) RouteDir(dongleID, route string) string {
+	return filepath.Join(s.basePath, dongleID, route)
+}
+
+// RouteBytes returns the total size in bytes of every regular file beneath
+// the route directory. A missing directory reports 0 bytes with no error so
+// callers can use this to log "bytes freed" even when files were never
+// uploaded. Symlinks and non-regular entries are skipped.
+func (s *Storage) RouteBytes(dongleID, route string) (int64, error) {
+	dir := s.RouteDir(dongleID, route)
+	var total int64
+	err := filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to walk route directory: %w", err)
+	}
+	return total, nil
+}
+
+// RemoveRoute deletes the route directory and all files/segments beneath it.
+// It is idempotent: a missing directory is not an error. The path is
+// validated to stay under basePath so a maliciously crafted dongleID or
+// route cannot escape the storage root.
+func (s *Storage) RemoveRoute(dongleID, route string) error {
+	dir := s.RouteDir(dongleID, route)
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve route path: %w", err)
+	}
+	absBase, err := filepath.Abs(s.basePath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve base path: %w", err)
+	}
+	if !strings.HasPrefix(absDir, absBase+string(filepath.Separator)) {
+		return fmt.Errorf("path traversal detected")
+	}
+
+	if err := os.RemoveAll(absDir); err != nil {
+		return fmt.Errorf("failed to remove route directory: %w", err)
+	}
+	return nil
+}
+
 // ListSegments returns a sorted list of segment numbers for the given
 // dongle and route. Each segment is a subdirectory whose name is a
 // non-negative integer.

@@ -59,13 +59,6 @@ type Segment struct {
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
 }
 
-type UiUser struct {
-	ID           int32              `json:"id"`
-	Username     string             `json:"username"`
-	PasswordHash string             `json:"passwordHash"`
-	CreatedAt    pgtype.Timestamptz `json:"createdAt"`
-}
-
 type Setting struct {
 	Key       string             `json:"key"`
 	Value     string             `json:"value"`
@@ -73,18 +66,26 @@ type Setting struct {
 }
 
 type Trip struct {
-	ID              int32              `json:"id"`
-	RouteID         int32              `json:"routeId"`
-	DistanceMeters  pgtype.Float8      `json:"distanceMeters"`
-	DurationSeconds pgtype.Int4        `json:"durationSeconds"`
-	MaxSpeedMps     pgtype.Float8      `json:"maxSpeedMps"`
-	AvgSpeedMps     pgtype.Float8      `json:"avgSpeedMps"`
-	EngagedSeconds  pgtype.Int4        `json:"engagedSeconds"`
-	StartAddress    pgtype.Text        `json:"startAddress"`
-	EndAddress      pgtype.Text        `json:"endAddress"`
-	StartLat        pgtype.Float8      `json:"startLat"`
-	StartLng        pgtype.Float8      `json:"startLng"`
-	EndLat          pgtype.Float8      `json:"endLat"`
-	EndLng          pgtype.Float8      `json:"endLng"`
-	ComputedAt      pgtype.Timestamptz `json:"computedAt"`
+	ID               int32              `json:"id"`
+	RouteID          int32              `json:"routeId"`
+	DistanceMeters   pgtype.Float8      `json:"distanceMeters"`
+	DurationSeconds  pgtype.Int4        `json:"durationSeconds"`
+	MaxSpeedMps      pgtype.Float8      `json:"maxSpeedMps"`
+	AvgSpeedMps      pgtype.Float8      `json:"avgSpeedMps"`
+	EngagedSeconds   pgtype.Int4        `json:"engagedSeconds"`
+	StartAddress     pgtype.Text        `json:"startAddress"`
+	EndAddress       pgtype.Text        `json:"endAddress"`
+	StartLat         pgtype.Float8      `json:"startLat"`
+	StartLng         pgtype.Float8      `json:"startLng"`
+	EndLat           pgtype.Float8      `json:"endLat"`
+	EndLng           pgtype.Float8      `json:"endLng"`
+	ComputedAt       pgtype.Timestamptz `json:"computedAt"`
+	EventsComputedAt pgtype.Timestamptz `json:"eventsComputedAt"`
+}
+
+type UiUser struct {
+	ID           int32              `json:"id"`
+	Username     string             `json:"username"`
+	PasswordHash string             `json:"passwordHash"`
+	CreatedAt    pgtype.Timestamptz `json:"createdAt"`
 }

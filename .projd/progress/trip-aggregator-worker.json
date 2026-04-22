@@ -3,8 +3,9 @@
   "name": "Trip aggregator background worker",
   "description": "Background worker that computes trip summary rows from a route's segments and GPS track once the route looks finalized (no new segments in the last N minutes OR all expected segment files uploaded). Reads GPS geometry from the routes.geometry column (PostGIS LineString) for distance/max-speed/avg-speed estimates; uses segment timestamps for duration. Calls the reverse-geocode client for start_address/end_address. Writes into the trips table via UpsertTrip so re-runs are idempotent.",
   "priority": 2,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/trip-aggregator-worker",
+  "base_branch": "main",
   "blocked_by": ["trip-model", "reverse-geocode"],
   "acceptance_criteria": [
     "internal/worker/trip_aggregator.go defines a TripAggregator struct with Queries (db), Geocoder (*geocode.Client), and config (PollInterval, FinalizedAfter time.Duration)",

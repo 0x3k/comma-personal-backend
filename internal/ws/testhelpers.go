@@ -60,6 +60,16 @@ func TestNewClient(dongleID string, hub *Hub) *Client {
 // returned recorder. The goroutine exits when the client's done channel
 // is closed.
 func TestDrainResponder(c *Client, caller *RPCCaller) *TestRPCRecorder {
+	return TestDrainResponderWith(c, caller, map[string]bool{"success": true}, nil)
+}
+
+// TestDrainResponderWith is like TestDrainResponder but replies with the
+// caller-supplied result (or rpcErr) instead of a canned success map. Pass
+// rpcErr=nil for a success response; pass result=nil with a non-nil rpcErr
+// to surface a JSON-RPC error to the handler under test. This is useful
+// when testing RPC methods that return typed payloads (e.g. listUploadQueue
+// returns a list of UploadItem entries).
+func TestDrainResponderWith(c *Client, caller *RPCCaller, result interface{}, rpcErr *RPCError) *TestRPCRecorder {
 	rec := &TestRPCRecorder{}
 
 	go func() {
@@ -77,7 +87,8 @@ func TestDrainResponder(c *Client, caller *RPCCaller) *TestRPCRecorder {
 				resp := &RPCResponse{
 					JSONRPC: jsonRPCVersion,
 					ID:      req.ID,
-					Result:  map[string]bool{"success": true},
+					Result:  result,
+					Error:   rpcErr,
 				}
 				caller.HandleResponse(resp)
 			case <-c.done:

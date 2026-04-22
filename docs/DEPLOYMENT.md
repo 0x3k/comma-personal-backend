@@ -264,7 +264,25 @@ ffmpeg -version
 
 The transcoder first tries container copy (`-c:v copy`) which is fast and CPU-light. If the HEVC stream has encoding issues, it falls back to re-encoding with `libx264`, which is CPU-intensive. On a typical home server, 2-4 concurrent transcode workers is a reasonable default.
 
-## 10. Firewall
+## 10. Monitoring
+
+The server exposes a Prometheus exposition endpoint at `GET /metrics` with HTTP request rate and latency, upload byte throughput per device, transcode durations per camera and result, WebSocket RPC call latency and outcome, connected-device count, and background-worker run durations. The endpoint is unauthenticated by convention; if you need to restrict access, keep `/metrics` on the localhost listener and scrape over the loopback interface, or add a `basic_auth` block in your reverse-proxy config. A ready-to-import Grafana dashboard is checked in at `docs/grafana-dashboard.json`.
+
+To wire it up:
+
+1. Point a Prometheus server at `https://comma.yourdomain.com/metrics` (or `http://127.0.0.1:8080/metrics` if scraping locally). A minimal `scrape_configs` entry:
+
+   ```yaml
+   scrape_configs:
+     - job_name: comma-personal-backend
+       static_configs:
+         - targets: ["127.0.0.1:8080"]
+   ```
+
+2. In Grafana, add the Prometheus server as a datasource (Configuration -> Data sources -> Add -> Prometheus).
+3. Import the dashboard: Dashboards -> New -> Import -> Upload JSON file -> select `docs/grafana-dashboard.json`. When prompted, pick the Prometheus datasource from step 2 for the `$datasource` variable. Panels will populate once Prometheus has a few scrape intervals of data.
+
+## 11. Firewall
 
 Only port 443 (HTTPS) needs to be exposed to the internet. PostgreSQL (5432) and the Go server (8080) should only listen on localhost.
 

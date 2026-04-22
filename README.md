@@ -92,6 +92,8 @@ cp .env.example .env
 | `ADMIN_USERNAME` | no | -- | When both ADMIN_USERNAME and ADMIN_PASSWORD are set, the server bootstraps (or updates) this user row in `ui_users` on startup so you can log into the dashboard with env-configured credentials. |
 | `ADMIN_PASSWORD` | no | -- | Plaintext admin password; stored hashed with bcrypt (cost 12). See ADMIN_USERNAME. |
 | `RETENTION_DAYS` | no | `0` | Default retention window (in days) for non-preserved routes before the cleanup worker deletes them; `0` means never delete. Seeds the `retention_days` row in the `settings` table on first boot; overridable at runtime via `PUT /v1/settings/retention`. |
+| `CLEANUP_ENABLED` | no | `true` | When `true`, runs the background cleanup worker that deletes non-preserved routes older than the effective retention window. Set to `false` to disable the worker (e.g. in replica deployments). |
+| `DELETE_DRY_RUN` | no | `true` | When `true` (the default, for safety), the cleanup worker logs what it would delete but does not touch the filesystem or the database. Set to `false` to enable real deletion. |
 
 **4. Start the backend**
 
