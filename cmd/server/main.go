@@ -130,6 +130,16 @@ func main() {
 	signalsHandler := api.NewSignalsHandler(queries, store)
 	signalsHandler.RegisterRoutes(v1Routes)
 
+	// Share link creation is a mutation (mints a signed token) so it rides
+	// the session-only group. The public /v1/share/:token endpoints are
+	// mounted directly on the top-level Echo instance below -- they must
+	// not be gated on the session middleware because the whole point is
+	// to let an unauthenticated viewer see a single shared route.
+	shareHandler := api.NewShareHandler(queries, store, cfg.SessionSecret)
+	v1RoutesSessionOnly := e.Group("/v1/routes", sessionOnly)
+	shareHandler.RegisterCreateRoute(v1RoutesSessionOnly)
+	shareHandler.RegisterPublicRoutes(e)
+
 	// Trip stats: per-device lifetime totals + recent trip list on /v1, and
 	// per-route aggregated trip detail on /v1/routes.
 	tripHandler := api.NewTripHandler(queries)
