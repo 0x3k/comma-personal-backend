@@ -3,8 +3,9 @@
   "name": "Web UI auth middleware (gate dashboard routes)",
   "description": "Apply the session-cookie check from web-ui-auth-backend to the endpoints the dashboard uses (routes, trips, signals, storage, settings). Device-facing endpoints (pilotauth, upload, /ws/) must keep using their existing JWT auth -- do not conflate the two. Endpoints that accept either cookie or JWT (for shared read endpoints) should explicitly try both.",
   "priority": 2,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/web-ui-auth-middleware",
+  "base_branch": "main",
   "blocked_by": ["web-ui-auth-backend"],
   "acceptance_criteria": [
     "internal/api/middleware/session.go adds SessionRequired() echo.MiddlewareFunc that validates the signed session cookie; 401 when missing/invalid",
