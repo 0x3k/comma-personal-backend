@@ -59,6 +59,12 @@ type Segment struct {
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
 }
 
+type Setting struct {
+	Key       string             `json:"key"`
+	Value     string             `json:"value"`
+	UpdatedAt pgtype.Timestamptz `json:"updatedAt"`
+}
+
 type Trip struct {
 	ID              int32              `json:"id"`
 	RouteID         int32              `json:"routeId"`

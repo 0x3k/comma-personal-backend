@@ -16,6 +16,7 @@ import (
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/metrics"
+	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
 	"comma-personal-backend/internal/ws"
 )
@@ -37,6 +38,14 @@ func main() {
 
 	queries := db.New(pool)
 	store := storage.New(cfg.StoragePath)
+
+	// Settings store for operator-configurable runtime values. Seed the
+	// retention_days row from the env var on first boot so later API
+	// overrides do not require a restart to take effect.
+	settingsStore := settings.New(queries)
+	if err := settingsStore.SeedIntIfMissing(context.Background(), settings.KeyRetentionDays, cfg.RetentionDays); err != nil {
+		log.Printf("warning: failed to seed retention_days setting: %v", err)
+	}
 
 	// Metrics registry is shared across the process: the HTTP middleware,
 	// the transcoder, the RPC caller, and the hub all observe into it, and
@@ -109,6 +118,10 @@ func main() {
 	v1Config := e.Group("/v1", auth)
 	configHandler := api.NewConfigHandler(queries, hub, rpcCaller)
 	configHandler.RegisterRoutes(v1Config)
+
+	// Retention and other operator settings. Shares the /v1 auth group.
+	settingsHandler := api.NewSettingsHandler(settingsStore, cfg.RetentionDays)
+	settingsHandler.RegisterRoutes(v1Config)
 
 	// Storage usage (disk accounting) endpoint. The walk is memoized in the
 	// storage package so repeated polling stays cheap.

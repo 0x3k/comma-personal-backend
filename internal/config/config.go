@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -12,6 +13,11 @@ type Config struct {
 	StoragePath    string
 	Port           string
 	AllowedSerials []string
+	// RetentionDays is the default retention window for non-preserved routes
+	// in days. 0 means "never delete". At runtime this value is used as a
+	// fallback when the settings table does not contain a retention_days
+	// override.
+	RetentionDays int
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -30,6 +36,17 @@ func Load() (*Config, error) {
 				cfg.AllowedSerials = append(cfg.AllowedSerials, s)
 			}
 		}
+	}
+
+	if v := os.Getenv("RETENTION_DAYS"); v != "" {
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return nil, fmt.Errorf("failed to load config: RETENTION_DAYS must be an integer, got %q", v)
+		}
+		if n < 0 {
+			return nil, fmt.Errorf("failed to load config: RETENTION_DAYS must be >= 0, got %d", n)
+		}
+		cfg.RetentionDays = n
 	}
 
 	if cfg.StoragePath == "" {
