@@ -89,6 +89,12 @@ func main() {
 	configHandler := api.NewConfigHandler(queries, hub, rpcCaller)
 	configHandler.RegisterRoutes(v1Config)
 
+	// Storage usage (disk accounting) endpoint. The walk is memoized in the
+	// storage package so repeated polling stays cheap.
+	v1Storage := e.Group("/v1", auth)
+	storageHandler := api.NewStorageHandler(store)
+	storageHandler.RegisterRoutes(v1Storage)
+
 	// WebSocket for device communication.
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
 	wsHandler.RegisterRoutes(e)
