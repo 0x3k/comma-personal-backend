@@ -469,11 +469,305 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 		"getNetworkType",
 		"getSimInfo",
 		"setNavDestination",
+		"listUploadQueue",
+		"cancelUpload",
 	}
 
 	for _, method := range expected {
 		if _, ok := handlers[method]; !ok {
 			t.Errorf("handler not registered for method %q", method)
 		}
+	}
+}
+
+func TestCallListUploadQueue(t *testing.T) {
+	caller := NewRPCCaller()
+	// The JSON result arrives as []interface{} with map[string]interface{} entries;
+	// emulate that by providing a typed []UploadItem which json.Marshal will encode
+	// correctly when re-marshaled inside CallListUploadQueue.
+	result := []UploadItem{
+		{
+			ID:            "abc123",
+			Path:          "/data/media/0/realdata/foo/rlog",
+			URL:           "https://example.com/upload/rlog",
+			Headers:       map[string]string{"Authorization": "Bearer tok"},
+			Priority:      10,
+			RetryCount:    0,
+			CreatedAt:     1700000000,
+			Current:       false,
+			Progress:      0,
+			AllowCellular: false,
+		},
+		{
+			ID:            "def456",
+			Path:          "/data/media/0/realdata/foo/qlog",
+			URL:           "https://example.com/upload/qlog",
+			Headers:       map[string]string{},
+			Priority:      5,
+			RetryCount:    2,
+			CreatedAt:     1700000100,
+			Current:       true,
+			Progress:      0.42,
+			AllowCellular: true,
+		},
+	}
+	client := testClientWithResponder(t, caller, result, nil)
+
+	items, err := CallListUploadQueue(caller, client)
+	if err != nil {
+		t.Fatalf("CallListUploadQueue returned error: %v", err)
+	}
+
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0].ID != "abc123" {
+		t.Errorf("items[0].ID = %q, want abc123", items[0].ID)
+	}
+	if items[0].Headers["Authorization"] != "Bearer tok" {
+		t.Errorf("items[0].Headers[Authorization] = %q, want Bearer tok", items[0].Headers["Authorization"])
+	}
+	if items[1].Progress != 0.42 {
+		t.Errorf("items[1].Progress = %v, want 0.42", items[1].Progress)
+	}
+	if !items[1].Current {
+		t.Errorf("items[1].Current = false, want true")
+	}
+	if !items[1].AllowCellular {
+		t.Errorf("items[1].AllowCellular = false, want true")
+	}
+	if items[1].RetryCount != 2 {
+		t.Errorf("items[1].RetryCount = %d, want 2", items[1].RetryCount)
+	}
+}
+
+func TestCallListUploadQueue_Empty(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, []UploadItem{}, nil)
+
+	items, err := CallListUploadQueue(caller, client)
+	if err != nil {
+		t.Fatalf("CallListUploadQueue returned error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected empty queue, got %d items", len(items))
+	}
+}
+
+func TestCallListUploadQueue_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "queue unavailable")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallListUploadQueue(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallListUploadQueue")
+	}
+}
+
+func TestCallListUploadQueue_FromRawDict(t *testing.T) {
+	// Emulate the device sending back athenad's UploadItemDict shape (a list
+	// of plain maps) and make sure the decoder still lands in UploadItem.
+	caller := NewRPCCaller()
+	dictResult := []map[string]interface{}{
+		{
+			"id":             "xyz",
+			"path":           "/p",
+			"url":            "https://u",
+			"headers":        map[string]string{"A": "B"},
+			"priority":       float64(7),
+			"retry_count":    float64(1),
+			"created_at":     float64(123),
+			"current":        true,
+			"progress":       0.5,
+			"allow_cellular": true,
+		},
+	}
+	client := testClientWithResponder(t, caller, dictResult, nil)
+
+	items, err := CallListUploadQueue(caller, client)
+	if err != nil {
+		t.Fatalf("CallListUploadQueue returned error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].ID != "xyz" || items[0].Priority != 7 || items[0].RetryCount != 1 || items[0].CreatedAt != 123 {
+		t.Errorf("decoded item mismatch: %+v", items[0])
+	}
+}
+
+// cancelUploadParamsClient returns a Client that captures the params bytes of
+// the first outgoing RPC request into out and responds with result.
+func cancelUploadParamsClient(t *testing.T, caller *RPCCaller, out *json.RawMessage, result interface{}) *Client {
+	t.Helper()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "cancel-params",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		// Copy the raw params so the test can inspect the wire shape.
+		buf := make(json.RawMessage, len(req.Params))
+		copy(buf, req.Params)
+		*out = buf
+
+		resp := &RPCResponse{
+			JSONRPC: jsonRPCVersion,
+			ID:      req.ID,
+			Result:  result,
+		}
+		caller.HandleResponse(resp)
+	}()
+
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+func TestCallCancelUpload_SingleID(t *testing.T) {
+	caller := NewRPCCaller()
+	var sentParams json.RawMessage
+	client := cancelUploadParamsClient(t, caller, &sentParams, map[string]int{"success": 1})
+
+	result, err := CallCancelUpload(caller, client, []string{"abc123"})
+	if err != nil {
+		t.Fatalf("CallCancelUpload returned error: %v", err)
+	}
+
+	// Single-ID branch must send a bare JSON string, not an array.
+	var asString string
+	if err := json.Unmarshal(sentParams, &asString); err != nil {
+		t.Fatalf("params were not a JSON string: %s (err=%v)", string(sentParams), err)
+	}
+	if asString != "abc123" {
+		t.Errorf("params = %q, want abc123", asString)
+	}
+
+	if v, ok := result["success"]; !ok || v.(float64) != 1 {
+		t.Errorf("result[success] = %v (ok=%v), want 1", v, ok)
+	}
+}
+
+func TestCallCancelUpload_MultipleIDs(t *testing.T) {
+	caller := NewRPCCaller()
+	var sentParams json.RawMessage
+	client := cancelUploadParamsClient(t, caller, &sentParams, map[string]int{"success": 1})
+
+	result, err := CallCancelUpload(caller, client, []string{"abc", "def", "ghi"})
+	if err != nil {
+		t.Fatalf("CallCancelUpload returned error: %v", err)
+	}
+
+	// Multi-ID branch must send a JSON array.
+	var asList []string
+	if err := json.Unmarshal(sentParams, &asList); err != nil {
+		t.Fatalf("params were not a JSON array: %s (err=%v)", string(sentParams), err)
+	}
+	if len(asList) != 3 || asList[0] != "abc" || asList[2] != "ghi" {
+		t.Errorf("params list = %v, want [abc def ghi]", asList)
+	}
+
+	// A bare string Unmarshal of the array should fail, confirming shape.
+	var asString string
+	if err := json.Unmarshal(sentParams, &asString); err == nil {
+		t.Errorf("multi-ID params should not decode as a bare string, got %q", asString)
+	}
+
+	if result["success"].(float64) != 1 {
+		t.Errorf("unexpected result: %v", result)
+	}
+}
+
+func TestCallCancelUpload_EmptyIDs(t *testing.T) {
+	// An empty slice should still take the list branch and send "[]".
+	caller := NewRPCCaller()
+	var sentParams json.RawMessage
+	client := cancelUploadParamsClient(t, caller, &sentParams, map[string]interface{}{"success": 0, "error": "not found"})
+
+	_, err := CallCancelUpload(caller, client, []string{})
+	if err != nil {
+		t.Fatalf("CallCancelUpload returned error: %v", err)
+	}
+
+	var asList []string
+	if err := json.Unmarshal(sentParams, &asList); err != nil {
+		t.Fatalf("params were not a JSON array: %s (err=%v)", string(sentParams), err)
+	}
+	if len(asList) != 0 {
+		t.Errorf("expected empty list, got %v", asList)
+	}
+}
+
+func TestCallCancelUpload_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "cancel failed")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallCancelUpload(caller, client, []string{"abc"})
+	if err == nil {
+		t.Fatal("expected error from CallCancelUpload")
+	}
+}
+
+// Device-side handler tests.
+
+func TestHandleListUploadQueue(t *testing.T) {
+	result, rpcErr := handleListUploadQueue("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+	items, ok := result.([]UploadItem)
+	if !ok {
+		t.Fatalf("result is not []UploadItem, got %T", result)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected empty queue stub, got %d items", len(items))
+	}
+}
+
+func TestHandleCancelUpload_SingleString(t *testing.T) {
+	result, rpcErr := handleCancelUpload("test-dongle", json.RawMessage(`"abc123"`))
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+	m, ok := result.(map[string]int)
+	if !ok {
+		t.Fatalf("result is not map[string]int, got %T", result)
+	}
+	if m["success"] != 1 {
+		t.Errorf("success = %d, want 1", m["success"])
+	}
+}
+
+func TestHandleCancelUpload_List(t *testing.T) {
+	result, rpcErr := handleCancelUpload("test-dongle", json.RawMessage(`["abc","def"]`))
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+	m, ok := result.(map[string]int)
+	if !ok {
+		t.Fatalf("result is not map[string]int, got %T", result)
+	}
+	if m["success"] != 1 {
+		t.Errorf("success = %d, want 1", m["success"])
+	}
+}
+
+func TestHandleCancelUpload_InvalidJSON(t *testing.T) {
+	_, rpcErr := handleCancelUpload("test-dongle", json.RawMessage(`{not valid`))
+	if rpcErr == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
 	}
 }
