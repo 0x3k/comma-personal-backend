@@ -44,7 +44,7 @@ func setupTestDB(t *testing.T) (*pgxpool.Pool, func(), bool) {
 	}
 
 	resetSchema(ctx, t, pool)
-	applyMigrations(ctx, t, pool)
+	applyMigrationsT(ctx, t, pool)
 
 	cleanup := func() {
 		resetSchema(context.Background(), t, pool)
@@ -81,10 +81,10 @@ func resetSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 // order against the pool. We hunt for the migrations directory by
 // walking upward from the current working directory so this works both
 // under `go test ./internal/worker/...` and from the repo root.
-func applyMigrations(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
+func applyMigrationsT(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 
-	migDir := findMigrationsDir(t)
+	migDir := findMigrationsDirT(t)
 	entries, err := os.ReadDir(migDir)
 	if err != nil {
 		t.Fatalf("failed to read migrations dir %s: %v", migDir, err)
@@ -112,7 +112,7 @@ func applyMigrations(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 // findMigrationsDir walks up the tree from the current working directory
 // looking for sql/migrations. Go runs tests with cwd = the package dir,
 // so we need to go two levels up for internal/worker.
-func findMigrationsDir(t *testing.T) string {
+func findMigrationsDirT(t *testing.T) string {
 	t.Helper()
 	cwd, err := os.Getwd()
 	if err != nil {
