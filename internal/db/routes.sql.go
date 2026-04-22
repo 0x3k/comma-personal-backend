@@ -25,7 +25,7 @@ func (q *Queries) CountRoutesByDevice(ctx context.Context, dongleID string) (int
 const createRoute = `-- name: CreateRoute :one
 INSERT INTO routes (dongle_id, route_name, start_time, end_time)
 VALUES ($1, $2, $3, $4)
-RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at
+RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
 `
 
 type CreateRouteParams struct {
@@ -51,12 +51,13 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.EndTime,
 		&i.Geometry,
 		&i.CreatedAt,
+		&i.Preserved,
 	)
 	return i, err
 }
 
 const getRoute = `-- name: GetRoute :one
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
 FROM routes
 WHERE dongle_id = $1 AND route_name = $2
 `
@@ -77,12 +78,13 @@ func (q *Queries) GetRoute(ctx context.Context, arg GetRouteParams) (Route, erro
 		&i.EndTime,
 		&i.Geometry,
 		&i.CreatedAt,
+		&i.Preserved,
 	)
 	return i, err
 }
 
 const getRouteByID = `-- name: GetRouteByID :one
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
 FROM routes
 WHERE id = $1
 `
@@ -98,12 +100,49 @@ func (q *Queries) GetRouteByID(ctx context.Context, id int32) (Route, error) {
 		&i.EndTime,
 		&i.Geometry,
 		&i.CreatedAt,
+		&i.Preserved,
 	)
 	return i, err
 }
 
+const listPreservedRoutes = `-- name: ListPreservedRoutes :many
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
+FROM routes
+WHERE preserved = true
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListPreservedRoutes(ctx context.Context) ([]Route, error) {
+	rows, err := q.db.Query(ctx, listPreservedRoutes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Route
+	for rows.Next() {
+		var i Route
+		if err := rows.Scan(
+			&i.ID,
+			&i.DongleID,
+			&i.RouteName,
+			&i.StartTime,
+			&i.EndTime,
+			&i.Geometry,
+			&i.CreatedAt,
+			&i.Preserved,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRoutesByDevice = `-- name: ListRoutesByDevice :many
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
 FROM routes
 WHERE dongle_id = $1
 ORDER BY created_at DESC
@@ -126,6 +165,7 @@ func (q *Queries) ListRoutesByDevice(ctx context.Context, dongleID string) ([]Ro
 			&i.EndTime,
 			&i.Geometry,
 			&i.CreatedAt,
+			&i.Preserved,
 		); err != nil {
 			return nil, err
 		}
@@ -138,7 +178,7 @@ func (q *Queries) ListRoutesByDevice(ctx context.Context, dongleID string) ([]Ro
 }
 
 const listRoutesByDevicePaginated = `-- name: ListRoutesByDevicePaginated :many
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
 FROM routes
 WHERE dongle_id = $1
 ORDER BY created_at DESC, id DESC
@@ -168,6 +208,7 @@ func (q *Queries) ListRoutesByDevicePaginated(ctx context.Context, arg ListRoute
 			&i.EndTime,
 			&i.Geometry,
 			&i.CreatedAt,
+			&i.Preserved,
 		); err != nil {
 			return nil, err
 		}
@@ -177,4 +218,33 @@ func (q *Queries) ListRoutesByDevicePaginated(ctx context.Context, arg ListRoute
 		return nil, err
 	}
 	return items, nil
+}
+
+const setRoutePreserved = `-- name: SetRoutePreserved :one
+UPDATE routes
+SET preserved = $3
+WHERE dongle_id = $1 AND route_name = $2
+RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
+`
+
+type SetRoutePreservedParams struct {
+	DongleID  string `json:"dongleId"`
+	RouteName string `json:"routeName"`
+	Preserved bool   `json:"preserved"`
+}
+
+func (q *Queries) SetRoutePreserved(ctx context.Context, arg SetRoutePreservedParams) (Route, error) {
+	row := q.db.QueryRow(ctx, setRoutePreserved, arg.DongleID, arg.RouteName, arg.Preserved)
+	var i Route
+	err := row.Scan(
+		&i.ID,
+		&i.DongleID,
+		&i.RouteName,
+		&i.StartTime,
+		&i.EndTime,
+		&i.Geometry,
+		&i.CreatedAt,
+		&i.Preserved,
+	)
+	return i, err
 }
