@@ -8,12 +8,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Storage manages dashcam files on the local filesystem.
 // Files are organized as basePath/dongleID/route/segment/filename.
 type Storage struct {
 	basePath string
+
+	// usageInitOnce guards the lazy initialization of usageCache so the
+	// first call to Usage() does not race with a concurrent caller.
+	usageInitOnce sync.Once
+	usageCache    *usageCache
 }
 
 // New creates a Storage rooted at the given base path.

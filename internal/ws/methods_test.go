@@ -2,6 +2,7 @@ package ws
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -152,6 +153,141 @@ func TestCallGetNetworkType_RPCError(t *testing.T) {
 	}
 }
 
+func TestCallGetNetworkMetered(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, true, nil)
+
+	metered, err := CallGetNetworkMetered(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworkMetered returned error: %v", err)
+	}
+	if !metered {
+		t.Errorf("metered = %v, want true", metered)
+	}
+}
+
+func TestCallGetNetworkMetered_False(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, false, nil)
+
+	metered, err := CallGetNetworkMetered(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworkMetered returned error: %v", err)
+	}
+	if metered {
+		t.Errorf("metered = %v, want false", metered)
+	}
+}
+
+func TestCallGetNetworkMetered_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "metered error")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetNetworkMetered(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallGetNetworkMetered")
+	}
+}
+
+func TestCallGetNetworkMetered_WrongType(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, "not-a-bool", nil)
+
+	_, err := CallGetNetworkMetered(caller, client)
+	if err == nil {
+		t.Fatal("expected error for non-bool result")
+	}
+}
+
+func TestCallGetNetworks(t *testing.T) {
+	caller := NewRPCCaller()
+	networksResult := []map[string]interface{}{
+		{"SSID": "HomeNet", "strength": float64(80)},
+		{"SSID": "Guest", "strength": float64(40)},
+	}
+	client := testClientWithResponder(t, caller, networksResult, nil)
+
+	networks, err := CallGetNetworks(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworks returned error: %v", err)
+	}
+	if len(networks) != 2 {
+		t.Fatalf("networks length = %d, want 2", len(networks))
+	}
+	if networks[0]["SSID"] != "HomeNet" {
+		t.Errorf("networks[0].SSID = %v, want HomeNet", networks[0]["SSID"])
+	}
+	if networks[1]["strength"] != float64(40) {
+		t.Errorf("networks[1].strength = %v, want 40", networks[1]["strength"])
+	}
+}
+
+func TestCallGetNetworks_SliceOfInterface(t *testing.T) {
+	// Simulate the production path where json.Unmarshal decodes arrays of
+	// objects as []interface{} of map[string]interface{}.
+	caller := NewRPCCaller()
+	networksResult := []interface{}{
+		map[string]interface{}{"SSID": "HomeNet", "strength": float64(80)},
+	}
+	client := testClientWithResponder(t, caller, networksResult, nil)
+
+	networks, err := CallGetNetworks(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworks returned error: %v", err)
+	}
+	if len(networks) != 1 {
+		t.Fatalf("networks length = %d, want 1", len(networks))
+	}
+	if networks[0]["SSID"] != "HomeNet" {
+		t.Errorf("networks[0].SSID = %v, want HomeNet", networks[0]["SSID"])
+	}
+}
+
+func TestCallGetNetworks_Empty(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, []map[string]interface{}{}, nil)
+
+	networks, err := CallGetNetworks(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworks returned error: %v", err)
+	}
+	if len(networks) != 0 {
+		t.Errorf("networks length = %d, want 0", len(networks))
+	}
+}
+
+func TestCallGetNetworks_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "networks error")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetNetworks(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallGetNetworks")
+	}
+}
+
+func TestCallGetNetworks_WrongType(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, "not-a-list", nil)
+
+	_, err := CallGetNetworks(caller, client)
+	if err == nil {
+		t.Fatal("expected error for non-list result")
+	}
+}
+
+func TestCallGetNetworks_BadEntry(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, []interface{}{"not-an-object"}, nil)
+
+	_, err := CallGetNetworks(caller, client)
+	if err == nil {
+		t.Fatal("expected error for non-object entry")
+	}
+}
+
 func TestCallGetSimInfo(t *testing.T) {
 	caller := NewRPCCaller()
 	simResult := map[string]interface{}{
@@ -242,6 +378,182 @@ func TestCallUploadFileToUrl_ParamsMarshaled(t *testing.T) {
 	err := CallUploadFileToUrl(caller, c, "https://upload.example.com", map[string]string{"X-Custom": "val"}, "/tmp/file.hevc")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCallUploadFilesToUrls_Empty(t *testing.T) {
+	caller := NewRPCCaller()
+	deviceResult := map[string]interface{}{
+		"enqueued": float64(0),
+		"items":    []interface{}{},
+		"failed":   []interface{}{},
+	}
+	client := testClientWithResponder(t, caller, deviceResult, nil)
+
+	result, err := CallUploadFilesToUrls(caller, client, []UploadFileToUrlParams{})
+	if err != nil {
+		t.Fatalf("CallUploadFilesToUrls returned error: %v", err)
+	}
+	if result["enqueued"] != float64(0) {
+		t.Errorf("enqueued = %v, want 0", result["enqueued"])
+	}
+}
+
+func TestCallUploadFilesToUrls_SingleItem(t *testing.T) {
+	caller := NewRPCCaller()
+	deviceResult := map[string]interface{}{
+		"enqueued": float64(1),
+		"items": []interface{}{
+			map[string]interface{}{"fn": "/data/rlog", "url": "https://example.com/upload"},
+		},
+		"failed": []interface{}{},
+	}
+	client := testClientWithResponder(t, caller, deviceResult, nil)
+
+	items := []UploadFileToUrlParams{
+		{URL: "https://example.com/upload", Headers: map[string]string{"Authorization": "Bearer tok"}, Path: "/data/rlog"},
+	}
+	result, err := CallUploadFilesToUrls(caller, client, items)
+	if err != nil {
+		t.Fatalf("CallUploadFilesToUrls returned error: %v", err)
+	}
+	if result["enqueued"] != float64(1) {
+		t.Errorf("enqueued = %v, want 1", result["enqueued"])
+	}
+}
+
+func TestCallUploadFilesToUrls_ThreeItems(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "batch-check",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+
+	// Responder that verifies the outgoing params shape and dispatches through
+	// the shared device-side handler.
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		var p UploadFilesToUrlsParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return
+		}
+		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
+		if len(p) != 3 || p[0].Path != "/data/a" || p[2].URL != "https://example.com/c" {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected params")
+			caller.HandleResponse(resp)
+			return
+		}
+		result, rpcErr := handleUploadFilesToUrls("batch-check", req.Params)
+		if rpcErr != nil {
+			resp.Error = rpcErr
+		} else {
+			// Round-trip through JSON so the client sees the same decoded
+			// types (float64, []interface{}) it would from a real device.
+			b, _ := json.Marshal(result)
+			var decoded map[string]interface{}
+			_ = json.Unmarshal(b, &decoded)
+			resp.Result = decoded
+		}
+		caller.HandleResponse(resp)
+	}()
+
+	t.Cleanup(func() { c.Close() })
+
+	items := []UploadFileToUrlParams{
+		{URL: "https://example.com/a", Headers: map[string]string{"X-A": "1"}, Path: "/data/a"},
+		{URL: "https://example.com/b", Headers: map[string]string{"X-B": "2"}, Path: "/data/b"},
+		{URL: "https://example.com/c", Headers: map[string]string{"X-C": "3"}, Path: "/data/c"},
+	}
+	result, err := CallUploadFilesToUrls(caller, c, items)
+	if err != nil {
+		t.Fatalf("CallUploadFilesToUrls returned error: %v", err)
+	}
+	if result["enqueued"] != float64(3) {
+		t.Errorf("enqueued = %v, want 3", result["enqueued"])
+	}
+	echoed, ok := result["items"].([]interface{})
+	if !ok {
+		t.Fatalf("items is not []interface{}, got %T", result["items"])
+	}
+	if len(echoed) != 3 {
+		t.Errorf("echoed items = %d, want 3", len(echoed))
+	}
+}
+
+func TestCallUploadFilesToUrls_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "batch upload failed")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallUploadFilesToUrls(caller, client, []UploadFileToUrlParams{
+		{URL: "https://example.com/upload", Path: "/data/rlog"},
+	})
+	if err == nil {
+		t.Fatal("expected error from CallUploadFilesToUrls")
+	}
+}
+
+func TestHandleUploadFilesToUrls_Valid(t *testing.T) {
+	params := json.RawMessage(`[{"url":"https://example.com/a","headers":{"X-A":"1"},"fn":"/data/a"},{"url":"https://example.com/b","headers":{"X-B":"2"},"fn":"/data/b"}]`)
+
+	result, rpcErr := handleUploadFilesToUrls("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not map[string]interface{}, got %T", result)
+	}
+	if m["enqueued"] != 2 {
+		t.Errorf("enqueued = %v, want 2", m["enqueued"])
+	}
+	echoed, ok := m["items"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("items is not []map[string]interface{}, got %T", m["items"])
+	}
+	if len(echoed) != 2 {
+		t.Errorf("echoed items = %d, want 2", len(echoed))
+	}
+	if echoed[0]["fn"] != "/data/a" {
+		t.Errorf("echoed[0].fn = %v, want /data/a", echoed[0]["fn"])
+	}
+}
+
+func TestHandleUploadFilesToUrls_Empty(t *testing.T) {
+	params := json.RawMessage(`[]`)
+
+	result, rpcErr := handleUploadFilesToUrls("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not map[string]interface{}, got %T", result)
+	}
+	if m["enqueued"] != 0 {
+		t.Errorf("enqueued = %v, want 0", m["enqueued"])
+	}
+}
+
+func TestHandleUploadFilesToUrls_InvalidJSON(t *testing.T) {
+	params := json.RawMessage(`not json`)
+
+	_, rpcErr := handleUploadFilesToUrls("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
 	}
 }
 
@@ -416,6 +728,36 @@ func TestHandleGetNetworkType(t *testing.T) {
 	}
 }
 
+func TestHandleGetNetworkMetered(t *testing.T) {
+	result, rpcErr := handleGetNetworkMetered("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	b, ok := result.(bool)
+	if !ok {
+		t.Fatalf("result is not bool, got %T", result)
+	}
+	if b {
+		t.Error("expected metered=false stub value")
+	}
+}
+
+func TestHandleGetNetworks(t *testing.T) {
+	result, rpcErr := handleGetNetworks("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	networks, ok := result.([]map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not []map[string]interface{}, got %T", result)
+	}
+	if len(networks) != 0 {
+		t.Errorf("expected empty stub list, got %d entries", len(networks))
+	}
+}
+
 func TestHandleGetSimInfo(t *testing.T) {
 	result, rpcErr := handleGetSimInfo("test-dongle", nil)
 	if rpcErr != nil {
@@ -466,9 +808,15 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 
 	expected := []string{
 		"uploadFileToUrl",
+		"uploadFilesToUrls",
 		"getNetworkType",
+		"getNetworkMetered",
+		"getNetworks",
 		"getSimInfo",
 		"setNavDestination",
+		"listDataDirectory",
+		"takeSnapshot",
+		"getMessage",
 		"listUploadQueue",
 		"cancelUpload",
 	}
@@ -480,6 +828,474 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 	}
 }
 
+func TestCallListDataDirectory_NoPrefix(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "list-no-prefix",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+
+	expected := []string{"a/rlog.bz2", "b/qlog.bz2"}
+
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
+		// When prefix is empty, the client should omit params entirely or send
+		// an empty/null value. Either is acceptable; reject any non-empty prefix.
+		if len(req.Params) > 0 && string(req.Params) != "null" {
+			var p ListDataDirectoryParams
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				resp.Error = NewRPCError(CodeInvalidParams, "bad params")
+				caller.HandleResponse(resp)
+				return
+			}
+			if p.Prefix != "" {
+				resp.Error = NewRPCError(CodeInvalidParams, "unexpected non-empty prefix")
+				caller.HandleResponse(resp)
+				return
+			}
+		}
+		resp.Result = expected
+		caller.HandleResponse(resp)
+	}()
+
+	t.Cleanup(func() { c.Close() })
+
+	files, err := CallListDataDirectory(caller, c, "")
+	if err != nil {
+		t.Fatalf("CallListDataDirectory returned error: %v", err)
+	}
+	if len(files) != len(expected) {
+		t.Fatalf("files length = %d, want %d", len(files), len(expected))
+	}
+	for i, want := range expected {
+		if files[i] != want {
+			t.Errorf("files[%d] = %q, want %q", i, files[i], want)
+		}
+	}
+}
+
+func TestCallListDataDirectory_WithPrefix(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "list-with-prefix",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+
+	expected := []string{"2024-01-01--12-00-00--0/rlog.bz2"}
+
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
+		var p ListDataDirectoryParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			resp.Error = NewRPCError(CodeInvalidParams, "bad params")
+			caller.HandleResponse(resp)
+			return
+		}
+		if p.Prefix != "2024-01-01" {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected prefix")
+			caller.HandleResponse(resp)
+			return
+		}
+		resp.Result = expected
+		caller.HandleResponse(resp)
+	}()
+
+	t.Cleanup(func() { c.Close() })
+
+	files, err := CallListDataDirectory(caller, c, "2024-01-01")
+	if err != nil {
+		t.Fatalf("CallListDataDirectory returned error: %v", err)
+	}
+	if len(files) != len(expected) {
+		t.Fatalf("files length = %d, want %d", len(files), len(expected))
+	}
+	if files[0] != expected[0] {
+		t.Errorf("files[0] = %q, want %q", files[0], expected[0])
+	}
+}
+
+func TestCallListDataDirectory_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "list failed")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallListDataDirectory(caller, client, "")
+	if err == nil {
+		t.Fatal("expected error from CallListDataDirectory")
+	}
+}
+
+func TestHandleListDataDirectory_NoPrefix(t *testing.T) {
+	result, rpcErr := handleListDataDirectory("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	files, ok := result.([]string)
+	if !ok {
+		t.Fatalf("result is not []string, got %T", result)
+	}
+	if len(files) != len(stubDataDirectoryFiles) {
+		t.Errorf("files length = %d, want %d", len(files), len(stubDataDirectoryFiles))
+	}
+}
+
+func TestHandleListDataDirectory_EmptyPrefixParam(t *testing.T) {
+	params := json.RawMessage(`{"prefix":""}`)
+	result, rpcErr := handleListDataDirectory("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	files, ok := result.([]string)
+	if !ok {
+		t.Fatalf("result is not []string, got %T", result)
+	}
+	if len(files) != len(stubDataDirectoryFiles) {
+		t.Errorf("files length = %d, want %d (full list)", len(files), len(stubDataDirectoryFiles))
+	}
+}
+
+func TestHandleListDataDirectory_WithPrefix(t *testing.T) {
+	params := json.RawMessage(`{"prefix":"2024-01-01--12-00-00--0"}`)
+	result, rpcErr := handleListDataDirectory("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	files, ok := result.([]string)
+	if !ok {
+		t.Fatalf("result is not []string, got %T", result)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected at least one file matching prefix")
+	}
+	for _, f := range files {
+		if !strings.HasPrefix(f, "2024-01-01--12-00-00--0") {
+			t.Errorf("file %q does not match prefix", f)
+		}
+	}
+}
+
+func TestHandleListDataDirectory_PrefixNoMatch(t *testing.T) {
+	params := json.RawMessage(`{"prefix":"no-such-prefix"}`)
+	result, rpcErr := handleListDataDirectory("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	files, ok := result.([]string)
+	if !ok {
+		t.Fatalf("result is not []string, got %T", result)
+	}
+	if len(files) != 0 {
+		t.Errorf("expected empty list for non-matching prefix, got %d files", len(files))
+	}
+}
+
+func TestHandleListDataDirectory_InvalidJSON(t *testing.T) {
+	params := json.RawMessage(`not json`)
+
+	_, rpcErr := handleListDataDirectory("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+
+func TestCallTakeSnapshot_StringResponse(t *testing.T) {
+	caller := NewRPCCaller()
+	// Device returns the older single-string shape.
+	client := testClientWithResponder(t, caller, "AAAA", nil)
+
+	result, err := CallTakeSnapshot(caller, client)
+	if err != nil {
+		t.Fatalf("CallTakeSnapshot returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.RawString != "AAAA" {
+		t.Errorf("RawString = %q, want %q", result.RawString, "AAAA")
+	}
+	if result.JpegBack != "" || result.JpegFront != "" {
+		t.Errorf("expected jpeg fields empty for string response, got back=%q front=%q", result.JpegBack, result.JpegFront)
+	}
+}
+
+func TestCallTakeSnapshot_ObjectResponse(t *testing.T) {
+	caller := NewRPCCaller()
+	obj := map[string]string{
+		"jpegBack":  "BACKDATA",
+		"jpegFront": "FRONTDATA",
+	}
+	client := testClientWithResponder(t, caller, obj, nil)
+
+	result, err := CallTakeSnapshot(caller, client)
+	if err != nil {
+		t.Fatalf("CallTakeSnapshot returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.JpegBack != "BACKDATA" {
+		t.Errorf("JpegBack = %q, want %q", result.JpegBack, "BACKDATA")
+	}
+	if result.JpegFront != "FRONTDATA" {
+		t.Errorf("JpegFront = %q, want %q", result.JpegFront, "FRONTDATA")
+	}
+	if result.RawString != "" {
+		t.Errorf("RawString = %q, want empty", result.RawString)
+	}
+}
+
+func TestCallTakeSnapshot_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "not available while camerad is started")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallTakeSnapshot(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallTakeSnapshot")
+	}
+}
+
+func TestCallTakeSnapshot_NilResult(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, nil, nil)
+
+	_, err := CallTakeSnapshot(caller, client)
+	if err == nil {
+		t.Fatal("expected error for nil result")
+	}
+}
+
+func TestHandleTakeSnapshot_Stub(t *testing.T) {
+	result, rpcErr := handleTakeSnapshot("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]string)
+	if !ok {
+		t.Fatalf("result is not map[string]string, got %T", result)
+	}
+	if m["jpegBack"] == "" {
+		t.Error("expected non-empty jpegBack")
+	}
+	if m["jpegFront"] == "" {
+		t.Error("expected non-empty jpegFront")
+	}
+}
+
+func TestParseSnapshotResult_StringFromRawJSON(t *testing.T) {
+	// Simulate a wire-decoded string value.
+	r, err := parseSnapshotResult("aGVsbG8=")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.RawString != "aGVsbG8=" {
+		t.Errorf("RawString = %q, want %q", r.RawString, "aGVsbG8=")
+	}
+}
+
+func TestParseSnapshotResult_ObjectFromMap(t *testing.T) {
+	// Simulate a wire-decoded map[string]interface{} value, which is what
+	// json.Unmarshal produces for a JSON object into interface{}.
+	r, err := parseSnapshotResult(map[string]interface{}{
+		"jpegBack":  "B",
+		"jpegFront": "F",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.JpegBack != "B" || r.JpegFront != "F" {
+		t.Errorf("unexpected fields: back=%q front=%q", r.JpegBack, r.JpegFront)
+	}
+}
+func TestCallGetMessage_HappyPath(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "msg-happy",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+	t.Cleanup(func() { c.Close() })
+
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		var p GetMessageParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return
+		}
+		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
+		if req.Method != "getMessage" {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected method")
+		} else if p.Service != "carState" {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected service")
+		} else if p.Timeout != 1000 {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected timeout default")
+		} else {
+			resp.Result = map[string]interface{}{
+				"carState": map[string]interface{}{
+					"vEgo": 12.5,
+				},
+			}
+		}
+		caller.HandleResponse(resp)
+	}()
+
+	// timeoutMs <= 0 should default to 1000 ms.
+	result, err := CallGetMessage(caller, c, "carState", 0)
+	if err != nil {
+		t.Fatalf("CallGetMessage returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	inner, ok := result["carState"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("result[carState] is not a map, got %T", result["carState"])
+	}
+	if inner["vEgo"] != 12.5 {
+		t.Errorf("vEgo = %v, want 12.5", inner["vEgo"])
+	}
+}
+
+func TestCallGetMessage_InvalidService(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInvalidParams, "invalid service: \"bogusService\"")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetMessage(caller, client, "bogusService", 100)
+	if err == nil {
+		t.Fatal("expected error from CallGetMessage with invalid service")
+	}
+}
+
+func TestCallGetMessage_TimeoutBuffer(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	// Client that never responds, so we always hit the Go-side timeout.
+	c := &Client{
+		DongleID: "msg-timeout",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+	t.Cleanup(func() { c.Close() })
+
+	// Drain outgoing requests so sends don't block.
+	go func() {
+		for range c.sendCh {
+		}
+	}()
+
+	const deviceTimeoutMs = 50
+	start := time.Now()
+	_, err := CallGetMessage(caller, c, "carState", deviceTimeoutMs)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected timeout error from CallGetMessage")
+	}
+
+	minExpected := time.Duration(deviceTimeoutMs+getMessageCallBufferMs) * time.Millisecond
+	if elapsed < minExpected {
+		t.Errorf("elapsed = %v, want >= %v (device timeout + buffer)", elapsed, minExpected)
+	}
+
+	// Sanity: don't wait unreasonably long beyond the buffer (allow scheduling slack).
+	maxExpected := minExpected + 500*time.Millisecond
+	if elapsed > maxExpected {
+		t.Errorf("elapsed = %v, want <= %v", elapsed, maxExpected)
+	}
+}
+
+func TestHandleGetMessage_Valid(t *testing.T) {
+	params := json.RawMessage(`{"service":"deviceState","timeout":250}`)
+
+	result, rpcErr := handleGetMessage("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not map[string]interface{}, got %T", result)
+	}
+	inner, ok := m["deviceState"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("result[deviceState] is not a map, got %T", m["deviceState"])
+	}
+	if inner["service"] != "deviceState" {
+		t.Errorf("service = %v, want deviceState", inner["service"])
+	}
+}
+
+func TestHandleGetMessage_MissingService(t *testing.T) {
+	params := json.RawMessage(`{"timeout":100}`)
+
+	_, rpcErr := handleGetMessage("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for missing service")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+
+func TestHandleGetMessage_UnknownService(t *testing.T) {
+	params := json.RawMessage(`{"service":"notAService"}`)
+
+	_, rpcErr := handleGetMessage("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for unknown service")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+
+func TestHandleGetMessage_InvalidJSON(t *testing.T) {
+	params := json.RawMessage(`not json`)
+
+	_, rpcErr := handleGetMessage("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
 func TestCallListUploadQueue(t *testing.T) {
 	caller := NewRPCCaller()
 	// The JSON result arrives as []interface{} with map[string]interface{} entries;
