@@ -3,8 +3,9 @@
   "name": "Web UI authentication backend (login, bcrypt, session cookie)",
   "description": "The backend currently has no login for the dashboard -- anyone reachable on the network sees every drive. Add single-user login: an admin credential (username + password) is configured via env var and/or initial DB row; login returns an HttpOnly, SameSite=Lax, Secure session cookie signed + encrypted server-side. Keep this strictly separate from the device-facing JWT auth (which stays on /v1/* device endpoints). The dashboard auth gates the web UI's read endpoints and the settings mutation endpoints.",
   "priority": 1,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/web-ui-auth-backend",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "sql/migrations/006_ui_users.up.sql creates a ui_users table (id SERIAL PK, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TIMESTAMPTZ); .down drops it",
@@ -17,5 +18,5 @@
     "go test ./internal/api/... passes",
     "go vet ./... and go build ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "Implemented. Migration 006 creates ui_users; POST /v1/session/{login,logout} lives in internal/api/session.go with bcrypt cost 12, HMAC-SHA256 signed cookie ('userID|expiresAt', 7-day TTL), HttpOnly + SameSite=Lax + Secure-when-TLS, per-IP sliding-window rate limit (5/15min). Admin bootstrap via ADMIN_USERNAME/ADMIN_PASSWORD runs at startup when SESSION_SECRET is set; unset disables UI auth and logs a warning. Tests in session_test.go cover: success, wrong password, unknown user (same 401 message to prevent enumeration), logout clears cookie, tamper/forged-sig/wrong-secret/expired rejection, rate limit triggers at 6th attempt and resets after the window, X-Forwarded-For is honored."
 }

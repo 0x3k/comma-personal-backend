@@ -13,6 +13,10 @@ var configEnvVars = []string{
 	"STORAGE_PATH",
 	"PORT",
 	"ALLOWED_SERIALS",
+	"SESSION_SECRET",
+	"ADMIN_USERNAME",
+	"ADMIN_PASSWORD",
+	"RETENTION_DAYS",
 }
 
 // clearConfigEnv unsets all config-related environment variables.
@@ -165,6 +169,116 @@ func TestLoad_AllowedSerials(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestUIAuthEnabled(t *testing.T) {
+	tests := []struct {
+		name   string
+		secret string
+		want   bool
+	}{
+		{"empty disables UI auth", "", false},
+		{"non-empty enables UI auth", "some-secret", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{SessionSecret: tt.secret}
+			if got := cfg.UIAuthEnabled(); got != tt.want {
+				t.Errorf("UIAuthEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_RetentionDays(t *testing.T) {
+	tests := []struct {
+		name    string
+		envVal  string
+		want    int
+		wantErr bool
+	}{
+		{
+			name:   "unset defaults to zero",
+			envVal: "",
+			want:   0,
+		},
+		{
+			name:   "positive integer",
+			envVal: "30",
+			want:   30,
+		},
+		{
+			name:   "explicit zero",
+			envVal: "0",
+			want:   0,
+		},
+		{
+			name:   "whitespace trimmed",
+			envVal: "  14  ",
+			want:   14,
+		},
+		{
+			name:    "non-integer rejected",
+			envVal:  "abc",
+			wantErr: true,
+		},
+		{
+			name:    "negative rejected",
+			envVal:  "-1",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
+
+			if tt.envVal != "" {
+				t.Setenv("RETENTION_DAYS", tt.envVal)
+			}
+
+			cfg, err := Load()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() = nil error, want error for RETENTION_DAYS=%q", tt.envVal)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Load() returned unexpected error: %v", err)
+			}
+			if cfg.RetentionDays != tt.want {
+				t.Errorf("RetentionDays = %d, want %d", cfg.RetentionDays, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_SessionEnvVars(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
+	t.Setenv("SESSION_SECRET", "shh")
+	t.Setenv("ADMIN_USERNAME", "admin")
+	t.Setenv("ADMIN_PASSWORD", "hunter2")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if cfg.SessionSecret != "shh" {
+		t.Errorf("SessionSecret = %q, want %q", cfg.SessionSecret, "shh")
+	}
+	if cfg.AdminUsername != "admin" {
+		t.Errorf("AdminUsername = %q, want %q", cfg.AdminUsername, "admin")
+	}
+	if cfg.AdminPassword != "hunter2" {
+		t.Errorf("AdminPassword = %q, want %q", cfg.AdminPassword, "hunter2")
+	}
+	if !cfg.UIAuthEnabled() {
+		t.Error("UIAuthEnabled() = false, want true when SESSION_SECRET is set")
 	}
 }
 

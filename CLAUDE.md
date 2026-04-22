@@ -98,6 +98,10 @@ These repos contain the device-side code (athenad, uploader, API client) that th
 | `PORT` | no | `8080` | API server listen port |
 | `COMMA_DONGLE_ID` | no | - | Restrict to specific device (if multi-device) |
 | `ALLOWED_SERIALS` | no | - | Comma-separated allowlist of hardware serials permitted to register via pilotauth. Dongle IDs are assigned server-side, so restriction is keyed on the device's serial. If unset, all devices are allowed. |
+| `SESSION_SECRET` | no | - | HMAC key for signed web UI session cookies. If unset, UI login endpoints are disabled (a warning is logged on startup). Device-facing JWT auth is unaffected. |
+| `ADMIN_USERNAME` | no | - | Together with `ADMIN_PASSWORD`, bootstraps/updates a single admin row in `ui_users` on startup. Only used when `SESSION_SECRET` is set. |
+| `ADMIN_PASSWORD` | no | - | Plaintext password for the bootstrap admin user. Hashed with bcrypt (cost 12) before storage. Only used when `SESSION_SECRET` is set. |
+| `RETENTION_DAYS` | no | `0` | Default retention window (in days) for non-preserved routes; `0` means never delete. Used as a fallback for the `retention_days` row in the `settings` table, which may be overridden at runtime via `PUT /v1/settings/retention`. |
 
 ## Key Patterns
 

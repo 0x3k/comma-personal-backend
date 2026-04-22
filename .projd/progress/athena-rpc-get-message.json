@@ -3,8 +3,9 @@
   "name": "Athena RPC: getMessage (cereal message proxy)",
   "description": "Add the getMessage openpilot athenad RPC method. Takes a cereal service name (e.g., 'carState', 'deviceState', 'liveLocationKalman') and an optional timeout in ms, and returns the next message from that service as a JSON dict. Reference: openpilot/system/athena/athenad.py lines 340-357 (../../openpilot/system/athena/athenad.py). This is the primary mechanism for reading live device telemetry over the control channel; device-status-panel will depend on it.",
   "priority": 4,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/athena-rpc-get-message",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/ws/methods.go defines GetMessageParams { Service string `json:\"service\"`; Timeout int `json:\"timeout,omitempty\"` }",
