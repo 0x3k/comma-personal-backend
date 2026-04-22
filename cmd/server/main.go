@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -15,9 +17,11 @@ import (
 	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/geocode"
 	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
+	"comma-personal-backend/internal/worker"
 	"comma-personal-backend/internal/ws"
 )
 
@@ -146,6 +150,19 @@ func main() {
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
 	wsHandler.RegisterRoutes(e)
 
+	// Background trip aggregator. Defaults on; set TRIP_AGGREGATOR_ENABLED=0
+	// (or false/no/off) to skip it, e.g. in constrained test environments.
+	if tripAggregatorEnabled() {
+		aggregator := worker.NewTripAggregator(queries, geocode.NewClient("", ""))
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go aggregator.Run(ctx)
+		log.Printf("trip aggregator started (poll=%s, finalized_after=%s)",
+			aggregator.PollInterval, aggregator.FinalizedAfter)
+	} else {
+		log.Printf("trip aggregator disabled via TRIP_AGGREGATOR_ENABLED")
+	}
+
 	s := &http.Server{
 		Addr:              ":" + cfg.Port,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -156,5 +173,21 @@ func main() {
 	log.Printf("starting server on :%s", cfg.Port)
 	if err := e.StartServer(s); err != nil {
 		log.Fatalf("failed to start server: %v", err)
+	}
+}
+
+// tripAggregatorEnabled reports whether the background trip aggregator
+// should run. The default is true; operators can opt out by setting
+// TRIP_AGGREGATOR_ENABLED to 0/false/no/off (case-insensitive).
+func tripAggregatorEnabled() bool {
+	v := strings.TrimSpace(os.Getenv("TRIP_AGGREGATOR_ENABLED"))
+	if v == "" {
+		return true
+	}
+	switch strings.ToLower(v) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
