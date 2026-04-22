@@ -8,6 +8,7 @@ import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
+import { SnapshotButton } from "@/components/SnapshotButton";
 
 interface Device {
   dongleId: string;
@@ -105,40 +106,40 @@ export default function DevicesPage() {
       {!loading && !error && devices.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {devices.map((device) => (
-            <Link
-              key={device.dongleId}
-              href={`/routes?device=${device.dongleId}`}
-              className="block rounded-lg transition-transform hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring-focus)]"
-            >
-              <Card className="h-full">
-                <CardHeader>
-                  <div className="flex items-center justify-between gap-2">
-                    <h2 className="text-sm font-medium font-mono text-[var(--text-primary)] truncate">
-                      {device.dongleId}
-                    </h2>
-                    <Badge variant="success">Registered</Badge>
-                  </div>
-                </CardHeader>
-                <CardBody>
-                  <dl className="space-y-1 text-sm">
-                    {device.serial && (
-                      <div className="flex justify-between">
-                        <dt className="text-[var(--text-secondary)]">Serial</dt>
-                        <dd className="font-mono text-xs text-[var(--text-primary)]">
-                          {device.serial}
-                        </dd>
-                      </div>
-                    )}
+            <Card key={device.dongleId} className="h-full">
+              <CardHeader>
+                <div className="flex items-center justify-between gap-2">
+                  <Link
+                    href={`/routes?device=${device.dongleId}`}
+                    className="truncate rounded text-sm font-medium font-mono text-[var(--text-primary)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring-focus)]"
+                  >
+                    {device.dongleId}
+                  </Link>
+                  <Badge variant="success">Registered</Badge>
+                </div>
+              </CardHeader>
+              <CardBody>
+                <dl className="space-y-1 text-sm">
+                  {device.serial && (
                     <div className="flex justify-between">
-                      <dt className="text-[var(--text-secondary)]">Last seen</dt>
-                      <dd className="text-[var(--text-primary)]">
-                        {formatLastSeen(device.lastSeen)}
+                      <dt className="text-[var(--text-secondary)]">Serial</dt>
+                      <dd className="font-mono text-xs text-[var(--text-primary)]">
+                        {device.serial}
                       </dd>
                     </div>
-                  </dl>
-                </CardBody>
-              </Card>
-            </Link>
+                  )}
+                  <div className="flex justify-between">
+                    <dt className="text-[var(--text-secondary)]">Last seen</dt>
+                    <dd className="text-[var(--text-primary)]">
+                      {formatLastSeen(device.lastSeen)}
+                    </dd>
+                  </div>
+                </dl>
+                <div className="mt-4">
+                  <SnapshotButton dongleId={device.dongleId} />
+                </div>
+              </CardBody>
+            </Card>
           ))}
         </div>
       )}
