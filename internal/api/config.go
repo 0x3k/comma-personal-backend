@@ -6,7 +6,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/ws"
 )
@@ -51,12 +50,8 @@ func (h *ConfigHandler) ListParams(c echo.Context) error {
 		})
 	}
 
-	authDongleID, _ := c.Get(middleware.ContextKeyDongleID).(string)
-	if authDongleID != dongleID {
-		return c.JSON(http.StatusForbidden, errorResponse{
-			Error: "dongle_id does not match authenticated device",
-			Code:  http.StatusForbidden,
-		})
+	if handled, err := checkDongleAccess(c, dongleID); handled {
+		return err
 	}
 
 	params, err := h.queries.ListDeviceParams(c.Request().Context(), dongleID)
@@ -90,12 +85,8 @@ func (h *ConfigHandler) SetParam(c echo.Context) error {
 		})
 	}
 
-	authDongleID, _ := c.Get(middleware.ContextKeyDongleID).(string)
-	if authDongleID != dongleID {
-		return c.JSON(http.StatusForbidden, errorResponse{
-			Error: "dongle_id does not match authenticated device",
-			Code:  http.StatusForbidden,
-		})
+	if handled, err := checkDongleAccess(c, dongleID); handled {
+		return err
 	}
 
 	key := c.Param("key")
@@ -146,12 +137,8 @@ func (h *ConfigHandler) DeleteParam(c echo.Context) error {
 		})
 	}
 
-	authDongleID, _ := c.Get(middleware.ContextKeyDongleID).(string)
-	if authDongleID != dongleID {
-		return c.JSON(http.StatusForbidden, errorResponse{
-			Error: "dongle_id does not match authenticated device",
-			Code:  http.StatusForbidden,
-		})
+	if handled, err := checkDongleAccess(c, dongleID); handled {
+		return err
 	}
 
 	key := c.Param("key")
@@ -180,8 +167,27 @@ func (h *ConfigHandler) DeleteParam(c echo.Context) error {
 
 // RegisterRoutes wires up the config param routes on the given Echo group.
 // The group should already have auth middleware applied.
+//
+// Deprecated: prefer RegisterReadRoutes and RegisterMutationRoutes, which
+// let callers apply distinct middleware chains (session-or-JWT for reads,
+// session-only for mutations that should never be issued by a device).
 func (h *ConfigHandler) RegisterRoutes(g *echo.Group) {
+	h.RegisterReadRoutes(g)
+	h.RegisterMutationRoutes(g)
+}
+
+// RegisterReadRoutes wires up the read-only config endpoints. The group
+// is expected to accept either a session cookie or a device JWT so the
+// dashboard and the device both work.
+func (h *ConfigHandler) RegisterReadRoutes(g *echo.Group) {
 	g.GET("/devices/:dongle_id/params", h.ListParams)
+}
+
+// RegisterMutationRoutes wires up the config endpoints that change
+// state. These must require an operator session (never a device JWT),
+// because a compromised device should not be able to rewrite its own
+// params.
+func (h *ConfigHandler) RegisterMutationRoutes(g *echo.Group) {
 	g.PUT("/devices/:dongle_id/params/:key", h.SetParam)
 	g.DELETE("/devices/:dongle_id/params/:key", h.DeleteParam)
 }

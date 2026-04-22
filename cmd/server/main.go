@@ -89,33 +89,42 @@ func main() {
 		log.Printf("warning: SESSION_SECRET is not set; web UI authentication is disabled. Device auth is unaffected.")
 	}
 
-	// Authenticated API groups. Every request carries a per-device JWT
+	// Authenticated API groups. Device endpoints carry a per-device JWT
 	// signed with the private key openpilot generated during pilotauth; the
 	// middleware verifies it against the public_key stored for that device.
+	// Dashboard endpoints authenticate via a signed session cookie set by
+	// POST /v1/session/login; shared read endpoints accept either.
+	sessionSecret := []byte(cfg.SessionSecret)
 	auth := middleware.JWTAuthFromDB(queries)
+	sessionOnly := middleware.SessionRequired(sessionSecret)
+	sessionOrJWT := middleware.SessionOrJWT(sessionSecret, queries)
 
 	deviceHandler := api.NewDeviceHandler(queries)
 
+	// /v1.1/devices/:dongle_id is the device self-info endpoint called by
+	// openpilot; it stays JWT-only.
 	v11 := e.Group("/v1.1", auth)
 	deviceHandler.RegisterRoutes(v11)
 
-	// Dashboard listing of all registered devices. Unauthenticated because the
-	// local web UI has no device JWT; see DeviceHandler.ListDevices.
-	e.GET("/v1/devices", deviceHandler.ListDevices)
+	// Dashboard listing of all registered devices. Dashboard-facing, so
+	// gated on SessionOrJWT.
+	e.GET("/v1/devices", deviceHandler.ListDevices, sessionOrJWT)
 
-	// Route listing and detail.
-	v1Route := e.Group("/v1/route", auth)
+	// Route listing and detail (dashboard reads; devices may still call).
+	v1Route := e.Group("/v1/route", sessionOrJWT)
 	routeHandler := api.NewRouteHandler(queries)
 	routeHandler.RegisterRoutes(v1Route)
 
 	// Plural /v1/routes/ path hosts route mutation and export endpoints so
-	// they do not collide with /v1/route/:dongle_id.
-	v1Routes := e.Group("/v1/routes", auth)
+	// they do not collide with /v1/route/:dongle_id. These are dashboard
+	// operations (preserve flag, export downloads), shared with device
+	// JWTs for consistency.
+	v1Routes := e.Group("/v1/routes", sessionOrJWT)
 	routeHandler.RegisterPreservedRoute(v1Routes)
 	exportHandler := api.NewExportHandler(queries, store)
 	exportHandler.RegisterRoutes(v1Routes)
 
-	// Upload URL and file upload.
+	// Upload URL and file upload -- device-facing, JWT only.
 	v14 := e.Group("/v1.4", auth)
 	uploadHandler := api.NewUploadHandlerWithMetrics(store, queries, m)
 	v14.GET("/:dongle_id/upload_url/", uploadHandler.GetUploadURL)
@@ -124,21 +133,28 @@ func main() {
 	uploadGroup := e.Group("/upload", auth, echomw.BodyLimit("100M"))
 	uploadGroup.PUT("/:dongle_id/*", uploadHandler.UploadFile)
 
-	// Device config parameters.
+	// Device config parameters. Reads accept either cookie or JWT; writes
+	// require an operator session so a compromised device cannot rewrite
+	// its own params.
 	hub := ws.NewHubWithMetrics(m)
 	rpcCaller := ws.NewRPCCallerWithMetrics(m)
 
-	v1Config := e.Group("/v1", auth)
 	configHandler := api.NewConfigHandler(queries, hub, rpcCaller)
-	configHandler.RegisterRoutes(v1Config)
+	v1ConfigRead := e.Group("/v1", sessionOrJWT)
+	configHandler.RegisterReadRoutes(v1ConfigRead)
+	v1ConfigWrite := e.Group("/v1", sessionOnly)
+	configHandler.RegisterMutationRoutes(v1ConfigWrite)
 
-	// Retention and other operator settings. Shares the /v1 auth group.
+	// Retention and other operator settings. Same split as config params:
+	// GETs on sessionOrJWT so the dashboard and devices both work; PUTs on
+	// sessionOnly because only operators should change retention policy.
 	settingsHandler := api.NewSettingsHandler(settingsStore, cfg.RetentionDays)
-	settingsHandler.RegisterRoutes(v1Config)
+	settingsHandler.RegisterReadRoutes(v1ConfigRead)
+	settingsHandler.RegisterMutationRoutes(v1ConfigWrite)
 
 	// Storage usage (disk accounting) endpoint. The walk is memoized in the
-	// storage package so repeated polling stays cheap.
-	v1Storage := e.Group("/v1", auth)
+	// storage package so repeated polling stays cheap. Dashboard-facing.
+	v1Storage := e.Group("/v1", sessionOrJWT)
 	storageHandler := api.NewStorageHandler(store)
 	storageHandler.RegisterRoutes(v1Storage)
 

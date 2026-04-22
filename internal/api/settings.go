@@ -91,9 +91,24 @@ func (h *SettingsHandler) SetRetention(c echo.Context) error {
 	return c.JSON(http.StatusOK, retentionResponse{RetentionDays: *req.RetentionDays})
 }
 
-// RegisterRoutes wires up the settings routes on the given Echo group. The
-// group should already have JWT auth middleware applied.
+// RegisterRoutes wires up every settings endpoint on the given Echo group.
+//
+// Deprecated: prefer the split RegisterReadRoutes / RegisterMutationRoutes
+// methods so callers can apply SessionOrJWT to reads and SessionRequired
+// to mutations (operators-only; devices should never rewrite settings).
 func (h *SettingsHandler) RegisterRoutes(g *echo.Group) {
+	h.RegisterReadRoutes(g)
+	h.RegisterMutationRoutes(g)
+}
+
+// RegisterReadRoutes wires the read-only settings endpoints.
+func (h *SettingsHandler) RegisterReadRoutes(g *echo.Group) {
 	g.GET("/settings/retention", h.GetRetention)
+}
+
+// RegisterMutationRoutes wires the settings-mutation endpoints. The
+// group is expected to require an operator session cookie (not a device
+// JWT).
+func (h *SettingsHandler) RegisterMutationRoutes(g *echo.Group) {
 	g.PUT("/settings/retention", h.SetRetention)
 }
