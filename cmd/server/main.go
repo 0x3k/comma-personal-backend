@@ -17,6 +17,7 @@ import (
 	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/geocode"
 	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
@@ -167,6 +168,19 @@ func main() {
 	// WebSocket for device communication.
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
 	wsHandler.RegisterRoutes(e)
+
+	// Background trip aggregator. Defaults on; set TRIP_AGGREGATOR_ENABLED=0
+	// (or false/no/off) to skip it, e.g. in constrained test environments.
+	if envBool("TRIP_AGGREGATOR_ENABLED", true) {
+		aggregator := worker.NewTripAggregator(queries, geocode.NewClient("", ""))
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go aggregator.Run(ctx)
+		log.Printf("trip aggregator started (poll=%s, finalized_after=%s)",
+			aggregator.PollInterval, aggregator.FinalizedAfter)
+	} else {
+		log.Printf("trip aggregator disabled via TRIP_AGGREGATOR_ENABLED")
+	}
 
 	// Cleanup worker: deletes non-preserved routes older than the
 	// configured retention window. CLEANUP_ENABLED defaults to true.
