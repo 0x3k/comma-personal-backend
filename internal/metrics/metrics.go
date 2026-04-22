@@ -1,0 +1,230 @@
+// Package metrics provides a single Metrics struct that owns all Prometheus
+// collectors for the server. Components (HTTP middleware, the transcoder, the
+// WebSocket RPC caller, background workers) take a *Metrics in their
+// constructors and call the Observe / Inc helpers defined here.
+//
+// A nil *Metrics is treated as a no-op: every helper method is safe to call
+// on a nil receiver. That keeps existing call sites and tests working without
+// having to thread a metrics instance everywhere, while still satisfying the
+// acceptance criterion that constructors accept a *Metrics.
+package metrics
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// defaultDurationBuckets is used by every *_duration_seconds histogram so that
+// HTTP, RPC, transcode, and worker latencies can be compared on the same
+// buckets. The range (1ms .. ~16s) covers both fast endpoints and slow
+// transcodes without exploding cardinality.
+var defaultDurationBuckets = []float64{
+	0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5,
+	1, 2.5, 5, 10, 30, 60, 120, 300,
+}
+
+// Metrics owns every Prometheus collector exposed by the server.
+type Metrics struct {
+	registry *prometheus.Registry
+
+	httpRequestsTotal   *prometheus.CounterVec
+	httpRequestDuration *prometheus.HistogramVec
+
+	uploadBytesTotal *prometheus.CounterVec
+
+	transcodeDuration *prometheus.HistogramVec
+
+	rpcCallDuration *prometheus.HistogramVec
+	rpcCallsTotal   *prometheus.CounterVec
+
+	wsConnectedDevices prometheus.Gauge
+
+	workerRunDuration *prometheus.HistogramVec
+}
+
+// New creates a Metrics backed by a fresh registry. Use NewWithRegistry to
+// share a registry with other packages (for example, to add Go runtime
+// collectors).
+func New() *Metrics {
+	return NewWithRegistry(prometheus.NewRegistry())
+}
+
+// NewWithRegistry creates a Metrics that registers its collectors on the
+// provided registry. Callers typically use prometheus.NewRegistry so metrics
+// are isolated per-test.
+func NewWithRegistry(reg *prometheus.Registry) *Metrics {
+	m := &Metrics{
+		registry: reg,
+
+		httpRequestsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "http_requests_total",
+				Help: "Total number of HTTP requests handled, labeled by method, route, and status code.",
+			},
+			[]string{"method", "path", "status"},
+		),
+		httpRequestDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "http_request_duration_seconds",
+				Help:    "Latency distribution of HTTP requests, labeled by method and route.",
+				Buckets: defaultDurationBuckets,
+			},
+			[]string{"method", "path"},
+		),
+
+		uploadBytesTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "upload_bytes_total",
+				Help: "Total bytes received by the upload endpoint, labeled by device dongle_id.",
+			},
+			[]string{"dongle_id"},
+		),
+
+		transcodeDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "transcode_duration_seconds",
+				Help:    "Wall-clock duration of video transcodes, labeled by camera and result (success|error).",
+				Buckets: defaultDurationBuckets,
+			},
+			[]string{"camera", "result"},
+		),
+
+		rpcCallDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "rpc_call_duration_seconds",
+				Help:    "Latency of WebSocket JSON-RPC calls to devices, labeled by method.",
+				Buckets: defaultDurationBuckets,
+			},
+			[]string{"method"},
+		),
+		rpcCallsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "rpc_calls_total",
+				Help: "Total number of WebSocket JSON-RPC calls issued, labeled by method and status (success|error|timeout).",
+			},
+			[]string{"method", "status"},
+		),
+
+		wsConnectedDevices: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "ws_connected_devices",
+				Help: "Number of devices currently connected via WebSocket.",
+			},
+		),
+
+		workerRunDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "worker_run_duration_seconds",
+				Help:    "Duration of a single background-worker run, labeled by worker name.",
+				Buckets: defaultDurationBuckets,
+			},
+			[]string{"worker"},
+		),
+	}
+
+	reg.MustRegister(
+		m.httpRequestsTotal,
+		m.httpRequestDuration,
+		m.uploadBytesTotal,
+		m.transcodeDuration,
+		m.rpcCallDuration,
+		m.rpcCallsTotal,
+		m.wsConnectedDevices,
+		m.workerRunDuration,
+	)
+
+	return m
+}
+
+// Registry returns the registry that backs this Metrics. It is useful when
+// building the /metrics handler or when a test wants to gather metrics.
+func (m *Metrics) Registry() *prometheus.Registry {
+	if m == nil {
+		return nil
+	}
+	return m.registry
+}
+
+// Handler returns an http.Handler that serves the Prometheus exposition
+// format for this registry. A nil Metrics returns a 503 handler so callers
+// can still mount the endpoint unconditionally.
+func (m *Metrics) Handler() http.Handler {
+	if m == nil || m.registry == nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "metrics unavailable", http.StatusServiceUnavailable)
+		})
+	}
+	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{Registry: m.registry})
+}
+
+// ObserveHTTPRequest records a single HTTP request's outcome and latency.
+// It is called by the Echo middleware.
+func (m *Metrics) ObserveHTTPRequest(method, path, status string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.httpRequestsTotal.WithLabelValues(method, path, status).Inc()
+	m.httpRequestDuration.WithLabelValues(method, path).Observe(d.Seconds())
+}
+
+// AddUploadBytes records bytes received for a given device.
+func (m *Metrics) AddUploadBytes(dongleID string, n int64) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.uploadBytesTotal.WithLabelValues(dongleID).Add(float64(n))
+}
+
+// ObserveTranscode records the duration and outcome of a single camera
+// transcode. result should be "success" or "error".
+func (m *Metrics) ObserveTranscode(camera, result string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.transcodeDuration.WithLabelValues(camera, result).Observe(d.Seconds())
+}
+
+// ObserveRPCCall records the latency and outcome of a WebSocket RPC call.
+// status should be "success", "error", or "timeout".
+func (m *Metrics) ObserveRPCCall(method, status string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.rpcCallDuration.WithLabelValues(method).Observe(d.Seconds())
+	m.rpcCallsTotal.WithLabelValues(method, status).Inc()
+}
+
+// SetConnectedDevices sets the current count of active WebSocket clients.
+func (m *Metrics) SetConnectedDevices(n int) {
+	if m == nil {
+		return
+	}
+	m.wsConnectedDevices.Set(float64(n))
+}
+
+// IncConnectedDevices increments the connected device gauge by one.
+func (m *Metrics) IncConnectedDevices() {
+	if m == nil {
+		return
+	}
+	m.wsConnectedDevices.Inc()
+}
+
+// DecConnectedDevices decrements the connected device gauge by one.
+func (m *Metrics) DecConnectedDevices() {
+	if m == nil {
+		return
+	}
+	m.wsConnectedDevices.Dec()
+}
+
+// ObserveWorkerRun records the duration of a single background-worker run.
+func (m *Metrics) ObserveWorkerRun(worker string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.workerRunDuration.WithLabelValues(worker).Observe(d.Seconds())
+}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -15,9 +16,11 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 
 	"comma-personal-backend/internal/api/middleware"
+	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/storage"
 )
 
@@ -30,30 +33,133 @@ var cameraToHLSDir = map[string]string{
 	"d": "dcamera",
 }
 
-// ExportHandler serves MP4 downloads built on the fly from a route's HLS
-// segments. No re-encoding is performed -- FFmpeg's concat demuxer with
-// "-c copy" simply remuxes the .ts segments into an MP4 container and the
-// result is streamed straight to the HTTP response.
+// ExportHandler serves downloadable representations of a route: the GPS
+// track as GPX (pulled from PostGIS) and a streamed MP4 built on the fly
+// from the HLS segments on disk. No re-encoding is performed for the MP4
+// path -- FFmpeg's concat demuxer with "-c copy" remuxes .ts into MP4.
 type ExportHandler struct {
+	queries    *db.Queries
 	storage    *storage.Storage
 	ffmpegPath string
 }
 
-// NewExportHandler creates an ExportHandler backed by the given storage.
-func NewExportHandler(s *storage.Storage) *ExportHandler {
-	return &ExportHandler{storage: s, ffmpegPath: "ffmpeg"}
+// NewExportHandler creates an ExportHandler wired to both the database
+// queries (for the GPX geometry lookup) and the filesystem storage (for
+// the MP4 HLS segment walk). Either may be nil if the corresponding
+// endpoint is not expected to be exercised.
+func NewExportHandler(queries *db.Queries, s *storage.Storage) *ExportHandler {
+	return &ExportHandler{queries: queries, storage: s, ffmpegPath: "ffmpeg"}
 }
 
-// SetFFmpegPath overrides the FFmpeg binary used for export (test hook).
+// SetFFmpegPath overrides the FFmpeg binary used for MP4 export (test hook).
 func (h *ExportHandler) SetFFmpegPath(path string) {
 	h.ffmpegPath = path
 }
 
-// ExportMP4 handles GET /v1/routes/:dongle_id/:route_name/export.mp4. It
-// collects every HLS .ts segment the transcoder produced for the requested
-// camera, feeds them to ffmpeg through a concat-list on stdin, and streams
-// the resulting MP4 directly to the client. Cancelling the HTTP request
-// cancels the ffmpeg process through exec.CommandContext.
+// gpxFile is the top-level <gpx> element of a GPX 1.1 document.
+type gpxFile struct {
+	XMLName xml.Name `xml:"gpx"`
+	Version string   `xml:"version,attr"`
+	Creator string   `xml:"creator,attr"`
+	Xmlns   string   `xml:"xmlns,attr"`
+	Tracks  []gpxTrk `xml:"trk"`
+}
+
+type gpxTrk struct {
+	Name     string      `xml:"name,omitempty"`
+	Segments []gpxTrkseg `xml:"trkseg"`
+}
+
+type gpxTrkseg struct {
+	Points []gpxTrkpt `xml:"trkpt"`
+}
+
+type gpxTrkpt struct {
+	Lat float64 `xml:"lat,attr"`
+	Lon float64 `xml:"lon,attr"`
+}
+
+// ExportRouteGPX handles GET /v1/routes/:dongle_id/:route_name/export.gpx.
+func (h *ExportHandler) ExportRouteGPX(c echo.Context) error {
+	dongleID := c.Param("dongle_id")
+	routeName := c.Param("route_name")
+
+	authDongleID, _ := c.Get(middleware.ContextKeyDongleID).(string)
+	if authDongleID != dongleID {
+		return c.JSON(http.StatusForbidden, errorResponse{
+			Error: "dongle_id does not match authenticated device",
+			Code:  http.StatusForbidden,
+		})
+	}
+
+	ctx := c.Request().Context()
+
+	wkt, err := h.queries.GetRouteGeometryWKT(ctx, db.GetRouteGeometryWKTParams{
+		DongleID:  dongleID,
+		RouteName: routeName,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.JSON(http.StatusNotFound, errorResponse{
+				Error: fmt.Sprintf("route %s not found", routeName),
+				Code:  http.StatusNotFound,
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, errorResponse{
+			Error: "failed to retrieve route geometry",
+			Code:  http.StatusInternalServerError,
+		})
+	}
+
+	if !wkt.Valid || strings.TrimSpace(wkt.String) == "" {
+		return c.JSON(http.StatusNotFound, errorResponse{
+			Error: fmt.Sprintf("route %s has no geometry", routeName),
+			Code:  http.StatusNotFound,
+		})
+	}
+
+	points, err := parseLineStringWKT(wkt.String)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errorResponse{
+			Error: fmt.Sprintf("failed to parse route geometry: %s", err.Error()),
+			Code:  http.StatusInternalServerError,
+		})
+	}
+	if len(points) == 0 {
+		return c.JSON(http.StatusNotFound, errorResponse{
+			Error: fmt.Sprintf("route %s has no geometry", routeName),
+			Code:  http.StatusNotFound,
+		})
+	}
+
+	doc := gpxFile{
+		Version: "1.1",
+		Creator: "comma-personal-backend",
+		Xmlns:   "http://www.topografix.com/GPX/1/1",
+		Tracks: []gpxTrk{{
+			Name:     routeName,
+			Segments: []gpxTrkseg{{Points: points}},
+		}},
+	}
+
+	body, err := xml.Marshal(doc)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errorResponse{
+			Error: "failed to encode GPX document",
+			Code:  http.StatusInternalServerError,
+		})
+	}
+
+	payload := []byte(xml.Header)
+	payload = append(payload, body...)
+
+	c.Response().Header().Set(echo.HeaderContentType, "application/gpx+xml")
+	c.Response().Header().Set(echo.HeaderContentDisposition,
+		fmt.Sprintf(`attachment; filename="%s.gpx"`, routeName))
+	return c.Blob(http.StatusOK, "application/gpx+xml", payload)
+}
+
+// ExportMP4 handles GET /v1/routes/:dongle_id/:route_name/export.mp4.
 func (h *ExportHandler) ExportMP4(c echo.Context) error {
 	dongleID := c.Param("dongle_id")
 	routeName := c.Param("route_name")
@@ -107,8 +213,6 @@ func (h *ExportHandler) ExportMP4(c echo.Context) error {
 		"-f", "mp4",
 		"pipe:1",
 	)
-	// Run ffmpeg in its own process group so the context cancel reliably
-	// kills any children (same pattern the transcoder uses).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
@@ -143,8 +247,6 @@ func (h *ExportHandler) ExportMP4(c echo.Context) error {
 		})
 	}
 
-	// Feed the concat list to ffmpeg stdin in a goroutine so we can start
-	// streaming stdout to the client right away.
 	go func() {
 		defer stdin.Close()
 		_, _ = io.Copy(stdin, strings.NewReader(concatList))
@@ -156,20 +258,12 @@ func (h *ExportHandler) ExportMP4(c echo.Context) error {
 		fmt.Sprintf("attachment; filename=%q", routeName+"-"+camera+".mp4"))
 	resp.WriteHeader(http.StatusOK)
 
-	// Stream ffmpeg stdout directly to the HTTP response. Using a buffered
-	// reader lets us flush in reasonable chunks without holding the whole
-	// output in memory.
 	reader := bufio.NewReaderSize(stdout, 64*1024)
 	if _, err := io.Copy(resp.Writer, reader); err != nil {
-		// Kill ffmpeg if the copy fails (likely the client disconnected).
 		_ = cmd.Cancel()
 	}
 
 	if err := cmd.Wait(); err != nil {
-		// The request context being cancelled means the client went away;
-		// that is not an error we need to surface. Any other wait error
-		// arrived after headers, so we cannot alter the response status --
-		// just capture the ffmpeg stderr for operator debugging.
 		if ctx.Err() == nil && !isSignalKilled(err) {
 			log.Printf("ffmpeg export failed: %v: %s", err, stderrBuf.String())
 			return nil
@@ -187,7 +281,6 @@ func (h *ExportHandler) collectTSFiles(dongleID, routeName, hlsDir string) ([]st
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
-		// The storage layer wraps os errors; fall back to a direct check.
 		if _, statErr := os.Stat(h.storage.Path(dongleID, routeName, "", "")); os.IsNotExist(statErr) {
 			return nil, nil
 		}
@@ -229,7 +322,6 @@ func (h *ExportHandler) collectTSFiles(dongleID, routeName, hlsDir string) ([]st
 
 // tsOrderKey extracts the numeric sequence from a filename like
 // "seg_012.ts" so segments sort numerically rather than lexicographically.
-// Falls back to the raw filename when no digits are present.
 func tsOrderKey(path string) string {
 	name := filepath.Base(path)
 	name = strings.TrimSuffix(name, ".ts")
@@ -243,7 +335,6 @@ func tsOrderKey(path string) string {
 	if len(digits) == 0 {
 		return name
 	}
-	// Left-pad so lexicographic order matches numeric order.
 	pad := 12 - len(digits)
 	if pad < 0 {
 		pad = 0
@@ -251,13 +342,8 @@ func tsOrderKey(path string) string {
 	return strings.Repeat("0", pad) + string(digits)
 }
 
-// buildConcatList renders the concat-demuxer input format that ffmpeg
-// reads from stdin. Paths are single-quoted and any embedded single
-// quotes are escaped per ffmpeg's documented rules. Each path is
-// prefixed with the "file:" URL scheme so ffmpeg uses the file protocol
-// rather than trying to resolve the entry relative to the input URL
-// (which would prepend "pipe:" when the concat list itself is read
-// from stdin).
+// buildConcatList renders the concat-demuxer input format that ffmpeg reads
+// from stdin.
 func buildConcatList(paths []string) string {
 	var b strings.Builder
 	b.WriteString("ffconcat version 1.0\n")
@@ -270,8 +356,7 @@ func buildConcatList(paths []string) string {
 	return b.String()
 }
 
-// isSignalKilled reports whether an ExitError was caused by a signal
-// (which is how we stop ffmpeg when the client disconnects).
+// isSignalKilled reports whether an ExitError was caused by a signal.
 func isSignalKilled(err error) bool {
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
@@ -284,9 +369,58 @@ func isSignalKilled(err error) bool {
 	return status.Signaled()
 }
 
-// RegisterRoutes wires the export endpoint onto the given Echo group.
-// The caller is expected to have applied session-or-JWT auth middleware
-// to the group.
+// RegisterRoutes wires up the export endpoints on the given Echo group.
 func (h *ExportHandler) RegisterRoutes(g *echo.Group) {
+	g.GET("/:dongle_id/:route_name/export.gpx", h.ExportRouteGPX)
 	g.GET("/:dongle_id/:route_name/export.mp4", h.ExportMP4)
+}
+
+// parseLineStringWKT extracts an ordered list of (lat, lon) points from a
+// PostGIS-rendered WKT string such as "LINESTRING(-122.4 37.7, -122.41 37.71)".
+func parseLineStringWKT(wkt string) ([]gpxTrkpt, error) {
+	s := strings.TrimSpace(wkt)
+	upper := strings.ToUpper(s)
+	if !strings.HasPrefix(upper, "LINESTRING") {
+		return nil, fmt.Errorf("expected LINESTRING geometry, got %q", truncate(s, 32))
+	}
+	rest := strings.TrimSpace(s[len("LINESTRING"):])
+
+	if strings.EqualFold(rest, "EMPTY") {
+		return []gpxTrkpt{}, nil
+	}
+
+	if !strings.HasPrefix(rest, "(") || !strings.HasSuffix(rest, ")") {
+		return nil, fmt.Errorf("malformed LINESTRING body: %q", truncate(rest, 32))
+	}
+	body := strings.TrimSpace(rest[1 : len(rest)-1])
+	if body == "" {
+		return []gpxTrkpt{}, nil
+	}
+
+	parts := strings.Split(body, ",")
+	points := make([]gpxTrkpt, 0, len(parts))
+	for _, raw := range parts {
+		coord := strings.Fields(strings.TrimSpace(raw))
+		if len(coord) < 2 {
+			return nil, fmt.Errorf("malformed coordinate pair: %q", raw)
+		}
+		lon, err := strconv.ParseFloat(coord[0], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid longitude %q: %w", coord[0], err)
+		}
+		lat, err := strconv.ParseFloat(coord[1], 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid latitude %q: %w", coord[1], err)
+		}
+		points = append(points, gpxTrkpt{Lat: lat, Lon: lon})
+	}
+	return points, nil
+}
+
+// truncate trims s to at most n runes, appending an ellipsis when truncated.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
