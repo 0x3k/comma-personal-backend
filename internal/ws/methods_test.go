@@ -469,11 +469,176 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 		"getNetworkType",
 		"getSimInfo",
 		"setNavDestination",
+		"getMessage",
 	}
 
 	for _, method := range expected {
 		if _, ok := handlers[method]; !ok {
 			t.Errorf("handler not registered for method %q", method)
 		}
+	}
+}
+
+func TestCallGetMessage_HappyPath(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "msg-happy",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+	t.Cleanup(func() { c.Close() })
+
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		var p GetMessageParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return
+		}
+		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
+		if req.Method != "getMessage" {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected method")
+		} else if p.Service != "carState" {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected service")
+		} else if p.Timeout != 1000 {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected timeout default")
+		} else {
+			resp.Result = map[string]interface{}{
+				"carState": map[string]interface{}{
+					"vEgo": 12.5,
+				},
+			}
+		}
+		caller.HandleResponse(resp)
+	}()
+
+	// timeoutMs <= 0 should default to 1000 ms.
+	result, err := CallGetMessage(caller, c, "carState", 0)
+	if err != nil {
+		t.Fatalf("CallGetMessage returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	inner, ok := result["carState"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("result[carState] is not a map, got %T", result["carState"])
+	}
+	if inner["vEgo"] != 12.5 {
+		t.Errorf("vEgo = %v, want 12.5", inner["vEgo"])
+	}
+}
+
+func TestCallGetMessage_InvalidService(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInvalidParams, "invalid service: \"bogusService\"")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetMessage(caller, client, "bogusService", 100)
+	if err == nil {
+		t.Fatal("expected error from CallGetMessage with invalid service")
+	}
+}
+
+func TestCallGetMessage_TimeoutBuffer(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	// Client that never responds, so we always hit the Go-side timeout.
+	c := &Client{
+		DongleID: "msg-timeout",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+	t.Cleanup(func() { c.Close() })
+
+	// Drain outgoing requests so sends don't block.
+	go func() {
+		for range c.sendCh {
+		}
+	}()
+
+	const deviceTimeoutMs = 50
+	start := time.Now()
+	_, err := CallGetMessage(caller, c, "carState", deviceTimeoutMs)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected timeout error from CallGetMessage")
+	}
+
+	minExpected := time.Duration(deviceTimeoutMs+getMessageCallBufferMs) * time.Millisecond
+	if elapsed < minExpected {
+		t.Errorf("elapsed = %v, want >= %v (device timeout + buffer)", elapsed, minExpected)
+	}
+
+	// Sanity: don't wait unreasonably long beyond the buffer (allow scheduling slack).
+	maxExpected := minExpected + 500*time.Millisecond
+	if elapsed > maxExpected {
+		t.Errorf("elapsed = %v, want <= %v", elapsed, maxExpected)
+	}
+}
+
+func TestHandleGetMessage_Valid(t *testing.T) {
+	params := json.RawMessage(`{"service":"deviceState","timeout":250}`)
+
+	result, rpcErr := handleGetMessage("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not map[string]interface{}, got %T", result)
+	}
+	inner, ok := m["deviceState"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("result[deviceState] is not a map, got %T", m["deviceState"])
+	}
+	if inner["service"] != "deviceState" {
+		t.Errorf("service = %v, want deviceState", inner["service"])
+	}
+}
+
+func TestHandleGetMessage_MissingService(t *testing.T) {
+	params := json.RawMessage(`{"timeout":100}`)
+
+	_, rpcErr := handleGetMessage("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for missing service")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+
+func TestHandleGetMessage_UnknownService(t *testing.T) {
+	params := json.RawMessage(`{"service":"notAService"}`)
+
+	_, rpcErr := handleGetMessage("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for unknown service")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+
+func TestHandleGetMessage_InvalidJSON(t *testing.T) {
+	params := json.RawMessage(`not json`)
+
+	_, rpcErr := handleGetMessage("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
 	}
 }

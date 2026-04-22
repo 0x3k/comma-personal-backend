@@ -174,6 +174,62 @@ func CallGetSimInfo(caller *RPCCaller, client *Client) (interface{}, error) {
 	return resp.Result, nil
 }
 
+// defaultGetMessageTimeoutMs is athenad's default timeout for getMessage (ms).
+const defaultGetMessageTimeoutMs = 1000
+
+// getMessageCallBufferMs is the extra buffer we add to the Go-side context
+// timeout so the device has a chance to return its own TimeoutError before we
+// cancel the call locally.
+const getMessageCallBufferMs = 500
+
+// GetMessageParams are the parameters for the getMessage RPC method.
+type GetMessageParams struct {
+	Service string `json:"service"`
+	Timeout int    `json:"timeout,omitempty"`
+}
+
+// CallGetMessage asks the device for the next message on the given cereal
+// service. If timeoutMs is <= 0, it defaults to 1000 ms to match athenad's
+// default. The Go-side RPC deadline is set a few hundred ms after the
+// device-side timeout so the device can surface its own timeout error first.
+func CallGetMessage(caller *RPCCaller, client *Client, service string, timeoutMs int) (map[string]interface{}, error) {
+	if timeoutMs <= 0 {
+		timeoutMs = defaultGetMessageTimeoutMs
+	}
+
+	params := GetMessageParams{
+		Service: service,
+		Timeout: timeoutMs,
+	}
+
+	callTimeout := time.Duration(timeoutMs+getMessageCallBufferMs) * time.Millisecond
+
+	resp, err := caller.CallWithTimeout(client, "getMessage", params, callTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("getMessage failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("getMessage returned error: %w", resp.Error)
+	}
+
+	if resp.Result == nil {
+		return nil, fmt.Errorf("getMessage returned no result")
+	}
+
+	// Result is an arbitrary JSON dict. Re-encode/decode so we hand back a
+	// stable map[string]interface{} regardless of how the transport decoded it.
+	raw, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal getMessage result: %w", err)
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("failed to decode getMessage result: %w", err)
+	}
+	return out, nil
+}
+
 // SetNavDestinationParams are the parameters for the setNavDestination RPC method.
 type SetNavDestinationParams struct {
 	Latitude  float64 `json:"latitude"`
@@ -209,6 +265,41 @@ func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["getNetworkType"] = handleGetNetworkType
 	handlers["getSimInfo"] = handleGetSimInfo
 	handlers["setNavDestination"] = handleSetNavDestination
+	handlers["getMessage"] = handleGetMessage
+}
+
+// knownStubServices is a small allowlist of cereal service names the device
+// stub knows how to fake. A real device uses the full cereal SERVICE_LIST.
+var knownStubServices = map[string]bool{
+	"carState":            true,
+	"deviceState":         true,
+	"liveLocationKalman":  true,
+	"controlsState":       true,
+	"pandaStates":         true,
+	"gpsLocationExternal": true,
+}
+
+// handleGetMessage is a device-side stub handler for getMessage. It validates
+// the service name and returns a canned message dict keyed by that service.
+func handleGetMessage(_ string, params json.RawMessage) (interface{}, *RPCError) {
+	var p GetMessageParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid params: %v", err))
+	}
+
+	if p.Service == "" {
+		return nil, NewRPCError(CodeInvalidParams, "service is required")
+	}
+	if !knownStubServices[p.Service] {
+		return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid service: %q", p.Service))
+	}
+
+	return map[string]interface{}{
+		p.Service: map[string]interface{}{
+			"stub":    true,
+			"service": p.Service,
+		},
+	}, nil
 }
 
 // handleUploadFileToUrl is a device-side stub handler for uploadFileToUrl.
