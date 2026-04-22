@@ -152,6 +152,141 @@ func TestCallGetNetworkType_RPCError(t *testing.T) {
 	}
 }
 
+func TestCallGetNetworkMetered(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, true, nil)
+
+	metered, err := CallGetNetworkMetered(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworkMetered returned error: %v", err)
+	}
+	if !metered {
+		t.Errorf("metered = %v, want true", metered)
+	}
+}
+
+func TestCallGetNetworkMetered_False(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, false, nil)
+
+	metered, err := CallGetNetworkMetered(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworkMetered returned error: %v", err)
+	}
+	if metered {
+		t.Errorf("metered = %v, want false", metered)
+	}
+}
+
+func TestCallGetNetworkMetered_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "metered error")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetNetworkMetered(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallGetNetworkMetered")
+	}
+}
+
+func TestCallGetNetworkMetered_WrongType(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, "not-a-bool", nil)
+
+	_, err := CallGetNetworkMetered(caller, client)
+	if err == nil {
+		t.Fatal("expected error for non-bool result")
+	}
+}
+
+func TestCallGetNetworks(t *testing.T) {
+	caller := NewRPCCaller()
+	networksResult := []map[string]interface{}{
+		{"SSID": "HomeNet", "strength": float64(80)},
+		{"SSID": "Guest", "strength": float64(40)},
+	}
+	client := testClientWithResponder(t, caller, networksResult, nil)
+
+	networks, err := CallGetNetworks(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworks returned error: %v", err)
+	}
+	if len(networks) != 2 {
+		t.Fatalf("networks length = %d, want 2", len(networks))
+	}
+	if networks[0]["SSID"] != "HomeNet" {
+		t.Errorf("networks[0].SSID = %v, want HomeNet", networks[0]["SSID"])
+	}
+	if networks[1]["strength"] != float64(40) {
+		t.Errorf("networks[1].strength = %v, want 40", networks[1]["strength"])
+	}
+}
+
+func TestCallGetNetworks_SliceOfInterface(t *testing.T) {
+	// Simulate the production path where json.Unmarshal decodes arrays of
+	// objects as []interface{} of map[string]interface{}.
+	caller := NewRPCCaller()
+	networksResult := []interface{}{
+		map[string]interface{}{"SSID": "HomeNet", "strength": float64(80)},
+	}
+	client := testClientWithResponder(t, caller, networksResult, nil)
+
+	networks, err := CallGetNetworks(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworks returned error: %v", err)
+	}
+	if len(networks) != 1 {
+		t.Fatalf("networks length = %d, want 1", len(networks))
+	}
+	if networks[0]["SSID"] != "HomeNet" {
+		t.Errorf("networks[0].SSID = %v, want HomeNet", networks[0]["SSID"])
+	}
+}
+
+func TestCallGetNetworks_Empty(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, []map[string]interface{}{}, nil)
+
+	networks, err := CallGetNetworks(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetNetworks returned error: %v", err)
+	}
+	if len(networks) != 0 {
+		t.Errorf("networks length = %d, want 0", len(networks))
+	}
+}
+
+func TestCallGetNetworks_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "networks error")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetNetworks(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallGetNetworks")
+	}
+}
+
+func TestCallGetNetworks_WrongType(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, "not-a-list", nil)
+
+	_, err := CallGetNetworks(caller, client)
+	if err == nil {
+		t.Fatal("expected error for non-list result")
+	}
+}
+
+func TestCallGetNetworks_BadEntry(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, []interface{}{"not-an-object"}, nil)
+
+	_, err := CallGetNetworks(caller, client)
+	if err == nil {
+		t.Fatal("expected error for non-object entry")
+	}
+}
+
 func TestCallGetSimInfo(t *testing.T) {
 	caller := NewRPCCaller()
 	simResult := map[string]interface{}{
@@ -416,6 +551,36 @@ func TestHandleGetNetworkType(t *testing.T) {
 	}
 }
 
+func TestHandleGetNetworkMetered(t *testing.T) {
+	result, rpcErr := handleGetNetworkMetered("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	b, ok := result.(bool)
+	if !ok {
+		t.Fatalf("result is not bool, got %T", result)
+	}
+	if b {
+		t.Error("expected metered=false stub value")
+	}
+}
+
+func TestHandleGetNetworks(t *testing.T) {
+	result, rpcErr := handleGetNetworks("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	networks, ok := result.([]map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not []map[string]interface{}, got %T", result)
+	}
+	if len(networks) != 0 {
+		t.Errorf("expected empty stub list, got %d entries", len(networks))
+	}
+}
+
 func TestHandleGetSimInfo(t *testing.T) {
 	result, rpcErr := handleGetSimInfo("test-dongle", nil)
 	if rpcErr != nil {
@@ -467,6 +632,8 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 	expected := []string{
 		"uploadFileToUrl",
 		"getNetworkType",
+		"getNetworkMetered",
+		"getNetworks",
 		"getSimInfo",
 		"setNavDestination",
 	}

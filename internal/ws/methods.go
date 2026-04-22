@@ -160,6 +160,59 @@ func CallGetNetworkType(caller *RPCCaller, client *Client) (interface{}, error) 
 	return resp.Result, nil
 }
 
+// CallGetNetworkMetered asks the device whether its current connection is metered.
+func CallGetNetworkMetered(caller *RPCCaller, client *Client) (bool, error) {
+	resp, err := caller.Call(client, "getNetworkMetered", nil)
+	if err != nil {
+		return false, fmt.Errorf("getNetworkMetered failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return false, fmt.Errorf("getNetworkMetered returned error: %w", resp.Error)
+	}
+
+	metered, ok := resp.Result.(bool)
+	if !ok {
+		return false, fmt.Errorf("getNetworkMetered: expected bool result, got %T", resp.Result)
+	}
+
+	return metered, nil
+}
+
+// CallGetNetworks asks the device for the list of available networks.
+// Each entry is a dict describing a network (SSID, signal strength, etc.).
+func CallGetNetworks(caller *RPCCaller, client *Client) ([]map[string]interface{}, error) {
+	resp, err := caller.Call(client, "getNetworks", nil)
+	if err != nil {
+		return nil, fmt.Errorf("getNetworks failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("getNetworks returned error: %w", resp.Error)
+	}
+
+	if resp.Result == nil {
+		return nil, nil
+	}
+
+	switch v := resp.Result.(type) {
+	case []map[string]interface{}:
+		return v, nil
+	case []interface{}:
+		networks := make([]map[string]interface{}, 0, len(v))
+		for i, item := range v {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("getNetworks: entry %d is not an object, got %T", i, item)
+			}
+			networks = append(networks, m)
+		}
+		return networks, nil
+	default:
+		return nil, fmt.Errorf("getNetworks: expected list result, got %T", resp.Result)
+	}
+}
+
 // CallGetSimInfo asks the device for its SIM card information.
 func CallGetSimInfo(caller *RPCCaller, client *Client) (interface{}, error) {
 	resp, err := caller.Call(client, "getSimInfo", nil)
@@ -207,6 +260,8 @@ func CallSetNavDestination(caller *RPCCaller, client *Client, lat, lng float64, 
 func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["uploadFileToUrl"] = handleUploadFileToUrl
 	handlers["getNetworkType"] = handleGetNetworkType
+	handlers["getNetworkMetered"] = handleGetNetworkMetered
+	handlers["getNetworks"] = handleGetNetworks
 	handlers["getSimInfo"] = handleGetSimInfo
 	handlers["setNavDestination"] = handleSetNavDestination
 }
@@ -235,6 +290,16 @@ func handleGetNetworkType(_ string, _ json.RawMessage) (interface{}, *RPCError) 
 		"network_type": 5, // LTE
 		"wifi_ip":      "",
 	}, nil
+}
+
+// handleGetNetworkMetered is a device-side stub handler for getNetworkMetered.
+func handleGetNetworkMetered(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return false, nil
+}
+
+// handleGetNetworks is a device-side stub handler for getNetworks.
+func handleGetNetworks(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return []map[string]interface{}{}, nil
 }
 
 // handleGetSimInfo is a device-side stub handler for getSimInfo.
