@@ -14,10 +14,16 @@
 
 - **Drop-in API replacement** -- mirrors the official comma backend endpoints (`/v2/pilotauth/`, `/v1.4/upload_url/`, `/v1/route/`, `/v1.1/devices/`, etc.) so openpilot and sunnypilot connect without any client-side patches
 - **Video ingestion and transcoding** -- receives HEVC uploads from three cameras (road, driver, wide) and transcodes them to HLS for browser playback, with automatic fallback from container copy to libx264 re-encoding
-- **Live device communication** -- persistent WebSocket channel per device for real-time JSON-RPC: push config changes, request file uploads, set nav destinations, query network/SIM status
+- **Live device communication** -- persistent WebSocket channel per device for real-time JSON-RPC: push config changes, request file uploads and snapshots, set nav destinations, query network/SIM/thermal status, inspect and cancel the device upload queue
 - **Device configuration** -- read and write device parameters through the API or the web UI, with changes pushed to the device in real time over WebSocket
 - **GPS track storage** -- stores route geometry as PostGIS LineStrings for spatial queries and map display
-- **Web dashboard** -- browse routes, play back multi-camera video with hls.js, view GPS tracks on Leaflet/OpenStreetMap, inspect upload status per segment, and manage device settings
+- **Trip aggregation** -- background worker computes per-route distance, duration, and speed stats from the GPS geometry; reverse-geocodes start/end addresses via Nominatim
+- **Event detection** -- background worker parses qlogs and extracts "moments" (hard brakes, disengagements, FCW alerts, warnings) with tunable thresholds
+- **Log signal overlay** -- the video player renders a canvas timeline of speed, steering, and engagement state pulled from parsed qlogs, with click-to-seek
+- **Web dashboard** -- home page with lifetime stats and recent drives, route browser with multi-camera HLS playback, Leaflet/OpenStreetMap GPS tracks, virtualized log viewer, moments/events listing, upload-queue monitor, device control center, and storage/retention settings
+- **Shareable read-only links** -- signed, time-limited tokens grant unauthenticated access to a single route's video and map with no write access and no leakage of other routes
+- **Retention and cleanup** -- per-route preserve flag, configurable retention window, and a cleanup worker that deletes old non-preserved routes (dry-run by default for safety)
+- **Observability** -- Prometheus `/metrics` endpoint for request rate and latency, upload throughput, transcode timing, RPC latency, connected device count, and worker health, plus an importable Grafana dashboard
 
 ## Architecture
 
@@ -37,15 +43,27 @@ comma device                              this server
 ```
 cmd/server/           -- entrypoint
 internal/
-  api/                -- HTTP handlers (device, route, upload, config, pilotauth)
-  api/middleware/     -- JWT auth
-  db/                 -- sqlc-generated queries + migrations
+  api/                -- HTTP handlers (device, route, upload, config, pilotauth, signals, stats, events, live, snapshot, upload-queue, share, session login, storage, settings)
+  api/middleware/     -- JWT auth + session/cookie middleware (SessionRequired, SessionOrJWT)
+  cereal/             -- cereal capnp log parser + driving-signal extractor
+  config/             -- environment/config loader
+  db/                 -- sqlc-generated queries
+  geocode/            -- Nominatim reverse-geocoding client
+  metrics/            -- Prometheus collectors
+  sessioncookie/      -- signed session cookie HMAC helpers
+  settings/           -- runtime settings store (retention, etc.)
+  share/              -- signed share-link token helpers
   storage/            -- filesystem storage layer
-  worker/             -- background video transcoding
-  ws/                 -- WebSocket hub, JSON-RPC client/server
+  worker/             -- background jobs (HEVC->HLS transcode, cleanup, trip aggregator, event detector)
+  ws/                 -- WebSocket hub, JSON-RPC client/server, device RPC calls
+sql/
+  migrations/         -- PostgreSQL migrations
+  queries/            -- sqlc query files
 web/
-  src/app/            -- Next.js pages (dashboard, routes, devices, settings)
-  src/components/     -- video player, map, log viewer, UI primitives
+  src/app/            -- Next.js pages (dashboard home, routes, devices, moments, share, login, settings)
+  src/components/     -- video player + signal timeline, map, log viewer, snapshot button, share button, device status panel, UI primitives
+docs/
+  grafana-dashboard.json  -- importable Grafana dashboard
 ```
 
 ## Prerequisites
@@ -66,11 +84,10 @@ psql comma -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 
 **2. Run migrations**
 
+Apply every migration in order:
+
 ```bash
-psql comma < sql/migrations/001_init.up.sql
-psql comma < sql/migrations/002_device_params.up.sql
-psql comma < sql/migrations/006_ui_users.up.sql
-psql comma < sql/migrations/005_retention_settings.up.sql
+for m in sql/migrations/*.up.sql; do psql comma < "$m"; done
 ```
 
 **3. Configure environment**
@@ -127,46 +144,72 @@ The local dev setup above is fine for testing. For an always-on server that rece
 
 ## API
 
+Endpoints are grouped by auth mode:
+- **Device JWT** -- issued by `/v2/pilotauth/`, required for device-facing endpoints
+- **Session cookie** -- issued by `/v1/session/login`, required for dashboard mutations
+- **Session-or-JWT** -- either works, used by read endpoints shared between the UI and the device
+- **Public** -- no auth (health, session login, share-link consumption, `/metrics`)
+
 ### Authentication
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/v2/pilotauth/` | Device registration, returns a signed JWT |
-| POST | `/v1/session/login` | Dashboard login (username + password). Sets an HttpOnly session cookie. Enabled only when `SESSION_SECRET` is set. Rate limited to 5 attempts / 15 min per IP. |
-| POST | `/v1/session/logout` | Dashboard logout. Clears the session cookie. |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/v2/pilotauth/` | public | Device registration, returns a signed JWT |
+| POST | `/v1/session/login` | public | Dashboard login (username + password). Sets an HttpOnly session cookie. Enabled only when `SESSION_SECRET` is set. Rate limited to 5 attempts / 15 min per IP. |
+| POST | `/v1/session/logout` | session | Dashboard logout. Clears the session cookie. |
 
 ### Devices
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/v1.1/devices/:dongle_id/` | Device info |
-| GET | `/v1/devices/:dongle_id/params` | List device config params |
-| PUT | `/v1/devices/:dongle_id/params/:key` | Set a config param (pushed via WebSocket if connected) |
-| DELETE | `/v1/devices/:dongle_id/params/:key` | Delete a config param |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/v1/devices` | session-or-JWT | List registered devices |
+| GET | `/v1.1/devices/:dongle_id/` | JWT | Device info |
+| GET | `/v1/devices/:dongle_id/params` | session-or-JWT | List device config params |
+| PUT | `/v1/devices/:dongle_id/params/:key` | session | Set a config param (pushed via WebSocket if connected) |
+| DELETE | `/v1/devices/:dongle_id/params/:key` | session | Delete a config param |
+| GET | `/v1/devices/:dongle_id/live` | session-or-JWT | Live status (network, metered, SIM, free disk, thermal) with a 5-minute cache when the device is offline |
+| GET | `/v1/devices/:dongle_id/stats` | session-or-JWT | Lifetime totals + recent trips (`?limit=` `?offset=`) |
+| GET | `/v1/devices/:dongle_id/events` | session-or-JWT | Detected events/moments (`?type=` `?severity=` `?limit=` `?offset=`) |
+| POST | `/v1/devices/:dongle_id/snapshot` | session-or-JWT | Request an on-demand JPEG snapshot from both cameras (rate limited to 1 per 5s per device) |
+| GET | `/v1/devices/:dongle_id/upload-queue` | session-or-JWT | List the device's current upload queue |
+| POST | `/v1/devices/:dongle_id/upload-queue/cancel` | session | Cancel queued uploads by ID |
 
 ### Routes and uploads
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/v1/route/:dongle_id` | List routes (paginated, `?limit=` `?offset=`) |
-| GET | `/v1/route/:dongle_id/:route_name` | Route detail with full segment list |
-| GET | `/v1.4/:dongle_id/upload_url/` | Get self-hosted upload URL for a segment file |
-| PUT | `/upload/:dongle_id/*` | Upload a segment file (up to 100 MB) |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/v1/route/:dongle_id` | session-or-JWT | List routes (paginated, `?limit=` `?offset=`) |
+| GET | `/v1/route/:dongle_id/:route_name` | session-or-JWT | Route detail with full segment list |
+| GET | `/v1/routes/:dongle_id/:route_name/signals` | JWT | Parsed log signals (speed, steering, engagement, alerts) for the signal timeline; results are cached to `signals.json` next to each qlog |
+| GET | `/v1/routes/:dongle_id/:route_name/trip` | JWT | Aggregated trip row for the route (404 if not yet aggregated) |
+| GET | `/v1/routes/:dongle_id/:route_name/export.gpx` | session-or-JWT | Download the GPS track as GPX |
+| GET | `/v1/routes/:dongle_id/:route_name/export.mp4` | session-or-JWT | Download a concatenated MP4 of the route's HLS video |
+| POST | `/v1/routes/:dongle_id/:route_name/share` | session | Create a signed, time-limited public share link (body: `{"expires_in_hours": int (default 72, max 720)}`; 501 if `SESSION_SECRET` is unset) |
+| GET | `/v1.4/:dongle_id/upload_url/` | JWT | Get self-hosted upload URL for a segment file |
+| PUT | `/upload/:dongle_id/*` | JWT | Upload a segment file (up to 100 MB) |
 
-### Settings
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/v1/settings/retention` | Read current retention window in days (`0` means never delete) |
-| PUT | `/v1/settings/retention` | Update retention window (body: `{"retention_days": int}`, must be `>= 0`) |
+### Share (public, token-gated)
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/v1/share/:token` | token | Route metadata, segment list, geometry, and media base URL for a shared route (410 Gone on expiry, 401 on tampered token) |
+| GET | `/v1/share/:token/segments/:seg/:file` | token | Stream a whitelisted HLS file (`qcamera.ts`, `index.m3u8`) scoped to the share token's route |
+
+### Storage and settings
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/v1/storage/usage` | session-or-JWT | Disk usage breakdown: total, per-device, filesystem available |
+| GET | `/v1/settings/retention` | session-or-JWT | Read current retention window in days (`0` means never delete) |
+| PUT | `/v1/settings/retention` | session | Update retention window (body: `{"retention_days": int}`, must be `>= 0`) |
 
 ### WebSocket
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/ws/v2/:dongle_id` | Persistent device channel (JSON-RPC over WebSocket) |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/ws/v2/:dongle_id` | JWT | Persistent device channel (JSON-RPC over WebSocket) |
 
-Supported RPC methods: `uploadFileToUrl`, `getNetworkType`, `getSimInfo`, `setNavDestination`, `setParam`, `deleteParam`.
+Supported RPC methods (server-initiated calls to the device): `uploadFileToUrl`, `uploadFilesToUrls`, `getNetworkType`, `getNetworkMetered`, `getNetworks`, `getSimInfo`, `getMessage`, `setNavDestination`, `setParam`, `deleteParam`, `listDataDirectory`, `takeSnapshot`, `listUploadQueue`, `cancelUpload`, `setRouteViewed`, `getVersion`, `getPublicKey`, `getSshAuthorizedKeys`, `getGithubUsername`.
 
-### Health
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Returns `{"status": "ok"}` |
+### Health and observability
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/health` | public | Returns `{"status": "ok"}` |
+| GET | `/metrics` | public | Prometheus metrics (HTTP, upload, transcode, RPC, worker, WebSocket). See `docs/DEPLOYMENT.md` for the Grafana import flow. |
 
 ## Data layout on disk
 

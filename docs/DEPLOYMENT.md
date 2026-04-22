@@ -32,8 +32,7 @@ brew install postgresql postgis
 sudo -u postgres createuser --createdb comma
 createdb -U comma comma
 psql -U comma comma -c "CREATE EXTENSION IF NOT EXISTS postgis;"
-psql -U comma comma < sql/migrations/001_init.up.sql
-psql -U comma comma < sql/migrations/002_device_params.up.sql
+for m in sql/migrations/*.up.sql; do psql -U comma comma < "$m"; done
 ```
 
 ## 2. Build the backend
@@ -62,7 +61,28 @@ DATABASE_URL=postgres://comma:password@localhost:5432/comma
 STORAGE_PATH=/var/lib/comma/data
 PORT=8080
 # ALLOWED_SERIALS=SERIAL001,SERIAL002
+
+# Web UI auth (required to enable login, share links, and session-only routes).
+# Omit to run in open mode: UI auth middleware becomes pass-through and a
+# warning is logged on startup. Device JWT auth is unaffected either way.
+# SESSION_SECRET=generate-a-long-random-string
+# ADMIN_USERNAME=admin
+# ADMIN_PASSWORD=change-me
+
+# Retention and cleanup. Defaults are safe (never delete, dry-run on).
+# RETENTION_DAYS=30
+# CLEANUP_ENABLED=true
+# DELETE_DRY_RUN=true
+
+# Background workers (default true).
+# TRIP_AGGREGATOR_ENABLED=true
+# EVENT_DETECTOR_ENABLED=true
+# Event-detector thresholds.
+# EVENT_HARD_BRAKE_MPS2=4.5
+# EVENT_HARD_BRAKE_MIN_SEC=0.3
 ```
+
+When you run a multi-node deployment, set `CLEANUP_ENABLED=false` on every node except one so the cleanup worker only runs in a single place (it reads and deletes from both the database and the filesystem).
 
 Create the storage directory:
 
