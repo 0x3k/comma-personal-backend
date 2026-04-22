@@ -3,8 +3,9 @@
   "name": "Retention policy configuration",
   "description": "Expose a configurable retention policy (how long to keep non-preserved routes before deletion) via env var at startup and DB-backed override at runtime. The cleanup-worker feature consumes this; this feature only plumbs the configuration.",
   "priority": 3,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/retention-policy-config",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "New env var RETENTION_DAYS (integer, default 0 which means 'never delete'); documented in CLAUDE.md and README.md",
