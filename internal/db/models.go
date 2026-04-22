@@ -24,6 +24,17 @@ type DeviceParam struct {
 	UpdatedAt pgtype.Timestamptz `json:"updatedAt"`
 }
 
+type Event struct {
+	ID                 int32              `json:"id"`
+	RouteID            int32              `json:"routeId"`
+	Type               string             `json:"type"`
+	Severity           string             `json:"severity"`
+	RouteOffsetSeconds float64            `json:"routeOffsetSeconds"`
+	OccurredAt         pgtype.Timestamptz `json:"occurredAt"`
+	Payload            []byte             `json:"payload"`
+	CreatedAt          pgtype.Timestamptz `json:"createdAt"`
+}
+
 type Route struct {
 	ID        int32              `json:"id"`
 	DongleID  string             `json:"dongleId"`
