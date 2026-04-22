@@ -526,6 +526,8 @@ func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["listDataDirectory"] = handleListDataDirectory
 	handlers["takeSnapshot"] = handleTakeSnapshot
 	handlers["getMessage"] = handleGetMessage
+	handlers["listUploadQueue"] = handleListUploadQueue
+	handlers["cancelUpload"] = handleCancelUpload
 }
 
 // knownStubServices is a small allowlist of cereal service names the device
@@ -692,4 +694,101 @@ func handleTakeSnapshot(_ string, _ json.RawMessage) (interface{}, *RPCError) {
 		"jpegBack":  stubSnapshotJPEG,
 		"jpegFront": stubSnapshotJPEG,
 	}, nil
+}
+
+// UploadItem mirrors athenad's UploadItemDict, describing a single entry in
+// the device's upload queue. Field ordering matches openpilot's dataclass
+// (system/athena/athenad.py) but the JSON tags are what determine wire
+// compatibility with the device.
+type UploadItem struct {
+	ID            string            `json:"id"`
+	Path          string            `json:"path"`
+	URL           string            `json:"url"`
+	Headers       map[string]string `json:"headers"`
+	Priority      int               `json:"priority"`
+	RetryCount    int               `json:"retry_count"`
+	CreatedAt     int64             `json:"created_at"`
+	Current       bool              `json:"current"`
+	Progress      float64           `json:"progress"`
+	AllowCellular bool              `json:"allow_cellular"`
+}
+
+// CallListUploadQueue asks the device for the current contents of its upload
+// queue. Returns the decoded list of UploadItem entries.
+func CallListUploadQueue(caller *RPCCaller, client *Client) ([]UploadItem, error) {
+	resp, err := caller.Call(client, "listUploadQueue", nil)
+	if err != nil {
+		return nil, fmt.Errorf("listUploadQueue failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("listUploadQueue returned error: %w", resp.Error)
+	}
+
+	raw, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-marshal listUploadQueue result: %w", err)
+	}
+
+	var items []UploadItem
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal listUploadQueue result: %w", err)
+	}
+
+	return items, nil
+}
+
+// CallCancelUpload asks the device to remove the given upload IDs from its
+// queue. athenad's cancelUpload accepts either a single string or a list of
+// strings, so when exactly one ID is provided it is sent as a bare string;
+// otherwise the full list is sent.
+func CallCancelUpload(caller *RPCCaller, client *Client, ids []string) (map[string]interface{}, error) {
+	var params interface{}
+	if len(ids) == 1 {
+		params = ids[0]
+	} else {
+		params = ids
+	}
+
+	resp, err := caller.Call(client, "cancelUpload", params)
+	if err != nil {
+		return nil, fmt.Errorf("cancelUpload failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("cancelUpload returned error: %w", resp.Error)
+	}
+
+	raw, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to re-marshal cancelUpload result: %w", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal cancelUpload result: %w", err)
+	}
+
+	return result, nil
+}
+
+// handleListUploadQueue is a device-side stub handler for listUploadQueue.
+// A real device would return its actual queue; this stub returns an empty list.
+func handleListUploadQueue(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return []UploadItem{}, nil
+}
+
+// handleCancelUpload is a device-side stub handler for cancelUpload. athenad
+// accepts either a single upload_id string or a list of strings, so the stub
+// tolerates either shape and returns a success acknowledgement.
+func handleCancelUpload(_ string, params json.RawMessage) (interface{}, *RPCError) {
+	var ids []string
+	if err := json.Unmarshal(params, &ids); err != nil {
+		var single string
+		if err := json.Unmarshal(params, &single); err != nil {
+			return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid params: %v", err))
+		}
+	}
+
+	return map[string]int{"success": 1}, nil
 }
