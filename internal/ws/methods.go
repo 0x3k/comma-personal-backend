@@ -201,6 +201,30 @@ func CallSetNavDestination(caller *RPCCaller, client *Client, lat, lng float64, 
 	return nil
 }
 
+// SetRouteViewedParams are the parameters for the setRouteViewed RPC method.
+type SetRouteViewedParams struct {
+	Route string `json:"route"`
+}
+
+// CallSetRouteViewed instructs the device to record that a route has been
+// viewed, so the device can tag or deprioritize it in its local queue.
+func CallSetRouteViewed(caller *RPCCaller, client *Client, route string) error {
+	params := SetRouteViewedParams{
+		Route: route,
+	}
+
+	resp, err := caller.Call(client, "setRouteViewed", params)
+	if err != nil {
+		return fmt.Errorf("setRouteViewed failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return fmt.Errorf("setRouteViewed returned error: %w", resp.Error)
+	}
+
+	return nil
+}
+
 // RegisterDefaultHandlers installs device-side method handlers on a Client
 // for common methods that the device is expected to handle. These are useful
 // for testing or when the backend acts as a simulated device.
@@ -209,6 +233,7 @@ func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["getNetworkType"] = handleGetNetworkType
 	handlers["getSimInfo"] = handleGetSimInfo
 	handlers["setNavDestination"] = handleSetNavDestination
+	handlers["setRouteViewed"] = handleSetRouteViewed
 }
 
 // handleUploadFileToUrl is a device-side stub handler for uploadFileToUrl.
@@ -250,6 +275,22 @@ func handleSetNavDestination(_ string, params json.RawMessage) (interface{}, *RP
 	var p SetNavDestinationParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid params: %v", err))
+	}
+
+	return map[string]bool{"success": true}, nil
+}
+
+// handleSetRouteViewed is a device-side stub handler for setRouteViewed.
+// A real device would record the route in AthenadRecentlyViewedRoutes; this
+// handler validates that a route name was provided and acknowledges.
+func handleSetRouteViewed(_ string, params json.RawMessage) (interface{}, *RPCError) {
+	var p SetRouteViewedParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid params: %v", err))
+	}
+
+	if p.Route == "" {
+		return nil, NewRPCError(CodeInvalidParams, "route is required")
 	}
 
 	return map[string]bool{"success": true}, nil
