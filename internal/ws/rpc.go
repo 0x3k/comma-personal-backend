@@ -25,11 +25,33 @@ type RPCRequest struct {
 }
 
 // RPCResponse represents a JSON-RPC 2.0 response.
+//
+// JSON-RPC 2.0 §5 requires exactly one of `result` or `error` to be present.
+// A custom MarshalJSON enforces this: success responses always emit `result`
+// (as `null` when the handler returned nil), and error responses emit only
+// `error`. The struct tags below are only used for unmarshalling.
 type RPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	Result  interface{}     `json:"result,omitempty"`
 	Error   *RPCError       `json:"error,omitempty"`
 	ID      json.RawMessage `json:"id"`
+}
+
+// MarshalJSON serializes the response so that success and error responses
+// each include exactly one of `result` / `error`, per JSON-RPC 2.0 §5.
+func (r *RPCResponse) MarshalJSON() ([]byte, error) {
+	if r.Error != nil {
+		return json.Marshal(struct {
+			JSONRPC string          `json:"jsonrpc"`
+			Error   *RPCError       `json:"error"`
+			ID      json.RawMessage `json:"id"`
+		}{r.JSONRPC, r.Error, r.ID})
+	}
+	return json.Marshal(struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Result  interface{}     `json:"result"`
+		ID      json.RawMessage `json:"id"`
+	}{r.JSONRPC, r.Result, r.ID})
 }
 
 // RPCError represents a JSON-RPC 2.0 error object.

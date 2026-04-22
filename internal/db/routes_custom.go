@@ -24,7 +24,7 @@ SELECT r.id, r.dongle_id, r.route_name, r.start_time, r.end_time, r.geometry, r.
        (SELECT count(*) FROM segments s WHERE s.route_id = r.id) AS segment_count
 FROM routes r
 WHERE r.dongle_id = $1
-ORDER BY r.created_at DESC
+ORDER BY r.created_at DESC, r.id DESC
 LIMIT $2 OFFSET $3
 `
 

@@ -61,20 +61,19 @@ func (t *Transcoder) SetFFmpegPath(path string) {
 	t.ffmpegPath = path
 }
 
-// Start launches the background worker goroutines. It blocks until ctx
-// is cancelled or Stop is called. If called while workers are already
-// running, the previous workers are stopped first to prevent leaks.
+// Start launches the background worker goroutines. If called while workers
+// are already running, the previous workers are stopped first to prevent
+// leaks. Safe to call concurrently with itself or Stop -- the mutex is held
+// across the full lifecycle transition so wg.Add and wg.Wait never race.
 func (t *Transcoder) Start(ctx context.Context) {
 	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if t.cancel != nil {
 		t.cancel()
-		t.mu.Unlock()
 		t.wg.Wait()
-		t.mu.Lock()
 	}
 	ctx, t.cancel = context.WithCancel(ctx)
-	t.mu.Unlock()
-
 	for i := 0; i < t.concurrency; i++ {
 		t.wg.Add(1)
 		go func() {
@@ -88,11 +87,11 @@ func (t *Transcoder) Start(ctx context.Context) {
 // It is safe to call multiple times and to call Start again afterwards.
 func (t *Transcoder) Stop() {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.cancel != nil {
 		t.cancel()
 		t.cancel = nil
 	}
-	t.mu.Unlock()
 	t.wg.Wait()
 }
 

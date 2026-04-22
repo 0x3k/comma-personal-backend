@@ -301,7 +301,9 @@ func parsePath(path string) (route, segment, filename string, err error) {
 }
 
 // parseUploadPath parses the path from the upload URL (after /upload/:dongle_id/).
-// Expected format: "route/segment/filename".
+// Expected format: "route/segment/filename" where segment is a non-negative
+// integer. Segment is validated here so invalid uploads are rejected before
+// any bytes touch disk.
 func parseUploadPath(path string) (route, segment, filename string, err error) {
 	parts := strings.SplitN(path, "/", 3)
 	if len(parts) != 3 {
@@ -314,6 +316,11 @@ func parseUploadPath(path string) (route, segment, filename string, err error) {
 
 	if route == "" || segment == "" || filename == "" {
 		return "", "", "", fmt.Errorf("failed to parse upload path: empty component in %q", path)
+	}
+
+	segNum, convErr := strconv.Atoi(segment)
+	if convErr != nil || segNum < 0 {
+		return "", "", "", fmt.Errorf("failed to parse upload path: invalid segment number %q", segment)
 	}
 
 	return route, segment, filename, nil

@@ -141,7 +141,7 @@ const listRoutesByDevicePaginated = `-- name: ListRoutesByDevicePaginated :many
 SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at
 FROM routes
 WHERE dongle_id = $1
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 LIMIT $2 OFFSET $3
 `
 

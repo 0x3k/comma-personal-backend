@@ -58,9 +58,14 @@ func main() {
 	// middleware verifies it against the public_key stored for that device.
 	auth := middleware.JWTAuthFromDB(queries)
 
-	v11 := e.Group("/v1.1", auth)
 	deviceHandler := api.NewDeviceHandler(queries)
+
+	v11 := e.Group("/v1.1", auth)
 	deviceHandler.RegisterRoutes(v11)
+
+	// Dashboard listing of all registered devices. Unauthenticated because the
+	// local web UI has no device JWT; see DeviceHandler.ListDevices.
+	e.GET("/v1/devices", deviceHandler.ListDevices)
 
 	// Route listing and detail.
 	v1Route := e.Group("/v1/route", auth)

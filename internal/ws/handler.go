@@ -3,6 +3,7 @@ package ws
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -82,7 +83,10 @@ func (h *Handler) HandleWebSocket(c echo.Context) error {
 
 	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
 	if err != nil {
-		return fmt.Errorf("failed to upgrade connection: %w", err)
+		// gorilla's Upgrade already wrote an HTTP error response. Returning an
+		// error here would make Echo try to write a second one.
+		log.Printf("ws: failed to upgrade connection: %v", err)
+		return nil
 	}
 
 	client := NewClient(dongleID, conn, h.hub, h.handlers, h.rpcCaller)
