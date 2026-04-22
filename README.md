@@ -69,6 +69,7 @@ psql comma -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 ```bash
 psql comma < sql/migrations/001_init.up.sql
 psql comma < sql/migrations/002_device_params.up.sql
+psql comma < sql/migrations/005_retention_settings.up.sql
 ```
 
 **3. Configure environment**
@@ -86,6 +87,7 @@ cp .env.example .env
 | `STORAGE_PATH` | no | `./data` | Directory for uploaded video/log files |
 | `PORT` | no | `8080` | API server listen port |
 | `ALLOWED_SERIALS` | no | -- | Comma-separated allowlist of device serials permitted to register (all allowed if unset). The dongle ID is assigned server-side, so restriction is by hardware serial. |
+| `RETENTION_DAYS` | no | `0` | Default retention window (in days) for non-preserved routes before the cleanup worker deletes them; `0` means never delete. Seeds the `retention_days` row in the `settings` table on first boot; overridable at runtime via `PUT /v1/settings/retention`. |
 
 **4. Start the backend**
 
@@ -139,6 +141,12 @@ The local dev setup above is fine for testing. For an always-on server that rece
 | GET | `/v1/route/:dongle_id/:route_name` | Route detail with full segment list |
 | GET | `/v1.4/:dongle_id/upload_url/` | Get self-hosted upload URL for a segment file |
 | PUT | `/upload/:dongle_id/*` | Upload a segment file (up to 100 MB) |
+
+### Settings
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/settings/retention` | Read current retention window in days (`0` means never delete) |
+| PUT | `/v1/settings/retention` | Update retention window (body: `{"retention_days": int}`, must be `>= 0`) |
 
 ### WebSocket
 | Method | Path | Description |
