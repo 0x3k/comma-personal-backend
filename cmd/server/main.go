@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,6 +20,7 @@ import (
 	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
+	"comma-personal-backend/internal/worker"
 	"comma-personal-backend/internal/ws"
 )
 
@@ -146,6 +149,23 @@ func main() {
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
 	wsHandler.RegisterRoutes(e)
 
+	// Event detector background worker. Opt-out via EVENT_DETECTOR_ENABLED=false
+	// (or "0"); any other value enables it. Runs in its own goroutine with the
+	// server context so shutdown cancels the poll loop cleanly.
+	if eventDetectorEnabled() {
+		detector := worker.NewEventDetector(
+			queries,
+			store,
+			30*time.Second,
+			worker.LoadThresholdsFromEnv(),
+		)
+		go detector.Run(context.Background())
+		log.Printf("event detector worker started (thresholds: brake=%.2f m/s^2, min-sec=%.2f)",
+			detector.Thresholds.HardBrakeMps2, detector.Thresholds.HardBrakeMinDurationSec)
+	} else {
+		log.Printf("event detector worker disabled via EVENT_DETECTOR_ENABLED")
+	}
+
 	s := &http.Server{
 		Addr:              ":" + cfg.Port,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -156,5 +176,18 @@ func main() {
 	log.Printf("starting server on :%s", cfg.Port)
 	if err := e.StartServer(s); err != nil {
 		log.Fatalf("failed to start server: %v", err)
+	}
+}
+
+// eventDetectorEnabled returns true unless EVENT_DETECTOR_ENABLED is explicitly
+// set to a falsy value ("false", "0", or "no"). Unset or any other value
+// (including "true") enables the worker.
+func eventDetectorEnabled() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("EVENT_DETECTOR_ENABLED")))
+	switch v {
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
