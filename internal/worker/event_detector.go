@@ -40,12 +40,12 @@ const (
 // Default thresholds for hard-brake detection. Keep in sync with the feature
 // spec and the README env-var documentation.
 const (
-	defaultHardBrakeMps2    = 4.5
-	defaultHardBrakeMinSec  = 0.3
-	defaultPollInterval     = 30 * time.Second
-	defaultCandidateLimit   = 16
-	fcwAlertPrefixFCW       = "FCW"
-	fcwAlertPrefixCollision = "Forward Collision"
+	defaultHardBrakeMps2     = 4.5
+	defaultHardBrakeMinSec   = 0.3
+	defaultEventPollInterval = 30 * time.Second
+	defaultCandidateLimit    = 16
+	fcwAlertPrefixFCW        = "FCW"
+	fcwAlertPrefixCollision  = "Forward Collision"
 )
 
 // Thresholds bundles the operator-tunable event detection parameters.
@@ -92,7 +92,7 @@ func NewEventDetector(q *db.Queries, s *storage.Storage, poll time.Duration, thr
 func (d *EventDetector) Run(ctx context.Context) {
 	interval := d.PollInterval
 	if interval <= 0 {
-		interval = defaultPollInterval
+		interval = defaultEventPollInterval
 	}
 
 	// First pass runs immediately so smoke tests / short-lived processes can
