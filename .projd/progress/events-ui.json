@@ -3,7 +3,7 @@
   "name": "Events 'Moments' page",
   "description": "Add a 'Moments' page that lists detected events across all routes with filters by type and severity. Each row links to the route detail page at the event's offset so the video starts playing from that moment. Also add an inline strip of event markers on the video signal timeline, if log-overlay-ui has landed (wire it in via a conditional render).",
   "priority": 5,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/events-ui",
   "base_branch": "main",
   "blocked_by": ["event-detector-worker"],
@@ -15,5 +15,5 @@
     "pnpm --dir web lint, type-check, build pass",
     "go test ./internal/api/... passes"
   ],
-  "notes": ""
+  "notes": "Backend endpoint GET /v1/devices/:dongle_id/events returns {events,total,limit,offset} joined with route_name via a new CountEventsByDongleID sqlc query and an extended ListEventsByDongleID (now joins routes for the route_name passthrough). Mounted on the shared sessionOrJWT v1ConfigRead group in cmd/server/main.go. Handler + table-driven tests cover filters, pagination, session vs jwt auth, and error branches. Frontend /moments page is virtualized (tanstack/react-virtual), URL-state-driven (device, type multi-select, severity, limit, offset survive refresh / share), and deep-links to the route detail page at ?t=<route_offset_seconds>. The route detail page now auto-selects the segment containing ?t= and seeks the <video> element directly; this was kept independent of log-overlay-ui so criterion 4 degrades gracefully -- when the SignalTimeline component lands, its existing eventMarkers prop can be wired with the same per-route events fetch used by this feature."
 }
