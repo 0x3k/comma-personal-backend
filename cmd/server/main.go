@@ -165,6 +165,14 @@ func main() {
 	storageHandler := api.NewStorageHandler(store)
 	storageHandler.RegisterRoutes(v1Storage)
 
+	// Snapshot endpoint accepts either a session cookie (operator from the
+	// web UI) or a device JWT. It lives on its own group because the default
+	// /v1 group is JWT-only.
+	snapshotAuth := api.SessionOrJWTAuth([]byte(cfg.SessionSecret), queries)
+	v1Snapshot := e.Group("/v1", snapshotAuth)
+	snapshotHandler := api.NewSnapshotHandler(hub, rpcCaller)
+	snapshotHandler.RegisterRoutes(v1Snapshot)
+
 	// WebSocket for device communication.
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
 	wsHandler.RegisterRoutes(e)

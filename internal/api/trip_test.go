@@ -136,7 +136,7 @@ func (r *mockTripRouteRow) Scan(dest ...interface{}) error {
 	return nil
 }
 
-// mockTripRow scans into the 14 columns produced by GetTripByRouteID.
+// mockTripRow scans into the 15 columns produced by GetTripByRouteID.
 type mockTripRow struct {
 	trip *db.Trip
 	err  error
@@ -160,6 +160,7 @@ func (r *mockTripRow) Scan(dest ...interface{}) error {
 	*dest[11].(*pgtype.Float8) = r.trip.EndLat
 	*dest[12].(*pgtype.Float8) = r.trip.EndLng
 	*dest[13].(*pgtype.Timestamptz) = r.trip.ComputedAt
+	*dest[14].(*pgtype.Timestamptz) = r.trip.EventsComputedAt
 	return nil
 }
 
@@ -200,9 +201,10 @@ func (r *mockTripRows) Scan(dest ...interface{}) error {
 	*dest[11].(*pgtype.Float8) = t.EndLat
 	*dest[12].(*pgtype.Float8) = t.EndLng
 	*dest[13].(*pgtype.Timestamptz) = t.ComputedAt
-	*dest[14].(*string) = t.DongleID
-	*dest[15].(*string) = t.RouteName
-	*dest[16].(*pgtype.Timestamptz) = t.StartTime
+	*dest[14].(*pgtype.Timestamptz) = t.EventsComputedAt
+	*dest[15].(*string) = t.DongleID
+	*dest[16].(*string) = t.RouteName
+	*dest[17].(*pgtype.Timestamptz) = t.StartTime
 	return nil
 }
 

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { DeviceStatusPanel } from "@/components/DeviceStatusPanel";
+import { SnapshotButton } from "@/components/SnapshotButton";
 
 interface Device {
   dongleId: string;
@@ -141,6 +142,7 @@ export default function DevicesPage() {
                 </Card>
               </Link>
               <DeviceStatusPanel dongleId={device.dongleId} />
+              <SnapshotButton dongleId={device.dongleId} />
             </div>
           ))}
         </div>
