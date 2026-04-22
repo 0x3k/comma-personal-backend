@@ -2,15 +2,55 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"comma-personal-backend/internal/db"
 )
+
+// testDeviceKey generates an RSA key pair for a test device and returns the
+// private key alongside the PEM-encoded public key that would be stored in
+// the devices.public_key column at pilotauth time.
+func testDeviceKey(t *testing.T) (*rsa.PrivateKey, string) {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate rsa key: %v", err)
+	}
+	pubBytes, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("failed to marshal public key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubBytes})
+	return priv, string(pemBytes)
+}
+
+// signDeviceJWT issues an RS256 token with openpilot's claim shape (identity,
+// iat, exp) signed with the device's private key.
+func signDeviceJWT(t *testing.T, priv *rsa.PrivateKey, dongleID string) string {
+	t.Helper()
+	claims := jwt.MapClaims{
+		"identity": dongleID,
+		"iat":      time.Now().Unix(),
+		"exp":      time.Now().Add(time.Hour).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signed, err := token.SignedString(priv)
+	if err != nil {
+		t.Fatalf("failed to sign test token: %v", err)
+	}
+	return signed
+}
 
 // mockDBTX is a single-query mock used by tests that only exercise one
 // QueryRow path (e.g. GetDevice). Pilotauth uses its own specialized mock

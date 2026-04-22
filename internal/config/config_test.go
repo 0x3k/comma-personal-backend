@@ -12,7 +12,6 @@ var configEnvVars = []string{
 	"DATABASE_URL",
 	"STORAGE_PATH",
 	"PORT",
-	"JWT_SECRET",
 	"ALLOWED_SERIALS",
 }
 
@@ -28,7 +27,6 @@ func clearConfigEnv(t *testing.T) {
 func TestLoad_AllRequiredSet(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
-	t.Setenv("JWT_SECRET", "supersecret")
 	t.Setenv("STORAGE_PATH", "/tmp/storage")
 	t.Setenv("PORT", "9090")
 
@@ -40,9 +38,6 @@ func TestLoad_AllRequiredSet(t *testing.T) {
 	if cfg.DatabaseURL != "postgres://localhost:5432/testdb" {
 		t.Errorf("DatabaseURL = %q, want %q", cfg.DatabaseURL, "postgres://localhost:5432/testdb")
 	}
-	if cfg.JWTSecret != "supersecret" {
-		t.Errorf("JWTSecret = %q, want %q", cfg.JWTSecret, "supersecret")
-	}
 	if cfg.StoragePath != "/tmp/storage" {
 		t.Errorf("StoragePath = %q, want %q", cfg.StoragePath, "/tmp/storage")
 	}
@@ -53,7 +48,6 @@ func TestLoad_AllRequiredSet(t *testing.T) {
 
 func TestLoad_MissingDatabaseURL(t *testing.T) {
 	clearConfigEnv(t)
-	t.Setenv("JWT_SECRET", "secret")
 
 	_, err := Load()
 	if err == nil {
@@ -61,20 +55,9 @@ func TestLoad_MissingDatabaseURL(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingJWTSecret(t *testing.T) {
-	clearConfigEnv(t)
-	t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("Load() returned nil error when JWT_SECRET is missing, want error")
-	}
-}
-
 func TestLoad_DefaultPort(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
-	t.Setenv("JWT_SECRET", "secret")
 
 	cfg, err := Load()
 	if err != nil {
@@ -88,7 +71,6 @@ func TestLoad_DefaultPort(t *testing.T) {
 func TestLoad_DefaultStoragePath(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
-	t.Setenv("JWT_SECRET", "secret")
 
 	cfg, err := Load()
 	if err != nil {
@@ -102,7 +84,6 @@ func TestLoad_DefaultStoragePath(t *testing.T) {
 func TestLoad_CustomPortAndStoragePath(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
-	t.Setenv("JWT_SECRET", "secret")
 	t.Setenv("PORT", "3000")
 	t.Setenv("STORAGE_PATH", "/mnt/data/comma")
 
@@ -164,7 +145,6 @@ func TestLoad_AllowedSerials(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			clearConfigEnv(t)
 			t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
-			t.Setenv("JWT_SECRET", "secret")
 
 			if tt.envVal != "" {
 				t.Setenv("ALLOWED_SERIALS", tt.envVal)

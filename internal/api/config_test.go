@@ -21,13 +21,15 @@ import (
 )
 
 // configMockDBTX implements db.DBTX for config handler tests.
-// It supports the three query shapes used by device_params.sql.go:
+// It supports the four query shapes exercised by these tests:
 //   - Query (ListDeviceParams)
-//   - QueryRow (SetDeviceParam)
+//   - QueryRow on device_params (SetDeviceParam)
+//   - QueryRow on devices (GetDevice, used by the auth middleware)
 //   - Exec (DeleteDeviceParam)
 type configMockDBTX struct {
 	params   []db.DeviceParam
 	setParam *db.DeviceParam
+	device   *db.Device
 	err      error
 }
 
@@ -45,7 +47,12 @@ func (m *configMockDBTX) Query(_ context.Context, _ string, _ ...interface{}) (p
 	return &configMockRows{params: m.params, idx: -1}, nil
 }
 
-func (m *configMockDBTX) QueryRow(_ context.Context, _ string, _ ...interface{}) pgx.Row {
+func (m *configMockDBTX) QueryRow(_ context.Context, query string, _ ...interface{}) pgx.Row {
+	// Branch on the generated SQL: the auth middleware reads from devices
+	// while SetDeviceParam writes into device_params.
+	if strings.Contains(query, "FROM devices") {
+		return &mockRow{device: m.device}
+	}
 	return &configMockRow{param: m.setParam, err: m.err}
 }
 
@@ -392,7 +399,8 @@ func TestConfigRegisterRoutes(t *testing.T) {
 }
 
 func TestConfigWithJWTAuth(t *testing.T) {
-	const secret = "test-config-auth-secret"
+	priv, pubPEM := testDeviceKey(t)
+	validToken := signDeviceJWT(t, priv, "abc123")
 
 	testParams := []db.DeviceParam{
 		newTestParam(1, "abc123", "OpenpilotEnabledToggle", "1"),
@@ -405,7 +413,7 @@ func TestConfigWithJWTAuth(t *testing.T) {
 	}{
 		{
 			name:       "authenticated request succeeds",
-			authHeader: "Bearer " + signTestToken(t, secret, "abc123"),
+			authHeader: "JWT " + validToken,
 			wantStatus: http.StatusOK,
 		},
 		{
@@ -415,18 +423,21 @@ func TestConfigWithJWTAuth(t *testing.T) {
 		},
 		{
 			name:       "invalid token returns 401",
-			authHeader: "Bearer bad.token.here",
+			authHeader: "JWT bad.token.here",
 			wantStatus: http.StatusUnauthorized,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock := &configMockDBTX{params: testParams}
+			mock := &configMockDBTX{
+				params: testParams,
+				device: newTestDevice("abc123", "SERIAL001", pubPEM),
+			}
 			handler := newConfigHandler(mock, nil, nil)
 
 			e := echo.New()
-			g := e.Group("/v1", middleware.JWTAuthHMAC(secret))
+			g := e.Group("/v1", middleware.JWTAuthFromDB(db.New(mock)))
 			handler.RegisterRoutes(g)
 
 			req := httptest.NewRequest(http.MethodGet, "/v1/devices/abc123/params", nil)

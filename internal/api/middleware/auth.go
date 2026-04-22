@@ -82,16 +82,20 @@ func JWTAuth(publicKey interface{}) echo.MiddlewareFunc {
 	}
 }
 
-// extractToken reads the JWT token string from the request. It checks the
-// Authorization: Bearer header first.
+// extractToken reads the JWT token string from the Authorization header.
+// Both "JWT <token>" (openpilot's api_get uses this) and "Bearer <token>" are
+// accepted.
 func extractToken(c echo.Context) (string, error) {
 	auth := c.Request().Header.Get("Authorization")
 	if auth != "" {
 		parts := strings.SplitN(auth, " ", 2)
-		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-			token := strings.TrimSpace(parts[1])
-			if token != "" {
-				return token, nil
+		if len(parts) == 2 {
+			scheme := parts[0]
+			if strings.EqualFold(scheme, "JWT") || strings.EqualFold(scheme, "Bearer") {
+				token := strings.TrimSpace(parts[1])
+				if token != "" {
+					return token, nil
+				}
 			}
 		}
 	}

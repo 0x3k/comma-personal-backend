@@ -11,7 +11,6 @@ type Config struct {
 	DatabaseURL    string
 	StoragePath    string
 	Port           string
-	JWTSecret      string
 	AllowedSerials []string
 }
 
@@ -22,7 +21,6 @@ func Load() (*Config, error) {
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		StoragePath: os.Getenv("STORAGE_PATH"),
 		Port:        os.Getenv("PORT"),
-		JWTSecret:   os.Getenv("JWT_SECRET"),
 	}
 
 	if v := os.Getenv("ALLOWED_SERIALS"); v != "" {
@@ -44,10 +42,6 @@ func Load() (*Config, error) {
 
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("failed to load config: DATABASE_URL is required")
-	}
-
-	if cfg.JWTSecret == "" {
-		return nil, fmt.Errorf("failed to load config: JWT_SECRET is required")
 	}
 
 	return cfg, nil

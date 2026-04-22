@@ -59,7 +59,6 @@ Create `/etc/comma-backend/env`:
 
 ```bash
 DATABASE_URL=postgres://comma:password@localhost:5432/comma
-JWT_SECRET=<generate with: openssl rand -hex 32>
 STORAGE_PATH=/var/lib/comma/data
 PORT=8080
 # ALLOWED_SERIALS=SERIAL001,SERIAL002

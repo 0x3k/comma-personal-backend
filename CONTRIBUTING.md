@@ -15,7 +15,7 @@ psql comma < sql/migrations/001_init.up.sql
 psql comma < sql/migrations/002_device_params.up.sql
 ```
 
-4. Copy `.env.example` to `.env` and fill in `DATABASE_URL` and `JWT_SECRET`
+4. Copy `.env.example` to `.env` and fill in `DATABASE_URL`
 5. Start the backend and frontend:
 
 ```bash

@@ -1,63 +1,166 @@
 package ws
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
+
+	"comma-personal-backend/internal/db"
 )
 
-const testJWTSecret = "test-secret-key-for-ws-tests"
+// fakeLookup is a test DeviceLookup that returns devices from a map keyed by
+// dongle_id. An empty map means "unknown device" (pgx.ErrNoRows).
+type fakeLookup struct {
+	mu      sync.Mutex
+	devices map[string]db.Device
+}
 
-func signTestToken(t *testing.T, dongleID string, secret string) string {
+func (f *fakeLookup) GetDevice(_ context.Context, dongleID string) (db.Device, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.devices[dongleID]
+	if !ok {
+		return db.Device{}, pgx.ErrNoRows
+	}
+	return d, nil
+}
+
+func newFakeLookup(devices ...db.Device) *fakeLookup {
+	m := make(map[string]db.Device, len(devices))
+	for _, d := range devices {
+		m[d.DongleID] = d
+	}
+	return &fakeLookup{devices: m}
+}
+
+// testKeyPair generates an RSA key and returns it alongside the PEM-encoded
+// public key that pilotauth would store in devices.public_key.
+func testKeyPair(t *testing.T) (*rsa.PrivateKey, string) {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate rsa key: %v", err)
+	}
+	pubBytes, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("failed to marshal public key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubBytes})
+	return priv, string(pemBytes)
+}
+
+func testDevice(dongleID, pubPEM string) db.Device {
+	now := time.Now()
+	return db.Device{
+		DongleID:  dongleID,
+		PublicKey: pgtype.Text{String: pubPEM, Valid: true},
+		CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+	}
+}
+
+func signTestToken(t *testing.T, dongleID string, priv *rsa.PrivateKey) string {
 	t.Helper()
 	claims := jwt.MapClaims{
-		"dongle_id": dongleID,
-		"identity":  dongleID,
-		"iat":       time.Now().Unix(),
-		"exp":       time.Now().Add(time.Hour).Unix(),
+		"identity": dongleID,
+		"iat":      time.Now().Unix(),
+		"exp":      time.Now().Add(time.Hour).Unix(),
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(secret))
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	signed, err := token.SignedString(priv)
 	if err != nil {
 		t.Fatalf("failed to sign test token: %v", err)
 	}
 	return signed
 }
 
-func setupTestServer(t *testing.T, handlers map[string]MethodHandler) (*httptest.Server, *Hub) {
-	t.Helper()
-	hub := NewHub()
-	e := echo.New()
-	h := NewHandler(hub, testJWTSecret, handlers, nil)
-	h.RegisterRoutes(e)
+// testSetup is a small bundle of the pieces most tests need: a running WS
+// server, the hub it registers clients to, the device's private key, and the
+// dongle_id that key was registered under.
+type testSetup struct {
+	server   *httptest.Server
+	hub      *Hub
+	priv     *rsa.PrivateKey
+	dongleID string
+}
 
+func newTestSetup(t *testing.T, dongleID string, handlers map[string]MethodHandler) testSetup {
+	t.Helper()
+	priv, pubPEM := testKeyPair(t)
+	hub := NewHub()
+	lookup := newFakeLookup(testDevice(dongleID, pubPEM))
+	e := echo.New()
+	h := NewHandler(hub, lookup, handlers, nil)
+	h.RegisterRoutes(e)
 	server := httptest.NewServer(e)
-	t.Cleanup(func() { server.Close() })
-	return server, hub
+	t.Cleanup(server.Close)
+	return testSetup{server: server, hub: hub, priv: priv, dongleID: dongleID}
 }
 
 func wsURL(server *httptest.Server, dongleID, token string) string {
-	url := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/" + dongleID
+	u := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/" + dongleID
 	if token != "" {
-		url += "?token=" + token
+		u += "?token=" + token
 	}
-	return url
+	return u
+}
+
+func dialWithCookie(t *testing.T, server *httptest.Server, dongleID, token string) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	u := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws/" + dongleID
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("failed to parse server url: %v", err)
+	}
+	jar, err := newCookieJar(parsed, token)
+	if err != nil {
+		t.Fatalf("failed to build cookie jar: %v", err)
+	}
+	dialer := *websocket.DefaultDialer
+	dialer.Jar = jar
+	return dialer.Dial(u, nil)
+}
+
+func newCookieJar(serverURL *url.URL, token string) (*cookieJar, error) {
+	return &cookieJar{url: serverURL, cookies: []*http.Cookie{{Name: "jwt", Value: token}}}, nil
+}
+
+// cookieJar is a minimal http.CookieJar that returns a fixed cookie for any
+// URL whose scheme+host matches the one it was constructed with. The standard
+// library's cookiejar.New rejects "ws://" URLs, so we use this instead.
+type cookieJar struct {
+	url     *url.URL
+	cookies []*http.Cookie
+}
+
+func (j *cookieJar) SetCookies(_ *url.URL, _ []*http.Cookie) {}
+
+func (j *cookieJar) Cookies(_ *url.URL) []*http.Cookie {
+	return j.cookies
 }
 
 func TestHandleWebSocket_AuthWithQueryParam(t *testing.T) {
-	server, hub := setupTestServer(t, nil)
+	s := newTestSetup(t, "test-dongle-001", nil)
 
-	dongleID := "test-dongle-001"
-	token := signTestToken(t, dongleID, testJWTSecret)
+	token := signTestToken(t, s.dongleID, s.priv)
 
-	conn, resp, err := websocket.DefaultDialer.Dial(wsURL(server, dongleID, token), nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL(s.server, s.dongleID, token), nil)
 	if err != nil {
 		t.Fatalf("failed to dial WebSocket: %v", err)
 	}
@@ -67,27 +170,42 @@ func TestHandleWebSocket_AuthWithQueryParam(t *testing.T) {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusSwitchingProtocols)
 	}
 
-	// Give the goroutine a moment to register.
 	time.Sleep(50 * time.Millisecond)
 
-	_, ok := hub.GetClient(dongleID)
-	if !ok {
+	if _, ok := s.hub.GetClient(s.dongleID); !ok {
 		t.Error("client not found in hub after connection")
 	}
 }
 
-func TestHandleWebSocket_AuthWithBearerHeader(t *testing.T) {
-	server, hub := setupTestServer(t, nil)
+func TestHandleWebSocket_AuthWithCookie(t *testing.T) {
+	s := newTestSetup(t, "cookie-auth-dongle", nil)
+	token := signTestToken(t, s.dongleID, s.priv)
 
-	dongleID := "header-auth-dongle"
-	token := signTestToken(t, dongleID, testJWTSecret)
+	conn, resp, err := dialWithCookie(t, s.server, s.dongleID, token)
+	if err != nil {
+		t.Fatalf("failed to dial WebSocket with cookie: %v", err)
+	}
+	defer conn.Close()
+
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusSwitchingProtocols)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if _, ok := s.hub.GetClient(s.dongleID); !ok {
+		t.Error("client not found in hub after cookie auth connection")
+	}
+}
+
+func TestHandleWebSocket_AuthWithJWTHeader(t *testing.T) {
+	s := newTestSetup(t, "header-auth-dongle", nil)
+	token := signTestToken(t, s.dongleID, s.priv)
 
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+token)
+	header.Set("Authorization", "JWT "+token)
 
-	// Dial without query param, use header instead.
-	url := wsURL(server, dongleID, "")
-	conn, resp, err := websocket.DefaultDialer.Dial(url, header)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL(s.server, s.dongleID, ""), header)
 	if err != nil {
 		t.Fatalf("failed to dial WebSocket: %v", err)
 	}
@@ -99,17 +217,15 @@ func TestHandleWebSocket_AuthWithBearerHeader(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	_, ok := hub.GetClient(dongleID)
-	if !ok {
+	if _, ok := s.hub.GetClient(s.dongleID); !ok {
 		t.Error("client not found in hub after header auth connection")
 	}
 }
 
 func TestHandleWebSocket_MissingToken(t *testing.T) {
-	server, _ := setupTestServer(t, nil)
+	s := newTestSetup(t, "some-dongle", nil)
 
-	url := wsURL(server, "some-dongle", "")
-	_, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL(s.server, "some-dongle", ""), nil)
 	if err == nil {
 		t.Fatal("expected dial to fail without token")
 	}
@@ -119,10 +235,9 @@ func TestHandleWebSocket_MissingToken(t *testing.T) {
 }
 
 func TestHandleWebSocket_InvalidToken(t *testing.T) {
-	server, _ := setupTestServer(t, nil)
+	s := newTestSetup(t, "some-dongle", nil)
 
-	url := wsURL(server, "some-dongle", "invalid.token.value")
-	_, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL(s.server, "some-dongle", "invalid.token.value"), nil)
 	if err == nil {
 		t.Fatal("expected dial to fail with invalid token")
 	}
@@ -132,13 +247,13 @@ func TestHandleWebSocket_InvalidToken(t *testing.T) {
 }
 
 func TestHandleWebSocket_WrongDongleID(t *testing.T) {
-	server, _ := setupTestServer(t, nil)
+	s := newTestSetup(t, "dongle-a", nil)
 
-	// Token is for "dongle-a" but we connect to "dongle-b".
-	token := signTestToken(t, "dongle-a", testJWTSecret)
-	url := wsURL(server, "dongle-b", token)
-
-	_, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	// Token identity is "dongle-a" (matching the setup), but the URL asks
+	// for "dongle-b". The middleware authenticates for dongle-a, then the
+	// handler rejects the mismatch with 403.
+	token := signTestToken(t, "dongle-a", s.priv)
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL(s.server, "dongle-b", token), nil)
 	if err == nil {
 		t.Fatal("expected dial to fail with mismatched dongle_id")
 	}
@@ -147,16 +262,35 @@ func TestHandleWebSocket_WrongDongleID(t *testing.T) {
 	}
 }
 
-func TestHandleWebSocket_WrongSecret(t *testing.T) {
-	server, _ := setupTestServer(t, nil)
+func TestHandleWebSocket_WrongKey(t *testing.T) {
+	s := newTestSetup(t, "wrong-key-dongle", nil)
 
-	dongleID := "wrong-secret-dongle"
-	token := signTestToken(t, dongleID, "wrong-secret")
+	// Sign with a different private key than the one registered for this
+	// dongle — signature verification must fail.
+	otherKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate other key: %v", err)
+	}
+	token := signTestToken(t, s.dongleID, otherKey)
 
-	url := wsURL(server, dongleID, token)
-	_, resp, err := websocket.DefaultDialer.Dial(url, nil)
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL(s.server, s.dongleID, token), nil)
 	if err == nil {
-		t.Fatal("expected dial to fail with wrong secret")
+		t.Fatal("expected dial to fail with wrong signing key")
+	}
+	if resp != nil && resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleWebSocket_UnknownDongle(t *testing.T) {
+	// Server knows about "known-dongle" only; sign a valid token for an
+	// unregistered identity.
+	s := newTestSetup(t, "known-dongle", nil)
+	token := signTestToken(t, "not-registered", s.priv)
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL(s.server, "not-registered", token), nil)
+	if err == nil {
+		t.Fatal("expected dial to fail with unknown dongle")
 	}
 	if resp != nil && resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
@@ -174,18 +308,15 @@ func TestHandleWebSocket_JSONRPCMethodDispatch(t *testing.T) {
 		},
 	}
 
-	server, _ := setupTestServer(t, handlers)
+	s := newTestSetup(t, "rpc-test-dongle", handlers)
+	token := signTestToken(t, s.dongleID, s.priv)
 
-	dongleID := "rpc-test-dongle"
-	token := signTestToken(t, dongleID, testJWTSecret)
-
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server, dongleID, token), nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(s.server, s.dongleID, token), nil)
 	if err != nil {
 		t.Fatalf("failed to dial: %v", err)
 	}
 	defer conn.Close()
 
-	// Send a JSON-RPC request.
 	req := RPCRequest{
 		JSONRPC: "2.0",
 		Method:  "echo",
@@ -197,7 +328,6 @@ func TestHandleWebSocket_JSONRPCMethodDispatch(t *testing.T) {
 		t.Fatalf("failed to write message: %v", err)
 	}
 
-	// Read the response.
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, respData, err := conn.ReadMessage()
 	if err != nil {
@@ -221,12 +351,10 @@ func TestHandleWebSocket_JSONRPCMethodDispatch(t *testing.T) {
 }
 
 func TestHandleWebSocket_MethodNotFound(t *testing.T) {
-	server, _ := setupTestServer(t, nil)
+	s := newTestSetup(t, "method-test-dongle", nil)
+	token := signTestToken(t, s.dongleID, s.priv)
 
-	dongleID := "method-test-dongle"
-	token := signTestToken(t, dongleID, testJWTSecret)
-
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server, dongleID, token), nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(s.server, s.dongleID, token), nil)
 	if err != nil {
 		t.Fatalf("failed to dial: %v", err)
 	}
@@ -262,18 +390,15 @@ func TestHandleWebSocket_MethodNotFound(t *testing.T) {
 }
 
 func TestHandleWebSocket_InvalidJSONRPC(t *testing.T) {
-	server, _ := setupTestServer(t, nil)
+	s := newTestSetup(t, "invalid-rpc-dongle", nil)
+	token := signTestToken(t, s.dongleID, s.priv)
 
-	dongleID := "invalid-rpc-dongle"
-	token := signTestToken(t, dongleID, testJWTSecret)
-
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server, dongleID, token), nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(s.server, s.dongleID, token), nil)
 	if err != nil {
 		t.Fatalf("failed to dial: %v", err)
 	}
 	defer conn.Close()
 
-	// Send garbage that is not valid JSON-RPC.
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"not":"valid rpc"}`)); err != nil {
 		t.Fatalf("failed to write: %v", err)
 	}
@@ -298,27 +423,24 @@ func TestHandleWebSocket_InvalidJSONRPC(t *testing.T) {
 }
 
 func TestHandleWebSocket_DisconnectCleansUp(t *testing.T) {
-	server, hub := setupTestServer(t, nil)
+	s := newTestSetup(t, "cleanup-dongle", nil)
+	token := signTestToken(t, s.dongleID, s.priv)
 
-	dongleID := "cleanup-dongle"
-	token := signTestToken(t, dongleID, testJWTSecret)
-
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server, dongleID, token), nil)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(s.server, s.dongleID, token), nil)
 	if err != nil {
 		t.Fatalf("failed to dial: %v", err)
 	}
 
 	time.Sleep(50 * time.Millisecond)
-	if hub.Count() != 1 {
-		t.Fatalf("hub count = %d, want 1 before close", hub.Count())
+	if s.hub.Count() != 1 {
+		t.Fatalf("hub count = %d, want 1 before close", s.hub.Count())
 	}
 
 	conn.Close()
 
-	// Wait for the read pump to detect the close and clean up.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if hub.Count() == 0 {
+		if s.hub.Count() == 0 {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -327,12 +449,10 @@ func TestHandleWebSocket_DisconnectCleansUp(t *testing.T) {
 }
 
 func TestHandleWebSocket_DuplicateConnectionReplacesExisting(t *testing.T) {
-	server, hub := setupTestServer(t, nil)
+	s := newTestSetup(t, "dup-dongle", nil)
+	token := signTestToken(t, s.dongleID, s.priv)
 
-	dongleID := "dup-dongle"
-	token := signTestToken(t, dongleID, testJWTSecret)
-
-	conn1, _, err := websocket.DefaultDialer.Dial(wsURL(server, dongleID, token), nil)
+	conn1, _, err := websocket.DefaultDialer.Dial(wsURL(s.server, s.dongleID, token), nil)
 	if err != nil {
 		t.Fatalf("failed to dial first connection: %v", err)
 	}
@@ -340,7 +460,7 @@ func TestHandleWebSocket_DuplicateConnectionReplacesExisting(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	conn2, _, err := websocket.DefaultDialer.Dial(wsURL(server, dongleID, token), nil)
+	conn2, _, err := websocket.DefaultDialer.Dial(wsURL(s.server, s.dongleID, token), nil)
 	if err != nil {
 		t.Fatalf("failed to dial second connection: %v", err)
 	}
@@ -348,7 +468,7 @@ func TestHandleWebSocket_DuplicateConnectionReplacesExisting(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if hub.Count() != 1 {
-		t.Errorf("hub count = %d, want 1 (duplicate should replace)", hub.Count())
+	if s.hub.Count() != 1 {
+		t.Errorf("hub count = %d, want 1 (duplicate should replace)", s.hub.Count())
 	}
 }

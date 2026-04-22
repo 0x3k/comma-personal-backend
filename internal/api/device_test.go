@@ -6,9 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 
@@ -19,25 +17,6 @@ import (
 func newDeviceHandler(mock *mockDBTX) *DeviceHandler {
 	queries := db.New(mock)
 	return NewDeviceHandler(queries)
-}
-
-func signTestToken(t *testing.T, secret string, dongleID string) string {
-	t.Helper()
-
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"dongle_id": dongleID,
-		"identity":  dongleID,
-		"iat":       now.Unix(),
-		"exp":       now.Add(time.Hour).Unix(),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(secret))
-	if err != nil {
-		t.Fatalf("failed to sign test token: %v", err)
-	}
-	return signed
 }
 
 func TestGetDevice(t *testing.T) {
@@ -136,9 +115,10 @@ func TestGetDevice(t *testing.T) {
 }
 
 func TestGetDeviceWithAuth(t *testing.T) {
-	const secret = "test-secret-for-device-auth"
+	priv, pubPEM := testDeviceKey(t)
+	testDevice := newTestDevice("abc123", "SERIAL001", pubPEM)
 
-	testDevice := newTestDevice("abc123", "SERIAL001", "ssh-rsa AAAA...")
+	validToken := signDeviceJWT(t, priv, "abc123")
 
 	tests := []struct {
 		name       string
@@ -149,7 +129,13 @@ func TestGetDeviceWithAuth(t *testing.T) {
 	}{
 		{
 			name:       "authenticated request succeeds",
-			authHeader: "Bearer " + signTestToken(t, secret, "abc123"),
+			authHeader: "JWT " + validToken,
+			mockDevice: testDevice,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "bearer scheme also accepted",
+			authHeader: "Bearer " + validToken,
 			mockDevice: testDevice,
 			wantStatus: http.StatusOK,
 		},
@@ -161,7 +147,7 @@ func TestGetDeviceWithAuth(t *testing.T) {
 		},
 		{
 			name:       "invalid token returns 401",
-			authHeader: "Bearer invalid.token.here",
+			authHeader: "JWT invalid.token.here",
 			mockDevice: testDevice,
 			wantStatus: http.StatusUnauthorized,
 		},
@@ -173,7 +159,7 @@ func TestGetDeviceWithAuth(t *testing.T) {
 			handler := newDeviceHandler(mock)
 
 			e := echo.New()
-			g := e.Group("/v1.1", middleware.JWTAuthHMAC(secret))
+			g := e.Group("/v1.1", middleware.JWTAuthFromDB(db.New(mock)))
 			handler.RegisterRoutes(g)
 
 			req := httptest.NewRequest(http.MethodGet, "/v1.1/devices/abc123/", nil)

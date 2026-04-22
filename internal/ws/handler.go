@@ -1,13 +1,16 @@
 package ws
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
+
+	"comma-personal-backend/internal/api/middleware"
 )
 
 // wsErrorResponse is the JSON error envelope for pre-upgrade HTTP responses.
@@ -27,23 +30,24 @@ var upgrader = websocket.Upgrader{
 // Handler provides the Echo handler for WebSocket connections.
 type Handler struct {
 	hub       *Hub
-	jwtSecret string
+	lookup    middleware.DeviceLookup
 	handlers  map[string]MethodHandler
 	rpcCaller *RPCCaller
 }
 
 // NewHandler creates a WebSocket handler.
-// The jwtSecret is used to validate HS256 device tokens.
-// The handlers map is passed to each new Client for JSON-RPC method dispatch.
-// The rpcCaller, if non-nil, is passed to each Client so that RPC responses
-// from the device are routed back to pending RPCCaller.Call invocations.
-func NewHandler(hub *Hub, jwtSecret string, handlers map[string]MethodHandler, rpcCaller *RPCCaller) *Handler {
+// The lookup is used to resolve each connecting device's public key for JWT
+// verification. The handlers map is passed to each new Client for JSON-RPC
+// method dispatch. The rpcCaller, if non-nil, is passed to each Client so
+// that RPC responses from the device are routed back to pending
+// RPCCaller.Call invocations.
+func NewHandler(hub *Hub, lookup middleware.DeviceLookup, handlers map[string]MethodHandler, rpcCaller *RPCCaller) *Handler {
 	if handlers == nil {
 		handlers = make(map[string]MethodHandler)
 	}
 	return &Handler{
 		hub:       hub,
-		jwtSecret: jwtSecret,
+		lookup:    lookup,
 		handlers:  handlers,
 		rpcCaller: rpcCaller,
 	}
@@ -60,11 +64,11 @@ func (h *Handler) HandleWebSocket(c echo.Context) error {
 		})
 	}
 
-	tokenDongleID, err := h.authenticate(c)
+	tokenDongleID, status, err := h.authenticate(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, wsErrorResponse{
+		return c.JSON(status, wsErrorResponse{
 			Error: err.Error(),
-			Code:  http.StatusUnauthorized,
+			Code:  status,
 		})
 	}
 
@@ -91,69 +95,74 @@ func (h *Handler) HandleWebSocket(c echo.Context) error {
 	return nil
 }
 
-// authenticate extracts and validates a JWT from the request. It checks the
-// "token" query parameter first, then the Authorization: Bearer header.
-// Returns the dongle_id from the token claims.
-func (h *Handler) authenticate(c echo.Context) (string, error) {
-	tokenStr := c.QueryParam("token")
+// authenticate resolves the identity claim in the token, looks up the
+// device's public key, and verifies the token's signature against it. It
+// returns the dongle_id along with an HTTP status for the caller to surface
+// (401 for auth failures, 500 for lookup errors).
+//
+// Token sources are checked in openpilot's order of use: the `jwt=` cookie
+// (athenad's primary path), then ?token= query param, then the Authorization
+// header ("JWT " or "Bearer ").
+func (h *Handler) authenticate(c echo.Context) (string, int, error) {
+	tokenStr := readCookieToken(c)
 	if tokenStr == "" {
-		tokenStr = extractBearerToken(c)
+		tokenStr = c.QueryParam("token")
 	}
 	if tokenStr == "" {
-		return "", fmt.Errorf("missing authorization token")
+		tokenStr = extractAuthHeaderToken(c)
+	}
+	if tokenStr == "" {
+		return "", http.StatusUnauthorized, fmt.Errorf("missing authorization token")
 	}
 
-	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+	dongleID, err := middleware.ParseIdentity(tokenStr)
+	if err != nil {
+		return "", http.StatusUnauthorized, err
+	}
+
+	device, err := h.lookup.GetDevice(c.Request().Context(), dongleID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", http.StatusUnauthorized, fmt.Errorf("device not registered")
 		}
-		return []byte(h.jwtSecret), nil
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to validate token: %w", err)
+		return "", http.StatusInternalServerError, fmt.Errorf("failed to look up device")
+	}
+	if !device.PublicKey.Valid || device.PublicKey.String == "" {
+		return "", http.StatusUnauthorized, fmt.Errorf("device has no registered public key")
 	}
 
-	if !token.Valid {
-		return "", fmt.Errorf("invalid token")
+	if err := middleware.VerifySignedToken(tokenStr, device.PublicKey.String); err != nil {
+		return "", http.StatusUnauthorized, fmt.Errorf("failed to validate token: %w", err)
 	}
 
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return "", fmt.Errorf("failed to parse token claims")
-	}
-
-	dongleID, err := extractDongleIDFromClaims(claims)
-	if err != nil {
-		return "", err
-	}
-
-	return dongleID, nil
+	return dongleID, http.StatusOK, nil
 }
 
-// extractBearerToken reads the Bearer token from the Authorization header.
-func extractBearerToken(c echo.Context) string {
+// readCookieToken returns the value of the `jwt` cookie, which is how
+// openpilot's athenad carries its identity token (see athenad.py).
+func readCookieToken(c echo.Context) string {
+	cookie, err := c.Cookie("jwt")
+	if err != nil || cookie == nil {
+		return ""
+	}
+	return strings.TrimSpace(cookie.Value)
+}
+
+// extractAuthHeaderToken reads "JWT <token>" or "Bearer <token>" from the
+// Authorization header.
+func extractAuthHeaderToken(c echo.Context) string {
 	auth := c.Request().Header.Get("Authorization")
 	if auth == "" {
 		return ""
 	}
 	parts := strings.SplitN(auth, " ", 2)
-	if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
-		return strings.TrimSpace(parts[1])
+	if len(parts) != 2 {
+		return ""
 	}
-	return ""
-}
-
-// extractDongleIDFromClaims pulls the dongle_id from JWT claims, checking
-// "dongle_id", "identity", and "sub" in order.
-func extractDongleIDFromClaims(claims jwt.MapClaims) (string, error) {
-	for _, key := range []string{"dongle_id", "identity", "sub"} {
-		if val, ok := claims[key]; ok {
-			if s, ok := val.(string); ok && s != "" {
-				return s, nil
-			}
-		}
+	if !strings.EqualFold(parts[0], "JWT") && !strings.EqualFold(parts[0], "Bearer") {
+		return ""
 	}
-	return "", fmt.Errorf("failed to extract dongle_id from token claims")
+	return strings.TrimSpace(parts[1])
 }
 
 // RegisterRoutes wires up the WebSocket route on the given Echo instance.

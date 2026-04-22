@@ -53,35 +53,39 @@ func main() {
 	pilotAuth := api.NewPilotAuthHandler(queries, cfg)
 	pilotAuth.RegisterRoutes(e)
 
-	// Authenticated API groups.
-	v11 := e.Group("/v1.1", middleware.JWTAuthHMAC(cfg.JWTSecret))
+	// Authenticated API groups. Every request carries a per-device JWT
+	// signed with the private key openpilot generated during pilotauth; the
+	// middleware verifies it against the public_key stored for that device.
+	auth := middleware.JWTAuthFromDB(queries)
+
+	v11 := e.Group("/v1.1", auth)
 	deviceHandler := api.NewDeviceHandler(queries)
 	deviceHandler.RegisterRoutes(v11)
 
 	// Route listing and detail.
-	v1Route := e.Group("/v1/route", middleware.JWTAuthHMAC(cfg.JWTSecret))
+	v1Route := e.Group("/v1/route", auth)
 	routeHandler := api.NewRouteHandler(queries)
 	routeHandler.RegisterRoutes(v1Route)
 
 	// Upload URL and file upload.
-	v14 := e.Group("/v1.4", middleware.JWTAuthHMAC(cfg.JWTSecret))
+	v14 := e.Group("/v1.4", auth)
 	uploadHandler := api.NewUploadHandler(store, queries)
 	v14.GET("/:dongle_id/upload_url/", uploadHandler.GetUploadURL)
 	v14.GET("/:dongle_id/upload_url", uploadHandler.GetUploadURL)
 
-	uploadGroup := e.Group("/upload", middleware.JWTAuthHMAC(cfg.JWTSecret), echomw.BodyLimit("100M"))
+	uploadGroup := e.Group("/upload", auth, echomw.BodyLimit("100M"))
 	uploadGroup.PUT("/:dongle_id/*", uploadHandler.UploadFile)
 
 	// Device config parameters.
 	hub := ws.NewHub()
 	rpcCaller := ws.NewRPCCaller()
 
-	v1Config := e.Group("/v1", middleware.JWTAuthHMAC(cfg.JWTSecret))
+	v1Config := e.Group("/v1", auth)
 	configHandler := api.NewConfigHandler(queries, hub, rpcCaller)
 	configHandler.RegisterRoutes(v1Config)
 
 	// WebSocket for device communication.
-	wsHandler := ws.NewHandler(hub, cfg.JWTSecret, nil, rpcCaller)
+	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
 	wsHandler.RegisterRoutes(e)
 
 	s := &http.Server{

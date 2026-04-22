@@ -77,13 +77,12 @@ Copy the example env file and fill in your values:
 
 ```bash
 cp .env.example .env
-# Edit .env with your DATABASE_URL and JWT_SECRET
+# Edit .env with your DATABASE_URL
 ```
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | yes | -- | PostgreSQL connection string |
-| `JWT_SECRET` | yes | -- | Secret key for signing device auth tokens |
 | `STORAGE_PATH` | no | `./data` | Directory for uploaded video/log files |
 | `PORT` | no | `8080` | API server listen port |
 | `ALLOWED_SERIALS` | no | -- | Comma-separated allowlist of device serials permitted to register (all allowed if unset). The dongle ID is assigned server-side, so restriction is by hardware serial. |
