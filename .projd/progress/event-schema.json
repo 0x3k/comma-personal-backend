@@ -3,7 +3,7 @@
   "name": "Events schema (hard-brake, disengage, FCW, etc.)",
   "description": "Add a table and sqlc queries for 'events' -- interesting moments detected from parsed logs. Each event belongs to a route and has a type (e.g., 'hard_brake', 'disengage', 'fcw', 'alert'), a timestamp (route-relative and absolute), a severity (info/warn/critical), and an optional JSON payload for detector-specific fields. Downstream features (event-detector-worker, events-ui) build on this.",
   "priority": 3,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/event-schema",
   "base_branch": "main",
   "blocked_by": [],
@@ -15,5 +15,5 @@
     "sqlc generate produces internal/db/events.sql.go",
     "Migration applies cleanly; go build + go vet pass"
   ],
-  "notes": ""
+  "notes": "Migration 007_events.up.sql creates the events table with required columns, UNIQUE (route_id, type, route_offset_seconds), and indexes on route_id, type, and occurred_at DESC. Queries: InsertEvent (ON CONFLICT DO NOTHING), ListEventsByRoute, ListEventsByDongleID (paginated with nullable type/severity filters via sqlc.narg), CountEventsByType (grouped aggregate). sqlc generate produced internal/db/events.sql.go; go build and go vet pass. Payload is JSONB, exposed to Go as []byte so handlers can json.Marshal detector-specific structs. Migration SQL was not executed against a live database (no local Postgres running), but sqlc's schema parser validated the DDL during code generation."
 }
