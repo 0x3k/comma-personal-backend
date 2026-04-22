@@ -433,6 +433,37 @@ func TestSignals_DongleMismatchReturns403(t *testing.T) {
 	}
 }
 
+// TestSignals_SessionAuthProceeds verifies that a session-authenticated caller
+// (ContextKeyAuthMode = AuthModeSession, no ContextKeyDongleID set) is allowed
+// through. Regression test for IH-008.
+func TestSignals_SessionAuthProceeds(t *testing.T) {
+	const dongle = "dongle-1"
+	const route = "2024-03-15--12-30-00"
+
+	store := storage.New(t.TempDir())
+	mock := &signalsMockDB{
+		route:    newSignalsMockRoute(1, dongle, route),
+		segments: []db.Segment{},
+	}
+	handler := NewSignalsHandler(db.New(mock), store)
+
+	e := echo.New()
+	target := fmt.Sprintf("/v1/routes/%s/%s/signals", dongle, route)
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id", "route_name")
+	c.SetParamValues(dongle, route)
+	c.Set(middleware.ContextKeyAuthMode, middleware.AuthModeSession)
+
+	if err := handler.GetRouteSignals(c); err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestSignals_MultiSegment concatenates two segments (one with a qlog, one
 // without) and verifies the qlog-backed segment contributes in order.
 func TestSignals_MultiSegment(t *testing.T) {

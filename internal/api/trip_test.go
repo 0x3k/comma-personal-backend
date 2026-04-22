@@ -810,6 +810,67 @@ func (s stubTripDeviceLookup) GetDevice(_ context.Context, _ string) (db.Device,
 	return *s.device, nil
 }
 
+// TestTripHandlerSessionAuth verifies that a session-authenticated caller
+// (ContextKeyAuthMode = AuthModeSession, no ContextKeyDongleID set) is
+// allowed through on both endpoints. Regression test for IH-007.
+func TestTripHandlerSessionAuth(t *testing.T) {
+	now := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	baseRoute := &db.Route{
+		ID:        9,
+		DongleID:  "abc123",
+		RouteName: "2024-06-01--11-00-00",
+		StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+		EndTime:   pgtype.Timestamptz{Time: now.Add(15 * time.Minute), Valid: true},
+		CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	t.Run("stats: session auth proceeds to 200", func(t *testing.T) {
+		mock := &tripMockDB{
+			totals: db.SumTripStatsByDongleIDRow{TripCount: 0},
+			trips:  []db.ListTripsByDongleIDRow{},
+		}
+		handler := NewTripHandler(db.New(mock))
+
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/v1/devices/abc123/stats", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("dongle_id")
+		c.SetParamValues("abc123")
+		c.Set(middleware.ContextKeyAuthMode, middleware.AuthModeSession)
+
+		if err := handler.GetStats(c); err != nil {
+			t.Fatalf("handler returned error: %v", err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("trip: session auth proceeds to 200", func(t *testing.T) {
+		mock := &tripMockDB{
+			route: baseRoute,
+			trip:  newTestTripModel(1, 9, now),
+		}
+		handler := NewTripHandler(db.New(mock))
+
+		e := echo.New()
+		req := httptest.NewRequest(http.MethodGet, "/v1/routes/abc123/2024-06-01--11-00-00/trip", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		c.SetParamNames("dongle_id", "route_name")
+		c.SetParamValues("abc123", "2024-06-01--11-00-00")
+		c.Set(middleware.ContextKeyAuthMode, middleware.AuthModeSession)
+
+		if err := handler.GetTripByRoute(c); err != nil {
+			t.Fatalf("handler returned error: %v", err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
 func TestTripHandlerRegisterRoutes(t *testing.T) {
 	mock := &tripMockDB{}
 	queries := db.New(mock)

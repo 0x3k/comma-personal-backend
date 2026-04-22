@@ -10,8 +10,8 @@
 | IH-004 | low | fixed | `Transcoder.Start` releases the mutex during `wg.Wait()`, exposing a concurrent-start race |
 | IH-005 | low | fixed | `ListRoutesByDevicePaginated` has no tiebreaker, so paging through routes with equal `created_at` can skip or duplicate rows |
 | IH-006 | low | fixed | `HandleWebSocket` returns an error after `upgrader.Upgrade` already wrote the HTTP error response |
-| IH-007 | high | open | `TripHandler.GetStats` and `GetTripByRoute` reject every session-authenticated request with 403 |
-| IH-008 | high | open | `SignalsHandler.GetRouteSignals` rejects every session-authenticated request with 403 |
+| IH-007 | high | fixed | `TripHandler.GetStats` and `GetTripByRoute` reject every session-authenticated request with 403 |
+| IH-008 | high | fixed | `SignalsHandler.GetRouteSignals` rejects every session-authenticated request with 403 |
 
 ---
 
@@ -157,7 +157,7 @@
 - **Severity**: high
 - **Category**: logic
 - **Location**: `internal/api/trip.go:87-93` (`GetStats`) and `internal/api/trip.go:170-176` (`GetTripByRoute`)
-- **Status**: open
+- **Status**: fixed
 - **Description**: Both handlers hand-roll a per-device authorization check that only considers the JWT case and never looks at `ContextKeyAuthMode`:
 
   ```go
@@ -187,7 +187,7 @@
 - **Severity**: high
 - **Category**: logic
 - **Location**: `internal/api/signals.go:81-87`
-- **Status**: open
+- **Status**: fixed
 - **Description**: Same pattern as IH-007 in a different handler:
 
   ```go

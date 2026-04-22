@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v4"
 
-	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/cereal"
 	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/storage"
@@ -78,12 +77,8 @@ func (h *SignalsHandler) GetRouteSignals(c echo.Context) error {
 	dongleID := c.Param("dongle_id")
 	routeName := c.Param("route_name")
 
-	authDongleID, _ := c.Get(middleware.ContextKeyDongleID).(string)
-	if authDongleID != dongleID {
-		return c.JSON(http.StatusForbidden, errorResponse{
-			Error: "dongle_id does not match authenticated device",
-			Code:  http.StatusForbidden,
-		})
+	if handled, err := checkDongleAccess(c, dongleID); handled {
+		return err
 	}
 
 	ctx := c.Request().Context()
