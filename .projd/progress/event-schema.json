@@ -3,8 +3,9 @@
   "name": "Events schema (hard-brake, disengage, FCW, etc.)",
   "description": "Add a table and sqlc queries for 'events' -- interesting moments detected from parsed logs. Each event belongs to a route and has a type (e.g., 'hard_brake', 'disengage', 'fcw', 'alert'), a timestamp (route-relative and absolute), a severity (info/warn/critical), and an optional JSON payload for detector-specific fields. Downstream features (event-detector-worker, events-ui) build on this.",
   "priority": 3,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/event-schema",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "sql/migrations/007_events.up.sql creates an events table: id SERIAL PK, route_id INT NOT NULL REFERENCES routes(id) ON DELETE CASCADE, type TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'info', route_offset_seconds DOUBLE PRECISION NOT NULL, occurred_at TIMESTAMPTZ, payload JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT now(); indexes on (route_id), (type), (occurred_at desc)",
