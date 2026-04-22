@@ -2,13 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch, BASE_URL } from "@/lib/api";
-import type { DeviceParam } from "@/lib/types";
+import type {
+  DeviceParam,
+  RetentionSetting,
+  StorageUsageReport,
+} from "@/lib/types";
+import { formatBytes } from "@/lib/format";
 import { PageWrapper } from "@/components/layout/PageWrapper";
 import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
+import { Toast } from "@/components/ui/Toast";
 
 /**
  * Default dongle ID used when none is configured.
@@ -220,6 +226,311 @@ function DeleteConfirm({ paramKey, onConfirm, onCancel }: DeleteConfirmProps) {
   );
 }
 
+// -- Storage panel ------------------------------------------------------------
+
+interface FilesystemBarProps {
+  totalBytes: number;
+  availableBytes: number;
+}
+
+/** Progress bar showing filesystem used vs. available. */
+function FilesystemBar({ totalBytes, availableBytes }: FilesystemBarProps) {
+  const usedBytes = Math.max(totalBytes - availableBytes, 0);
+  const pct =
+    totalBytes > 0 ? Math.min(100, Math.max(0, (usedBytes / totalBytes) * 100)) : 0;
+
+  // Color shifts from brand (ok) to warning (>=75%) to danger (>=90%).
+  const barColor =
+    pct >= 90
+      ? "bg-danger-500"
+      : pct >= 75
+        ? "bg-warning-500"
+        : "bg-[var(--accent)]";
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-sm">
+        <span className="text-[var(--text-secondary)]">Filesystem</span>
+        <span className="font-mono text-xs text-[var(--text-primary)]">
+          {formatBytes(usedBytes)} used / {formatBytes(totalBytes)} total (
+          {formatBytes(availableBytes)} free)
+        </span>
+      </div>
+      <div
+        className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-tertiary)]"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(pct)}
+        aria-label="Filesystem usage"
+      >
+        <div
+          className={["h-full transition-all", barColor].join(" ")}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface RetentionEditorProps {
+  initialDays: number;
+  onSaved: (days: number) => void;
+}
+
+/** Number input + Save button for the retention window. */
+function RetentionEditor({ initialDays, onSaved }: RetentionEditorProps) {
+  const [draft, setDraft] = useState<string>(String(initialDays));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(String(initialDays));
+  }, [initialDays]);
+
+  const parsed = Number.parseInt(draft, 10);
+  const validNumber = Number.isFinite(parsed) && parsed >= 0;
+  const current = Number.parseInt(String(initialDays), 10);
+  const dirty = validNumber && parsed !== current;
+
+  async function handleSave() {
+    if (!validNumber) {
+      setError("Enter 0 or a positive integer");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const resp = await apiFetch<RetentionSetting>(
+        `/v1/settings/retention`,
+        { method: "PUT", body: { retention_days: parsed } },
+      );
+      onSaved(resp.retention_days);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save retention");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="flex-1">
+          <label
+            htmlFor="retention-days"
+            className="mb-1 block text-sm font-medium text-[var(--text-secondary)]"
+          >
+            Retention (days)
+          </label>
+          <input
+            id="retention-days"
+            type="number"
+            min={0}
+            step={1}
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setError(null);
+            }}
+            disabled={saving}
+            className="w-full rounded border border-[var(--border-secondary)] bg-[var(--bg-primary)] px-3 py-1.5 text-sm text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--ring-focus)] sm:max-w-[12rem]"
+          />
+          <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+            {validNumber && parsed === 0
+              ? "Never delete automatically"
+              : "Routes older than this are eligible for deletion (preserved routes are exempt)."}
+          </p>
+        </div>
+        <Button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={saving || !dirty || !validNumber}
+        >
+          {saving ? "Saving..." : "Save"}
+        </Button>
+      </div>
+      {error && (
+        <p className="text-xs text-danger-500" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+interface StoragePanelProps {
+  /** Shows a success toast; reset by the caller via onDismissToast. */
+  toast: string | null;
+  onToast: (message: string) => void;
+  onDismissToast: () => void;
+}
+
+function StoragePanel({ toast, onToast, onDismissToast }: StoragePanelProps) {
+  const [usage, setUsage] = useState<StorageUsageReport | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  const [usageLoading, setUsageLoading] = useState(true);
+
+  const [retention, setRetention] = useState<number | null>(null);
+  const [retentionError, setRetentionError] = useState<string | null>(null);
+  const [retentionLoading, setRetentionLoading] = useState(true);
+
+  const fetchUsage = useCallback(async () => {
+    setUsageLoading(true);
+    setUsageError(null);
+    try {
+      const data = await apiFetch<StorageUsageReport>(`/v1/storage/usage`);
+      setUsage(data);
+    } catch (err) {
+      setUsageError(err instanceof Error ? err.message : "Failed to load usage");
+    } finally {
+      setUsageLoading(false);
+    }
+  }, []);
+
+  const fetchRetention = useCallback(async () => {
+    setRetentionLoading(true);
+    setRetentionError(null);
+    try {
+      const data = await apiFetch<RetentionSetting>(`/v1/settings/retention`);
+      setRetention(data.retention_days);
+    } catch (err) {
+      setRetentionError(
+        err instanceof Error ? err.message : "Failed to load retention setting",
+      );
+    } finally {
+      setRetentionLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchUsage();
+    void fetchRetention();
+  }, [fetchUsage, fetchRetention]);
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <h2 className="text-subheading">Storage</h2>
+          {usage && (
+            <Badge variant="info">{formatBytes(usage.totalBytes)} stored</Badge>
+          )}
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-6">
+        {toast && (
+          <Toast
+            variant="success"
+            message={toast}
+            onDismiss={onDismissToast}
+          />
+        )}
+
+        {/* Filesystem progress bar */}
+        {usageLoading && (
+          <div className="flex items-center justify-center py-4">
+            <Spinner size="md" label="Loading storage usage" />
+          </div>
+        )}
+        {usageError && !usageLoading && (
+          <ErrorMessage
+            title="Failed to load storage usage"
+            message={usageError}
+            retry={() => void fetchUsage()}
+          />
+        )}
+        {usage && !usageLoading && !usageError && (
+          <FilesystemBar
+            totalBytes={usage.filesystemTotalBytes}
+            availableBytes={usage.filesystemAvailableBytes}
+          />
+        )}
+
+        {/* Per-device byte breakdown */}
+        {usage && !usageLoading && !usageError && (
+          <div>
+            <h3 className="mb-2 text-sm font-medium text-[var(--text-secondary)]">
+              Per-device usage
+            </h3>
+            {usage.devices.length === 0 ? (
+              <p className="text-caption">No device data stored yet.</p>
+            ) : (
+              <div className="overflow-x-auto rounded border border-[var(--border-primary)]">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--border-primary)]">
+                      <th className="px-4 py-2 text-left font-medium text-[var(--text-secondary)]">
+                        Dongle ID
+                      </th>
+                      <th className="px-4 py-2 text-right font-medium text-[var(--text-secondary)]">
+                        Routes
+                      </th>
+                      <th className="px-4 py-2 text-right font-medium text-[var(--text-secondary)]">
+                        Bytes
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usage.devices.map((d) => (
+                      <tr
+                        key={d.dongleId}
+                        className="border-b border-[var(--border-primary)] last:border-b-0"
+                      >
+                        <td className="px-4 py-2 font-mono text-xs text-[var(--text-primary)]">
+                          {d.dongleId}
+                        </td>
+                        <td className="px-4 py-2 text-right text-[var(--text-primary)]">
+                          {d.routeCount}
+                        </td>
+                        <td className="px-4 py-2 text-right font-mono text-xs text-[var(--text-primary)]">
+                          {formatBytes(d.bytes)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Retention subsection */}
+        <div className="border-t border-[var(--border-primary)] pt-4">
+          <h3 className="mb-2 text-sm font-medium text-[var(--text-secondary)]">
+            Retention
+          </h3>
+          {retentionLoading && (
+            <div className="flex items-center py-2">
+              <Spinner size="sm" label="Loading retention" />
+            </div>
+          )}
+          {retentionError && !retentionLoading && (
+            <ErrorMessage
+              title="Failed to load retention setting"
+              message={retentionError}
+              retry={() => void fetchRetention()}
+            />
+          )}
+          {retention !== null && !retentionLoading && !retentionError && (
+            <RetentionEditor
+              initialDays={retention}
+              onSaved={(days) => {
+                setRetention(days);
+                onToast(
+                  days === 0
+                    ? "Retention saved (never delete automatically)"
+                    : `Retention saved (${days} day${days === 1 ? "" : "s"})`,
+                );
+              }}
+            />
+          )}
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
 // -- Main page ----------------------------------------------------------------
 
 export default function SettingsPage() {
@@ -228,6 +539,7 @@ export default function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [storageToast, setStorageToast] = useState<string | null>(null);
 
   const connectionStatus = useConnectionStatus();
 
@@ -426,6 +738,13 @@ export default function SettingsPage() {
           </CardBody>
         </Card>
       )}
+
+      {/* Storage usage + retention */}
+      <StoragePanel
+        toast={storageToast}
+        onToast={setStorageToast}
+        onDismissToast={() => setStorageToast(null)}
+      />
     </PageWrapper>
   );
 }
