@@ -3,8 +3,9 @@
   "name": "On-demand snapshot button + modal",
   "description": "Add a 'Take Snapshot' button on the devices page that calls takeSnapshot on the connected device and shows the returned JPEG(s) in a modal. Useful for 'is the car OK?' moments.",
   "priority": 4,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/snapshot-ui",
+  "base_branch": "main",
   "blocked_by": ["athena-rpc-take-snapshot"],
   "acceptance_criteria": [
     "Backend adds POST /v1/devices/:dongle_id/snapshot that calls CallTakeSnapshot and returns { jpeg_back, jpeg_front } as base64 data-url strings (data:image/jpeg;base64,...); 503 if the device is offline; requires session-or-JWT auth",
