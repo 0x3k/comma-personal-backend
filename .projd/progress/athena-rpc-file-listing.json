@@ -3,7 +3,7 @@
   "name": "Athena RPC: listDataDirectory",
   "description": "Add the listDataDirectory openpilot athenad RPC method. Takes an optional prefix string and returns a list of filenames under the device's data directory (typically /data/media/0/realdata). Reference: openpilot/system/athena/athenad.py lines 388-392 (../../openpilot/system/athena/athenad.py). Useful for inspecting what the device has locally that has not yet been uploaded.",
   "priority": 2,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/athena-rpc-file-listing",
   "base_branch": "main",
   "blocked_by": [],
