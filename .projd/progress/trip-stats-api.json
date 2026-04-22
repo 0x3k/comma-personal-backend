@@ -3,8 +3,9 @@
   "name": "Trip stats API endpoints",
   "description": "Expose the trip data computed by trip-aggregator-worker over HTTP so the frontend can render summaries. Two endpoints: one for a single device's lifetime totals + recent trip list (dashboard-home consumes this), and one for a single trip by route_id (route detail page can overlay stats).",
   "priority": 2,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/trip-stats-api",
+  "base_branch": "main",
   "blocked_by": ["trip-model"],
   "acceptance_criteria": [
     "GET /v1/devices/:dongle_id/stats returns JSON { totals: {trip_count, total_distance_meters, total_duration_seconds, total_engaged_seconds}, recent: [Trip...] } using the SumTripStatsByDongleID and ListTripsByDongleID queries; recent list is limited to 20 by default with optional ?limit= ?offset=",
