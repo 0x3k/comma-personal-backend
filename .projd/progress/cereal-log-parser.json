@@ -3,7 +3,7 @@
   "name": "Cereal log parser (rlog/qlog -> structured signals)",
   "description": "Add a Go package that parses openpilot's rlog and qlog files into time-series signals. rlogs are Cap'n Proto messages in the cereal schema (repo: openpilot/cereal/log.capnp at ../../openpilot/cereal/log.capnp). qlogs are a sampled subset. For a first pass, extract: carState (vEgo, steeringAngleDeg, brakePressed, gasPressed), controlsState (enabled, alertText1), deviceState (thermalStatus). Downstream features (log-signal-api, event-detector-worker) depend on this.",
   "priority": 2,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/cereal-log-parser",
   "base_branch": "main",
   "blocked_by": [],
@@ -17,5 +17,5 @@
     "go test ./internal/cereal/... passes",
     "go vet ./... and go build ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "Schema bindings generated from a vendored copy of openpilot/cereal/log.capnp (plus its car/legacy/custom imports) checked in under internal/cereal/schema. Parser auto-detects bz2 and streams events without buffering. SignalExtractor pulls vEgo/steering/brake/gas from carState and engaged/alertText from SelfdriveState (with fallback to deprecated ControlsState fields for older logs). deviceState.thermalStatus is not part of DrivingSignals per the signature in the acceptance criteria; callers that need it can use the lower-level Parser. Zstd logs are rejected explicitly with ErrZstdUnsupported."
 }
