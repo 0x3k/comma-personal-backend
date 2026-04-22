@@ -3,8 +3,9 @@
   "name": "Athena RPC: listDataDirectory",
   "description": "Add the listDataDirectory openpilot athenad RPC method. Takes an optional prefix string and returns a list of filenames under the device's data directory (typically /data/media/0/realdata). Reference: openpilot/system/athena/athenad.py lines 388-392 (../../openpilot/system/athena/athenad.py). Useful for inspecting what the device has locally that has not yet been uploaded.",
   "priority": 2,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/athena-rpc-file-listing",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/ws/methods.go defines a ListDataDirectoryParams struct with a single optional Prefix string json:\"prefix\"",
