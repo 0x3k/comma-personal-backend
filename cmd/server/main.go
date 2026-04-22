@@ -15,6 +15,7 @@ import (
 	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/storage"
 	"comma-personal-backend/internal/ws"
 )
@@ -37,6 +38,11 @@ func main() {
 	queries := db.New(pool)
 	store := storage.New(cfg.StoragePath)
 
+	// Metrics registry is shared across the process: the HTTP middleware,
+	// the transcoder, the RPC caller, and the hub all observe into it, and
+	// /metrics exposes it.
+	m := metrics.New()
+
 	e := echo.New()
 
 	// Global rate limiter: 20 requests/second per IP.
@@ -44,6 +50,14 @@ func main() {
 
 	// Default body limit for JSON endpoints (1MB).
 	e.Use(echomw.BodyLimit("1M"))
+
+	// HTTP metrics middleware: registered once so every route is observed.
+	// It skips /metrics internally to avoid self-observation noise.
+	e.Use(metrics.EchoMiddleware(m))
+
+	// Prometheus scrape endpoint. Intentionally unauthenticated per the
+	// feature spec -- front with nginx if auth is needed.
+	e.GET("/metrics", echo.WrapHandler(m.Handler()))
 
 	e.GET("/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -72,15 +86,16 @@ func main() {
 	routeHandler := api.NewRouteHandler(queries)
 	routeHandler.RegisterRoutes(v1Route)
 
-	// Route export endpoints (e.g. GPX download). Mounted under the plural
-	// /v1/routes/ path so they do not collide with /v1/route/:dongle_id.
+	// Plural /v1/routes/ path hosts route mutation and export endpoints so
+	// they do not collide with /v1/route/:dongle_id.
 	v1Routes := e.Group("/v1/routes", auth)
+	routeHandler.RegisterPreservedRoute(v1Routes)
 	exportHandler := api.NewExportHandler(queries)
 	exportHandler.RegisterRoutes(v1Routes)
 
 	// Upload URL and file upload.
 	v14 := e.Group("/v1.4", auth)
-	uploadHandler := api.NewUploadHandler(store, queries)
+	uploadHandler := api.NewUploadHandlerWithMetrics(store, queries, m)
 	v14.GET("/:dongle_id/upload_url/", uploadHandler.GetUploadURL)
 	v14.GET("/:dongle_id/upload_url", uploadHandler.GetUploadURL)
 
@@ -88,12 +103,18 @@ func main() {
 	uploadGroup.PUT("/:dongle_id/*", uploadHandler.UploadFile)
 
 	// Device config parameters.
-	hub := ws.NewHub()
-	rpcCaller := ws.NewRPCCaller()
+	hub := ws.NewHubWithMetrics(m)
+	rpcCaller := ws.NewRPCCallerWithMetrics(m)
 
 	v1Config := e.Group("/v1", auth)
 	configHandler := api.NewConfigHandler(queries, hub, rpcCaller)
 	configHandler.RegisterRoutes(v1Config)
+
+	// Storage usage (disk accounting) endpoint. The walk is memoized in the
+	// storage package so repeated polling stays cheap.
+	v1Storage := e.Group("/v1", auth)
+	storageHandler := api.NewStorageHandler(store)
+	storageHandler.RegisterRoutes(v1Storage)
 
 	// WebSocket for device communication.
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)

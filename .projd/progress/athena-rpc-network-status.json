@@ -3,8 +3,9 @@
   "name": "Athena RPC: network status (getNetworkMetered, getNetworks)",
   "description": "Add two openpilot athenad RPC methods: getNetworkMetered (returns bool - is the current connection metered?) and getNetworks (returns a list of available networks with SSID, signal strength, etc.). Reference: openpilot/system/athena/athenad.py lines 549-560 (../../openpilot/system/athena/athenad.py). These complement the existing CallGetNetworkType so the UI can render a complete network panel.",
   "priority": 1,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/athena-rpc-network-status",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/ws/methods.go gains CallGetNetworkMetered(caller, client) (bool, error) following the CallGetNetworkType pattern",
