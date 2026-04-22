@@ -86,10 +86,12 @@ func main() {
 	routeHandler := api.NewRouteHandler(queries)
 	routeHandler.RegisterRoutes(v1Route)
 
-	// Route mutation endpoints live under /v1/routes (plural) to mirror
-	// comma connect's URL convention. Currently only the preserved toggle.
+	// Plural /v1/routes/ path hosts route mutation and export endpoints so
+	// they do not collide with /v1/route/:dongle_id.
 	v1Routes := e.Group("/v1/routes", auth)
 	routeHandler.RegisterPreservedRoute(v1Routes)
+	exportHandler := api.NewExportHandler(queries)
+	exportHandler.RegisterRoutes(v1Routes)
 
 	// Upload URL and file upload.
 	v14 := e.Group("/v1.4", auth)
