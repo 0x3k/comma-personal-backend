@@ -3,8 +3,9 @@
   "name": "Cereal log parser (rlog/qlog -> structured signals)",
   "description": "Add a Go package that parses openpilot's rlog and qlog files into time-series signals. rlogs are Cap'n Proto messages in the cereal schema (repo: openpilot/cereal/log.capnp at ../../openpilot/cereal/log.capnp). qlogs are a sampled subset. For a first pass, extract: carState (vEgo, steeringAngleDeg, brakePressed, gasPressed), controlsState (enabled, alertText1), deviceState (thermalStatus). Downstream features (log-signal-api, event-detector-worker) depend on this.",
   "priority": 2,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/cereal-log-parser",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/cereal/parser.go defines a Parser that accepts an io.Reader (a raw or bz2-compressed rlog/qlog) and yields cereal.Event objects",
