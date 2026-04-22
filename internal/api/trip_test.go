@@ -700,7 +700,7 @@ func TestTripHandlerAuth(t *testing.T) {
 
 	// The JWTAuthFromDB middleware needs a DeviceLookup. We use an in-line
 	// stub so this test is independent of the unified mockDBTX.
-	lookup := stubDeviceLookup{device: testDevice}
+	lookup := stubTripDeviceLookup{device: testDevice}
 
 	tests := []struct {
 		name       string
@@ -791,16 +791,16 @@ func TestTripHandlerAuth(t *testing.T) {
 	}
 }
 
-// stubDeviceLookup satisfies middleware.DeviceLookup for the auth test. It
+// stubTripDeviceLookup satisfies middleware.DeviceLookup for the auth test. It
 // cannot reuse tripMockDB because DeviceLookup takes a dongleID string, not a
 // raw SQL query -- and we want the auth test to exercise the real
 // JWTAuthFromDB code path.
-type stubDeviceLookup struct {
+type stubTripDeviceLookup struct {
 	device *db.Device
 	err    error
 }
 
-func (s stubDeviceLookup) GetDevice(_ context.Context, _ string) (db.Device, error) {
+func (s stubTripDeviceLookup) GetDevice(_ context.Context, _ string) (db.Device, error) {
 	if s.err != nil {
 		return db.Device{}, s.err
 	}
