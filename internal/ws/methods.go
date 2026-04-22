@@ -146,6 +146,34 @@ func CallUploadFileToUrl(caller *RPCCaller, client *Client, url string, headers 
 	return nil
 }
 
+// UploadFilesToUrlsParams is the batch variant of UploadFileToUrlParams; each
+// entry specifies a file (fn), destination URL, and headers. This mirrors
+// openpilot's athenad uploadFilesToUrls RPC.
+type UploadFilesToUrlsParams []UploadFileToUrlParams
+
+// CallUploadFilesToUrls instructs the device to enqueue multiple file uploads
+// in a single RPC round-trip. It returns the device's response map, which
+// typically contains "enqueued" (count), "items" (enqueued item descriptors),
+// and optionally "failed" (list of file names that were rejected).
+func CallUploadFilesToUrls(caller *RPCCaller, client *Client, items []UploadFileToUrlParams) (map[string]interface{}, error) {
+	params := UploadFilesToUrlsParams(items)
+
+	resp, err := caller.Call(client, "uploadFilesToUrls", params)
+	if err != nil {
+		return nil, fmt.Errorf("uploadFilesToUrls failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("uploadFilesToUrls returned error: %w", resp.Error)
+	}
+
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("uploadFilesToUrls: unexpected result type %T", resp.Result)
+	}
+	return result, nil
+}
+
 // CallGetNetworkType asks the device for its current network type.
 func CallGetNetworkType(caller *RPCCaller, client *Client) (interface{}, error) {
 	resp, err := caller.Call(client, "getNetworkType", nil)
@@ -206,6 +234,7 @@ func CallSetNavDestination(caller *RPCCaller, client *Client, lat, lng float64, 
 // for testing or when the backend acts as a simulated device.
 func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["uploadFileToUrl"] = handleUploadFileToUrl
+	handlers["uploadFilesToUrls"] = handleUploadFilesToUrls
 	handlers["getNetworkType"] = handleGetNetworkType
 	handlers["getSimInfo"] = handleGetSimInfo
 	handlers["setNavDestination"] = handleSetNavDestination
@@ -227,6 +256,31 @@ func handleUploadFileToUrl(_ string, params json.RawMessage) (interface{}, *RPCE
 	}
 
 	return map[string]int{"enqueued": 1}, nil
+}
+
+// handleUploadFilesToUrls is a device-side stub handler for uploadFilesToUrls.
+// A real device would enqueue each file on its uploader; this handler echoes
+// the request shape and reports enqueued == len(items) with no failures.
+func handleUploadFilesToUrls(_ string, params json.RawMessage) (interface{}, *RPCError) {
+	var items UploadFilesToUrlsParams
+	if err := json.Unmarshal(params, &items); err != nil {
+		return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid params: %v", err))
+	}
+
+	echoed := make([]map[string]interface{}, 0, len(items))
+	for _, it := range items {
+		echoed = append(echoed, map[string]interface{}{
+			"fn":      it.Path,
+			"url":     it.URL,
+			"headers": it.Headers,
+		})
+	}
+
+	return map[string]interface{}{
+		"enqueued": len(items),
+		"items":    echoed,
+		"failed":   []string{},
+	}, nil
 }
 
 // handleGetNetworkType is a device-side stub handler for getNetworkType.

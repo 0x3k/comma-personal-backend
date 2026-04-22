@@ -245,6 +245,182 @@ func TestCallUploadFileToUrl_ParamsMarshaled(t *testing.T) {
 	}
 }
 
+func TestCallUploadFilesToUrls_Empty(t *testing.T) {
+	caller := NewRPCCaller()
+	deviceResult := map[string]interface{}{
+		"enqueued": float64(0),
+		"items":    []interface{}{},
+		"failed":   []interface{}{},
+	}
+	client := testClientWithResponder(t, caller, deviceResult, nil)
+
+	result, err := CallUploadFilesToUrls(caller, client, []UploadFileToUrlParams{})
+	if err != nil {
+		t.Fatalf("CallUploadFilesToUrls returned error: %v", err)
+	}
+	if result["enqueued"] != float64(0) {
+		t.Errorf("enqueued = %v, want 0", result["enqueued"])
+	}
+}
+
+func TestCallUploadFilesToUrls_SingleItem(t *testing.T) {
+	caller := NewRPCCaller()
+	deviceResult := map[string]interface{}{
+		"enqueued": float64(1),
+		"items": []interface{}{
+			map[string]interface{}{"fn": "/data/rlog", "url": "https://example.com/upload"},
+		},
+		"failed": []interface{}{},
+	}
+	client := testClientWithResponder(t, caller, deviceResult, nil)
+
+	items := []UploadFileToUrlParams{
+		{URL: "https://example.com/upload", Headers: map[string]string{"Authorization": "Bearer tok"}, Path: "/data/rlog"},
+	}
+	result, err := CallUploadFilesToUrls(caller, client, items)
+	if err != nil {
+		t.Fatalf("CallUploadFilesToUrls returned error: %v", err)
+	}
+	if result["enqueued"] != float64(1) {
+		t.Errorf("enqueued = %v, want 1", result["enqueued"])
+	}
+}
+
+func TestCallUploadFilesToUrls_ThreeItems(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "batch-check",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+
+	// Responder that verifies the outgoing params shape and dispatches through
+	// the shared device-side handler.
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		var p UploadFilesToUrlsParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return
+		}
+		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
+		if len(p) != 3 || p[0].Path != "/data/a" || p[2].URL != "https://example.com/c" {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected params")
+			caller.HandleResponse(resp)
+			return
+		}
+		result, rpcErr := handleUploadFilesToUrls("batch-check", req.Params)
+		if rpcErr != nil {
+			resp.Error = rpcErr
+		} else {
+			// Round-trip through JSON so the client sees the same decoded
+			// types (float64, []interface{}) it would from a real device.
+			b, _ := json.Marshal(result)
+			var decoded map[string]interface{}
+			_ = json.Unmarshal(b, &decoded)
+			resp.Result = decoded
+		}
+		caller.HandleResponse(resp)
+	}()
+
+	t.Cleanup(func() { c.Close() })
+
+	items := []UploadFileToUrlParams{
+		{URL: "https://example.com/a", Headers: map[string]string{"X-A": "1"}, Path: "/data/a"},
+		{URL: "https://example.com/b", Headers: map[string]string{"X-B": "2"}, Path: "/data/b"},
+		{URL: "https://example.com/c", Headers: map[string]string{"X-C": "3"}, Path: "/data/c"},
+	}
+	result, err := CallUploadFilesToUrls(caller, c, items)
+	if err != nil {
+		t.Fatalf("CallUploadFilesToUrls returned error: %v", err)
+	}
+	if result["enqueued"] != float64(3) {
+		t.Errorf("enqueued = %v, want 3", result["enqueued"])
+	}
+	echoed, ok := result["items"].([]interface{})
+	if !ok {
+		t.Fatalf("items is not []interface{}, got %T", result["items"])
+	}
+	if len(echoed) != 3 {
+		t.Errorf("echoed items = %d, want 3", len(echoed))
+	}
+}
+
+func TestCallUploadFilesToUrls_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "batch upload failed")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallUploadFilesToUrls(caller, client, []UploadFileToUrlParams{
+		{URL: "https://example.com/upload", Path: "/data/rlog"},
+	})
+	if err == nil {
+		t.Fatal("expected error from CallUploadFilesToUrls")
+	}
+}
+
+func TestHandleUploadFilesToUrls_Valid(t *testing.T) {
+	params := json.RawMessage(`[{"url":"https://example.com/a","headers":{"X-A":"1"},"fn":"/data/a"},{"url":"https://example.com/b","headers":{"X-B":"2"},"fn":"/data/b"}]`)
+
+	result, rpcErr := handleUploadFilesToUrls("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not map[string]interface{}, got %T", result)
+	}
+	if m["enqueued"] != 2 {
+		t.Errorf("enqueued = %v, want 2", m["enqueued"])
+	}
+	echoed, ok := m["items"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("items is not []map[string]interface{}, got %T", m["items"])
+	}
+	if len(echoed) != 2 {
+		t.Errorf("echoed items = %d, want 2", len(echoed))
+	}
+	if echoed[0]["fn"] != "/data/a" {
+		t.Errorf("echoed[0].fn = %v, want /data/a", echoed[0]["fn"])
+	}
+}
+
+func TestHandleUploadFilesToUrls_Empty(t *testing.T) {
+	params := json.RawMessage(`[]`)
+
+	result, rpcErr := handleUploadFilesToUrls("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result is not map[string]interface{}, got %T", result)
+	}
+	if m["enqueued"] != 0 {
+		t.Errorf("enqueued = %v, want 0", m["enqueued"])
+	}
+}
+
+func TestHandleUploadFilesToUrls_InvalidJSON(t *testing.T) {
+	params := json.RawMessage(`not json`)
+
+	_, rpcErr := handleUploadFilesToUrls("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+
 func TestCallSetNavDestination(t *testing.T) {
 	caller := NewRPCCaller()
 	client := testClientWithResponder(t, caller, map[string]bool{"success": true}, nil)
@@ -466,6 +642,7 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 
 	expected := []string{
 		"uploadFileToUrl",
+		"uploadFilesToUrls",
 		"getNetworkType",
 		"getSimInfo",
 		"setNavDestination",
