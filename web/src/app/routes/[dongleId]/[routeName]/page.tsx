@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch, BASE_URL } from "@/lib/api";
@@ -9,6 +9,8 @@ import {
   MultiCameraPlayer,
   type CameraType,
 } from "@/components/video/MultiCameraPlayer";
+import { SignalTimeline } from "@/components/video/SignalTimeline";
+import type { VideoPlayerHandle } from "@/components/video/VideoPlayer";
 import { PageWrapper } from "@/components/layout/PageWrapper";
 import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
@@ -17,6 +19,7 @@ import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Button } from "@/components/ui/Button";
 import TripMap from "@/components/map/TripMap";
 import { LogViewer } from "@/components/logs/LogViewer";
+import { ShareButton } from "@/components/ShareButton";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
   { key: "fcameraUploaded", label: "fcamera" },
@@ -94,12 +97,16 @@ export default function RouteDetailPage() {
   const [activeTab, setActiveTab] = useState<DetailTab>("segments");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   // Deep-link support for /moments: when the URL carries ?t=<seconds>, we
-  // auto-select the segment that contains that offset. The in-segment
-  // playhead position is stored in `pendingSeekSec` and flushed to the
-  // <video> element once it mounts (the VideoPlayer does not currently
-  // expose an imperative seek handle; we reach into the DOM instead to
-  // keep this feature independent of the log-overlay-ui work).
+  // auto-select the segment that contains that offset, then use the player
+  // handle to seek into it once it mounts. `pendingSeekSec` holds the
+  // segment-relative seek target between segment selection and player mount.
   const [pendingSeekSec, setPendingSeekSec] = useState<number | null>(null);
+  // Video player -- `playerRef` lets us imperatively seek the selected segment,
+  // while `currentTime` is the native (segment-relative) playback position
+  // mirrored from the player's timeupdate callback. `setCurrentTime` fires
+  // many times per second during playback, so downstream code is kept light.
+  const playerRef = useRef<VideoPlayerHandle | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
 
   const fetchRoute = useCallback(async () => {
     setLoading(true);
@@ -121,6 +128,12 @@ export default function RouteDetailPage() {
   useEffect(() => {
     void fetchRoute();
   }, [fetchRoute]);
+
+  // Reset the playhead whenever the selected segment changes, so the signal
+  // timeline doesn't briefly render a stale position from the previous clip.
+  useEffect(() => {
+    setCurrentTime(0);
+  }, [selectedSegment]);
 
   // Populate placeholder log entries when the route loads.
   // Replace with a real API call once the backend exposes parsed log data.
@@ -158,29 +171,22 @@ export default function RouteDetailPage() {
     setPendingSeekSec(segLocal);
   }, [route, searchParams]);
 
-  // Best-effort seek: once the video element has mounted and reports a
-  // readyState good enough to seek, set currentTime. Retries briefly so
-  // hls.js has time to attach the media element.
+  // Best-effort seek: once the player handle is available, use its seek
+  // method. Retries briefly so hls.js has time to attach the media element.
   useEffect(() => {
     if (pendingSeekSec === null) return;
     let cancelled = false;
     let attempts = 0;
     const tryFlush = () => {
       if (cancelled) return;
-      const video = document.querySelector<HTMLVideoElement>("video");
-      if (video && !Number.isNaN(video.duration)) {
-        try {
-          video.currentTime = pendingSeekSec;
-        } catch {
-          // ignored: next play will retry
-        }
+      if (playerRef.current) {
+        playerRef.current.seek(pendingSeekSec);
         setPendingSeekSec(null);
         return;
       }
       if (attempts++ < 40) {
         window.setTimeout(tryFlush, 100);
       } else {
-        // Give up so we don't loop forever if video never loads.
         setPendingSeekSec(null);
       }
     };
@@ -219,9 +225,15 @@ export default function RouteDetailPage() {
           {/* Route info header */}
           <Card className="mb-6">
             <CardHeader>
-              <h1 className="text-subheading text-[var(--text-primary)]">
-                {route.routeName}
-              </h1>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <h1 className="text-subheading text-[var(--text-primary)]">
+                  {route.routeName}
+                </h1>
+                <ShareButton
+                  dongleId={route.dongleId}
+                  routeName={route.routeName}
+                />
+              </div>
             </CardHeader>
             <CardBody>
               <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-4 text-sm">
@@ -270,6 +282,11 @@ export default function RouteDetailPage() {
             if (!seg) return null;
             const cameras = getAvailableCameras(seg);
             if (cameras.length === 0) return null;
+            // Segments are 1-minute chunks per the comma convention, so
+            // segment N starts at N*60 seconds into the route. The timeline
+            // uses that offset to map the segment-relative playhead to a
+            // route-relative time.
+            const segmentOffsetSec = seg.number * 60;
             return (
               <Card className="mb-6">
                 <CardHeader>
@@ -287,14 +304,34 @@ export default function RouteDetailPage() {
                   </div>
                 </CardHeader>
                 <CardBody>
-                  <MultiCameraPlayer
-                    segmentBaseUrl={buildSegmentBaseUrl(
-                      dongleId,
-                      routeName,
-                      seg.number,
-                    )}
-                    availableCameras={cameras}
-                  />
+                  <div className="flex flex-col gap-4">
+                    <MultiCameraPlayer
+                      ref={playerRef}
+                      segmentBaseUrl={buildSegmentBaseUrl(
+                        dongleId,
+                        routeName,
+                        seg.number,
+                      )}
+                      availableCameras={cameras}
+                      onTimeUpdate={setCurrentTime}
+                    />
+                    <SignalTimeline
+                      dongleId={dongleId}
+                      routeName={routeName}
+                      currentTime={currentTime}
+                      segmentOffsetSec={segmentOffsetSec}
+                      onSeek={(routeRelativeSec) => {
+                        // Convert route-relative seek target back into the
+                        // current segment's local time. If the click lands
+                        // outside this segment we just clamp to its own
+                        // range -- a multi-segment player would route the
+                        // seek to the correct segment instead.
+                        const segLocal = routeRelativeSec - segmentOffsetSec;
+                        const clamped = Math.max(0, Math.min(segLocal, 60));
+                        playerRef.current?.seek(clamped);
+                      }}
+                    />
+                  </div>
                 </CardBody>
               </Card>
             );

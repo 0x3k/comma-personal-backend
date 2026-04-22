@@ -21,6 +21,13 @@ function Navbar() {
   const pathname = usePathname();
   const isHomeActive = pathname === "/";
   const isLoginPage = pathname === "/login";
+  // Public share pages render without any nav chrome: the viewer may not
+  // even have an account on this backend, so links to the dashboard and a
+  // "Log out" button would be confusing at best and a privacy leak at
+  // worst. The component returns null for any /share path (including
+  // nested routes).
+  const isSharePage =
+    pathname === "/share" || pathname.startsWith("/share/");
   const [loggingOut, setLoggingOut] = useState(false);
 
   async function handleLogout() {
@@ -41,6 +48,10 @@ function Navbar() {
         window.location.assign("/login");
       }
     }
+  }
+
+  if (isSharePage) {
+    return null;
   }
 
   return (

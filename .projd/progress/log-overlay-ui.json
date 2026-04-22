@@ -3,8 +3,9 @@
   "name": "Log signal overlay on video player",
   "description": "Add a signal timeline below the multi-camera video player that stays in sync with playback. Shows speed as a line chart, engagement state as a colored band (engaged = green, disengaged = gray, alert = red), and steering angle as a second line. Clicking anywhere on the timeline seeks the video. Pulls from /v1/routes/:dongleId/:routeName/signals.",
   "priority": 4,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/log-overlay-ui",
+  "base_branch": "main",
   "blocked_by": ["log-signal-api"],
   "acceptance_criteria": [
     "web/src/components/video/SignalTimeline.tsx is a new component that fetches the signals endpoint and renders three horizontally-aligned tracks: engaged state band, speed line, steering line",
@@ -16,5 +17,5 @@
     "pnpm --dir web build succeeds",
     "Manual check: load a route with uploaded qlogs, scrub the video, verify the playhead follows and clicking the timeline seeks"
   ],
-  "notes": ""
+  "notes": "SignalTimeline component added under web/src/components/video/. VideoPlayer was extended to forward a ref with seek() and an onTimeUpdate callback; MultiCameraPlayer forwards both. Route detail page wires the two together, mapping segment-relative player time to/from route-relative timeline time via N*60s. Timeline supports an optional eventMarkers prop for the sibling events-ui feature. pnpm web lint/type-check/build all pass. Smoke.sh lint/typecheck steps fail but that is pre-existing (they try to run eslint/tsc at the repo root, not web/)."
 }

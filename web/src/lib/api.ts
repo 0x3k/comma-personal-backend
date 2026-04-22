@@ -8,6 +8,14 @@ interface ApiError {
 
 interface RequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
+  /**
+   * When true, a 401 response does NOT trigger the login redirect and
+   * no ApiUnauthorizedError is thrown; instead the 401 is surfaced as
+   * a normal Error with the server-provided message. Used by public
+   * pages (e.g. the /share/[token] view) that must not bounce a
+   * visitor to /login just because their token is invalid.
+   */
+  skipAuthRedirect?: boolean;
 }
 
 /**
@@ -52,7 +60,7 @@ export async function apiFetch<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { body, headers, credentials, ...rest } = options;
+  const { body, headers, credentials, skipAuthRedirect, ...rest } = options;
 
   const response = await fetch(`${BASE_URL}${path}`, {
     credentials: credentials ?? "include",
@@ -64,7 +72,7 @@ export async function apiFetch<T>(
     ...rest,
   });
 
-  if (response.status === 401) {
+  if (response.status === 401 && !skipAuthRedirect) {
     redirectToLogin();
     throw new ApiUnauthorizedError();
   }
@@ -74,7 +82,9 @@ export async function apiFetch<T>(
       error: response.statusText,
       code: response.status,
     }));
-    throw new Error(errorBody.error);
+    const err = new Error(errorBody.error) as Error & { status?: number };
+    err.status = response.status;
+    throw err;
   }
 
   // Handle 204 No Content
