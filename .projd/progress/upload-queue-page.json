@@ -3,7 +3,7 @@
   "name": "Upload queue page",
   "description": "Add a page that shows the device's current upload queue (via listUploadQueue) and lets the operator cancel stuck items (via cancelUpload). Helpful for diagnosing why a route is slow to appear in the dashboard.",
   "priority": 4,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/upload-queue-page",
   "base_branch": "main",
   "blocked_by": ["athena-rpc-upload-queue-mgmt"],
