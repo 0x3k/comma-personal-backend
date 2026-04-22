@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"comma-personal-backend/internal/metrics"
 )
 
 // rpcCallTimeout is the default timeout for waiting on an RPC response.
@@ -24,12 +26,22 @@ type RPCCaller struct {
 	mu      sync.Mutex
 	pending map[string]*pendingCall
 	nextID  atomic.Int64
+	metrics *metrics.Metrics
 }
 
-// NewRPCCaller creates a new RPCCaller.
+// NewRPCCaller creates a new RPCCaller with no metrics. Use
+// NewRPCCallerWithMetrics to inject a *metrics.Metrics so each Call is
+// observed.
 func NewRPCCaller() *RPCCaller {
+	return NewRPCCallerWithMetrics(nil)
+}
+
+// NewRPCCallerWithMetrics creates a new RPCCaller that records call latency
+// and outcome to the given metrics instance. A nil m is treated as a no-op.
+func NewRPCCallerWithMetrics(m *metrics.Metrics) *RPCCaller {
 	return &RPCCaller{
 		pending: make(map[string]*pendingCall),
+		metrics: m,
 	}
 }
 
@@ -48,6 +60,32 @@ func (rc *RPCCaller) Call(c *Client, method string, params interface{}) (*RPCRes
 
 // CallWithTimeout sends a JSON-RPC request and waits up to the given duration.
 func (rc *RPCCaller) CallWithTimeout(c *Client, method string, params interface{}, timeout time.Duration) (*RPCResponse, error) {
+	resp, err := rc.callWithTimeout(c, method, params, timeout)
+	return resp, err
+}
+
+// callWithTimeout wraps the full send/wait cycle so we can observe the
+// latency and outcome in a single place.
+func (rc *RPCCaller) callWithTimeout(c *Client, method string, params interface{}, timeout time.Duration) (*RPCResponse, error) {
+	start := time.Now()
+	resp, err := rc.doCall(c, method, params, timeout)
+	dur := time.Since(start)
+
+	status := "success"
+	switch {
+	case err != nil && strings.Contains(err.Error(), "timed out"):
+		status = "timeout"
+	case err != nil:
+		status = "error"
+	case resp != nil && resp.Error != nil:
+		status = "error"
+	}
+	rc.metrics.ObserveRPCCall(method, status, dur)
+	return resp, err
+}
+
+// doCall is the original send-and-wait implementation.
+func (rc *RPCCaller) doCall(c *Client, method string, params interface{}, timeout time.Duration) (*RPCResponse, error) {
 	id := rc.nextRequestID()
 	idStr := string(id)
 
@@ -147,6 +185,34 @@ func CallUploadFileToUrl(caller *RPCCaller, client *Client, url string, headers 
 	return nil
 }
 
+// UploadFilesToUrlsParams is the batch variant of UploadFileToUrlParams; each
+// entry specifies a file (fn), destination URL, and headers. This mirrors
+// openpilot's athenad uploadFilesToUrls RPC.
+type UploadFilesToUrlsParams []UploadFileToUrlParams
+
+// CallUploadFilesToUrls instructs the device to enqueue multiple file uploads
+// in a single RPC round-trip. It returns the device's response map, which
+// typically contains "enqueued" (count), "items" (enqueued item descriptors),
+// and optionally "failed" (list of file names that were rejected).
+func CallUploadFilesToUrls(caller *RPCCaller, client *Client, items []UploadFileToUrlParams) (map[string]interface{}, error) {
+	params := UploadFilesToUrlsParams(items)
+
+	resp, err := caller.Call(client, "uploadFilesToUrls", params)
+	if err != nil {
+		return nil, fmt.Errorf("uploadFilesToUrls failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("uploadFilesToUrls returned error: %w", resp.Error)
+	}
+
+	result, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("uploadFilesToUrls: unexpected result type %T", resp.Result)
+	}
+	return result, nil
+}
+
 // CallGetNetworkType asks the device for its current network type.
 func CallGetNetworkType(caller *RPCCaller, client *Client) (interface{}, error) {
 	resp, err := caller.Call(client, "getNetworkType", nil)
@@ -159,6 +225,59 @@ func CallGetNetworkType(caller *RPCCaller, client *Client) (interface{}, error) 
 	}
 
 	return resp.Result, nil
+}
+
+// CallGetNetworkMetered asks the device whether its current connection is metered.
+func CallGetNetworkMetered(caller *RPCCaller, client *Client) (bool, error) {
+	resp, err := caller.Call(client, "getNetworkMetered", nil)
+	if err != nil {
+		return false, fmt.Errorf("getNetworkMetered failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return false, fmt.Errorf("getNetworkMetered returned error: %w", resp.Error)
+	}
+
+	metered, ok := resp.Result.(bool)
+	if !ok {
+		return false, fmt.Errorf("getNetworkMetered: expected bool result, got %T", resp.Result)
+	}
+
+	return metered, nil
+}
+
+// CallGetNetworks asks the device for the list of available networks.
+// Each entry is a dict describing a network (SSID, signal strength, etc.).
+func CallGetNetworks(caller *RPCCaller, client *Client) ([]map[string]interface{}, error) {
+	resp, err := caller.Call(client, "getNetworks", nil)
+	if err != nil {
+		return nil, fmt.Errorf("getNetworks failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("getNetworks returned error: %w", resp.Error)
+	}
+
+	if resp.Result == nil {
+		return nil, nil
+	}
+
+	switch v := resp.Result.(type) {
+	case []map[string]interface{}:
+		return v, nil
+	case []interface{}:
+		networks := make([]map[string]interface{}, 0, len(v))
+		for i, item := range v {
+			m, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("getNetworks: entry %d is not an object, got %T", i, item)
+			}
+			networks = append(networks, m)
+		}
+		return networks, nil
+	default:
+		return nil, fmt.Errorf("getNetworks: expected list result, got %T", resp.Result)
+	}
 }
 
 // CallGetSimInfo asks the device for its SIM card information.
@@ -240,16 +359,122 @@ func CallListDataDirectory(caller *RPCCaller, client *Client, prefix string) ([]
 	return files, nil
 }
 
+// takeSnapshotTimeout is the RPC timeout for takeSnapshot. Snapshots can be
+// slow on a cold start (camerad has to hand off buffers), so a longer deadline
+// than the default is used.
+const takeSnapshotTimeout = 30 * time.Second
+
+// SnapshotResult holds the payload returned by the takeSnapshot RPC. openpilot
+// historically returned either a single base64 JPEG string or an object of the
+// shape {jpegBack, jpegFront}; this struct captures both possibilities with
+// optional fields. At least one of RawString, JpegBack, or JpegFront will be
+// populated on a successful call.
+type SnapshotResult struct {
+	// JpegBack is the base64-encoded JPEG from the rear (road-facing) camera.
+	JpegBack string `json:"jpegBack,omitempty"`
+	// JpegFront is the base64-encoded JPEG from the front (driver-facing) camera.
+	JpegFront string `json:"jpegFront,omitempty"`
+	// RawString holds the payload when the device returns a single base64
+	// JPEG string instead of an object.
+	RawString string `json:"raw_string,omitempty"`
+}
+
+// snapshotObjectPayload is the object shape the device may return for
+// takeSnapshot. It is decoded with DisallowUnknownFields disabled so new
+// fields added by future openpilot versions do not break parsing.
+type snapshotObjectPayload struct {
+	JpegBack  string `json:"jpegBack"`
+	JpegFront string `json:"jpegFront"`
+}
+
+// CallTakeSnapshot instructs the device to capture a still image from its
+// cameras and return it as base64-encoded JPEG data. The device may respond
+// with either a single base64 string or an object containing jpegBack and/or
+// jpegFront fields; both shapes are parsed into SnapshotResult.
+func CallTakeSnapshot(caller *RPCCaller, client *Client) (*SnapshotResult, error) {
+	resp, err := caller.CallWithTimeout(client, "takeSnapshot", nil, takeSnapshotTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("takeSnapshot failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("takeSnapshot returned error: %w", resp.Error)
+	}
+
+	return parseSnapshotResult(resp.Result)
+}
+
+// parseSnapshotResult coerces an RPC result value into a SnapshotResult.
+// The result may arrive as a Go value (when a test delivers a response
+// directly) or as a json.RawMessage / map (after wire decoding), so the
+// function re-marshals to JSON and then inspects the first non-whitespace
+// byte to decide between the string and object shapes.
+func parseSnapshotResult(result interface{}) (*SnapshotResult, error) {
+	if result == nil {
+		return nil, fmt.Errorf("takeSnapshot returned no result")
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal snapshot result: %w", err)
+	}
+
+	// Peek past whitespace to determine the JSON shape.
+	trimmed := bytesTrimLeadingWS(raw)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("takeSnapshot returned empty result")
+	}
+
+	switch trimmed[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, fmt.Errorf("failed to parse snapshot string: %w", err)
+		}
+		return &SnapshotResult{RawString: s}, nil
+	case '{':
+		var obj snapshotObjectPayload
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return nil, fmt.Errorf("failed to parse snapshot object: %w", err)
+		}
+		return &SnapshotResult{JpegBack: obj.JpegBack, JpegFront: obj.JpegFront}, nil
+	default:
+		return nil, fmt.Errorf("takeSnapshot returned unexpected result shape: %s", string(raw))
+	}
+}
+
+// bytesTrimLeadingWS returns b with any leading JSON whitespace removed.
+func bytesTrimLeadingWS(b []byte) []byte {
+	for i, c := range b {
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			continue
+		default:
+			return b[i:]
+		}
+	}
+	return nil
+}
+
 // RegisterDefaultHandlers installs device-side method handlers on a Client
 // for common methods that the device is expected to handle. These are useful
 // for testing or when the backend acts as a simulated device.
 func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["uploadFileToUrl"] = handleUploadFileToUrl
+	handlers["uploadFilesToUrls"] = handleUploadFilesToUrls
 	handlers["getNetworkType"] = handleGetNetworkType
+	handlers["getNetworkMetered"] = handleGetNetworkMetered
+	handlers["getNetworks"] = handleGetNetworks
 	handlers["getSimInfo"] = handleGetSimInfo
 	handlers["setNavDestination"] = handleSetNavDestination
 	handlers["listDataDirectory"] = handleListDataDirectory
+	handlers["takeSnapshot"] = handleTakeSnapshot
 }
+
+// stubSnapshotJPEG is a tiny hard-coded base64 JPEG payload used by the
+// device-side takeSnapshot stub. This is the smallest syntactically-valid JPEG
+// (SOI + EOI markers) so it is cheap to embed and easy to recognise in tests.
+const stubSnapshotJPEG = "/9j/2Q=="
 
 // handleUploadFileToUrl is a device-side stub handler for uploadFileToUrl.
 // A real device would perform the upload; this handler acknowledges the request.
@@ -269,12 +494,47 @@ func handleUploadFileToUrl(_ string, params json.RawMessage) (interface{}, *RPCE
 	return map[string]int{"enqueued": 1}, nil
 }
 
+// handleUploadFilesToUrls is a device-side stub handler for uploadFilesToUrls.
+// A real device would enqueue each file on its uploader; this handler echoes
+// the request shape and reports enqueued == len(items) with no failures.
+func handleUploadFilesToUrls(_ string, params json.RawMessage) (interface{}, *RPCError) {
+	var items UploadFilesToUrlsParams
+	if err := json.Unmarshal(params, &items); err != nil {
+		return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid params: %v", err))
+	}
+
+	echoed := make([]map[string]interface{}, 0, len(items))
+	for _, it := range items {
+		echoed = append(echoed, map[string]interface{}{
+			"fn":      it.Path,
+			"url":     it.URL,
+			"headers": it.Headers,
+		})
+	}
+
+	return map[string]interface{}{
+		"enqueued": len(items),
+		"items":    echoed,
+		"failed":   []string{},
+	}, nil
+}
+
 // handleGetNetworkType is a device-side stub handler for getNetworkType.
 func handleGetNetworkType(_ string, _ json.RawMessage) (interface{}, *RPCError) {
 	return map[string]interface{}{
 		"network_type": 5, // LTE
 		"wifi_ip":      "",
 	}, nil
+}
+
+// handleGetNetworkMetered is a device-side stub handler for getNetworkMetered.
+func handleGetNetworkMetered(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return false, nil
+}
+
+// handleGetNetworks is a device-side stub handler for getNetworks.
+func handleGetNetworks(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return []map[string]interface{}{}, nil
 }
 
 // handleGetSimInfo is a device-side stub handler for getSimInfo.
@@ -331,4 +591,14 @@ func handleListDataDirectory(_ string, params json.RawMessage) (interface{}, *RP
 		}
 	}
 	return filtered, nil
+}
+
+// handleTakeSnapshot is a device-side stub handler for takeSnapshot. It
+// returns the object shape ({jpegBack, jpegFront}) with a tiny hard-coded
+// base64 JPEG in both fields so round-trip tests can exercise the full path.
+func handleTakeSnapshot(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return map[string]string{
+		"jpegBack":  stubSnapshotJPEG,
+		"jpegFront": stubSnapshotJPEG,
+	}, nil
 }

@@ -3,8 +3,9 @@
   "name": "Athena RPC: uploadFilesToUrls (batch variant)",
   "description": "Add the batch variant of the existing uploadFileToUrl method. uploadFilesToUrls takes a list of {fn, url, headers} items and enqueues them all on the device's uploader in one round-trip. Reference: openpilot/system/athena/athenad.py lines 404-448 (../../openpilot/system/athena/athenad.py). The existing CallUploadFileToUrl (methods.go ~line 130) is the single-file version -- mirror its shape for the batch version.",
   "priority": 3,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/athena-rpc-batch-upload",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/ws/methods.go defines UploadFilesToUrlsParams as a slice of existing UploadFileToUrlParams (each item has fn, url, headers)",
@@ -14,5 +15,5 @@
     "go test ./internal/ws/... passes",
     "go vet ./... and go build ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "Implemented UploadFilesToUrlsParams (slice of UploadFileToUrlParams), CallUploadFilesToUrls returning the device's {enqueued, items, failed} map, and a device-side stub handler. Tests cover 0, 1, and 3 item batches plus RPC errors and handler edge cases. go test ./internal/ws/..., go vet ./..., go build ./... all pass."
 }

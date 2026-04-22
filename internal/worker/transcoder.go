@@ -10,9 +10,14 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
+	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/storage"
 )
+
+// workerName is the label value used for worker_run_duration_seconds.
+const workerName = "transcoder"
 
 // cameraFiles lists the HEVC camera files found in each segment.
 var cameraFiles = []string{
@@ -28,6 +33,7 @@ type Transcoder struct {
 	storage     *storage.Storage
 	concurrency int
 	ffmpegPath  string
+	metrics     *metrics.Metrics
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -44,7 +50,16 @@ type transcodeJob struct {
 
 // New creates a Transcoder backed by the given storage.
 // concurrency controls how many FFmpeg processes run in parallel.
+// The Transcoder is created without metrics; use NewWithMetrics to inject
+// a *metrics.Metrics for observation.
 func New(store *storage.Storage, concurrency int) *Transcoder {
+	return NewWithMetrics(store, concurrency, nil)
+}
+
+// NewWithMetrics creates a Transcoder that records transcode durations and
+// worker-run durations to the provided metrics instance. A nil metrics
+// argument is treated as a no-op.
+func NewWithMetrics(store *storage.Storage, concurrency int, m *metrics.Metrics) *Transcoder {
 	if concurrency < 1 {
 		concurrency = 1
 	}
@@ -52,6 +67,7 @@ func New(store *storage.Storage, concurrency int) *Transcoder {
 		storage:     store,
 		concurrency: concurrency,
 		ffmpegPath:  "ffmpeg",
+		metrics:     m,
 		jobs:        make(chan transcodeJob, 100),
 	}
 }
@@ -127,6 +143,11 @@ func (t *Transcoder) worker(ctx context.Context) {
 // ProcessSegment transcodes all camera HEVC files in the given segment.
 // It skips files that have already been transcoded.
 func (t *Transcoder) ProcessSegment(ctx context.Context, dongleID, route, segment string) error {
+	start := time.Now()
+	defer func() {
+		t.metrics.ObserveWorkerRun(workerName, time.Since(start))
+	}()
+
 	var errs []string
 	for _, camera := range cameraFiles {
 		if !t.storage.Exists(dongleID, route, segment, camera) {
@@ -147,9 +168,17 @@ func (t *Transcoder) ProcessSegment(ctx context.Context, dongleID, route, segmen
 		inputPath := t.storage.Path(dongleID, route, segment, camera)
 		outputDir := filepath.Join(filepath.Dir(inputPath), base)
 
-		if err := t.TranscodeFile(ctx, inputPath, outputDir); err != nil {
+		camStart := time.Now()
+		err := t.TranscodeFile(ctx, inputPath, outputDir)
+		camDur := time.Since(camStart)
+		result := "success"
+		if err != nil {
+			result = "error"
 			errs = append(errs, fmt.Sprintf("%s: %v", camera, err))
 		}
+		// Label value is the camera name without extension ("fcamera" etc.)
+		// so the histogram labels match what an operator would query on.
+		t.metrics.ObserveTranscode(base, result, camDur)
 	}
 
 	if len(errs) > 0 {
