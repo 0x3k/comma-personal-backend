@@ -3,9 +3,12 @@ package ws
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"comma-personal-backend/internal/metrics"
 )
 
 // rpcCallTimeout is the default timeout for waiting on an RPC response.
@@ -23,12 +26,22 @@ type RPCCaller struct {
 	mu      sync.Mutex
 	pending map[string]*pendingCall
 	nextID  atomic.Int64
+	metrics *metrics.Metrics
 }
 
-// NewRPCCaller creates a new RPCCaller.
+// NewRPCCaller creates a new RPCCaller with no metrics. Use
+// NewRPCCallerWithMetrics to inject a *metrics.Metrics so each Call is
+// observed.
 func NewRPCCaller() *RPCCaller {
+	return NewRPCCallerWithMetrics(nil)
+}
+
+// NewRPCCallerWithMetrics creates a new RPCCaller that records call latency
+// and outcome to the given metrics instance. A nil m is treated as a no-op.
+func NewRPCCallerWithMetrics(m *metrics.Metrics) *RPCCaller {
 	return &RPCCaller{
 		pending: make(map[string]*pendingCall),
+		metrics: m,
 	}
 }
 
@@ -47,6 +60,32 @@ func (rc *RPCCaller) Call(c *Client, method string, params interface{}) (*RPCRes
 
 // CallWithTimeout sends a JSON-RPC request and waits up to the given duration.
 func (rc *RPCCaller) CallWithTimeout(c *Client, method string, params interface{}, timeout time.Duration) (*RPCResponse, error) {
+	resp, err := rc.callWithTimeout(c, method, params, timeout)
+	return resp, err
+}
+
+// callWithTimeout wraps the full send/wait cycle so we can observe the
+// latency and outcome in a single place.
+func (rc *RPCCaller) callWithTimeout(c *Client, method string, params interface{}, timeout time.Duration) (*RPCResponse, error) {
+	start := time.Now()
+	resp, err := rc.doCall(c, method, params, timeout)
+	dur := time.Since(start)
+
+	status := "success"
+	switch {
+	case err != nil && strings.Contains(err.Error(), "timed out"):
+		status = "timeout"
+	case err != nil:
+		status = "error"
+	case resp != nil && resp.Error != nil:
+		status = "error"
+	}
+	rc.metrics.ObserveRPCCall(method, status, dur)
+	return resp, err
+}
+
+// doCall is the original send-and-wait implementation.
+func (rc *RPCCaller) doCall(c *Client, method string, params interface{}, timeout time.Duration) (*RPCResponse, error) {
 	id := rc.nextRequestID()
 	idStr := string(id)
 
