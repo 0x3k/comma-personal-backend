@@ -201,6 +201,103 @@ func CallSetNavDestination(caller *RPCCaller, client *Client, lat, lng float64, 
 	return nil
 }
 
+// takeSnapshotTimeout is the RPC timeout for takeSnapshot. Snapshots can be
+// slow on a cold start (camerad has to hand off buffers), so a longer deadline
+// than the default is used.
+const takeSnapshotTimeout = 30 * time.Second
+
+// SnapshotResult holds the payload returned by the takeSnapshot RPC. openpilot
+// historically returned either a single base64 JPEG string or an object of the
+// shape {jpegBack, jpegFront}; this struct captures both possibilities with
+// optional fields. At least one of RawString, JpegBack, or JpegFront will be
+// populated on a successful call.
+type SnapshotResult struct {
+	// JpegBack is the base64-encoded JPEG from the rear (road-facing) camera.
+	JpegBack string `json:"jpegBack,omitempty"`
+	// JpegFront is the base64-encoded JPEG from the front (driver-facing) camera.
+	JpegFront string `json:"jpegFront,omitempty"`
+	// RawString holds the payload when the device returns a single base64
+	// JPEG string instead of an object.
+	RawString string `json:"raw_string,omitempty"`
+}
+
+// snapshotObjectPayload is the object shape the device may return for
+// takeSnapshot. It is decoded with DisallowUnknownFields disabled so new
+// fields added by future openpilot versions do not break parsing.
+type snapshotObjectPayload struct {
+	JpegBack  string `json:"jpegBack"`
+	JpegFront string `json:"jpegFront"`
+}
+
+// CallTakeSnapshot instructs the device to capture a still image from its
+// cameras and return it as base64-encoded JPEG data. The device may respond
+// with either a single base64 string or an object containing jpegBack and/or
+// jpegFront fields; both shapes are parsed into SnapshotResult.
+func CallTakeSnapshot(caller *RPCCaller, client *Client) (*SnapshotResult, error) {
+	resp, err := caller.CallWithTimeout(client, "takeSnapshot", nil, takeSnapshotTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("takeSnapshot failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("takeSnapshot returned error: %w", resp.Error)
+	}
+
+	return parseSnapshotResult(resp.Result)
+}
+
+// parseSnapshotResult coerces an RPC result value into a SnapshotResult.
+// The result may arrive as a Go value (when a test delivers a response
+// directly) or as a json.RawMessage / map (after wire decoding), so the
+// function re-marshals to JSON and then inspects the first non-whitespace
+// byte to decide between the string and object shapes.
+func parseSnapshotResult(result interface{}) (*SnapshotResult, error) {
+	if result == nil {
+		return nil, fmt.Errorf("takeSnapshot returned no result")
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal snapshot result: %w", err)
+	}
+
+	// Peek past whitespace to determine the JSON shape.
+	trimmed := bytesTrimLeadingWS(raw)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("takeSnapshot returned empty result")
+	}
+
+	switch trimmed[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, fmt.Errorf("failed to parse snapshot string: %w", err)
+		}
+		return &SnapshotResult{RawString: s}, nil
+	case '{':
+		var obj snapshotObjectPayload
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return nil, fmt.Errorf("failed to parse snapshot object: %w", err)
+		}
+		return &SnapshotResult{JpegBack: obj.JpegBack, JpegFront: obj.JpegFront}, nil
+	default:
+		return nil, fmt.Errorf("takeSnapshot returned unexpected result shape: %s", string(raw))
+	}
+}
+
+// bytesTrimLeadingWS returns b with any leading JSON whitespace removed.
+func bytesTrimLeadingWS(b []byte) []byte {
+	for i, c := range b {
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			continue
+		default:
+			return b[i:]
+		}
+	}
+	return nil
+}
+
 // RegisterDefaultHandlers installs device-side method handlers on a Client
 // for common methods that the device is expected to handle. These are useful
 // for testing or when the backend acts as a simulated device.
@@ -209,7 +306,13 @@ func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["getNetworkType"] = handleGetNetworkType
 	handlers["getSimInfo"] = handleGetSimInfo
 	handlers["setNavDestination"] = handleSetNavDestination
+	handlers["takeSnapshot"] = handleTakeSnapshot
 }
+
+// stubSnapshotJPEG is a tiny hard-coded base64 JPEG payload used by the
+// device-side takeSnapshot stub. This is the smallest syntactically-valid JPEG
+// (SOI + EOI markers) so it is cheap to embed and easy to recognise in tests.
+const stubSnapshotJPEG = "/9j/2Q=="
 
 // handleUploadFileToUrl is a device-side stub handler for uploadFileToUrl.
 // A real device would perform the upload; this handler acknowledges the request.
@@ -253,4 +356,14 @@ func handleSetNavDestination(_ string, params json.RawMessage) (interface{}, *RP
 	}
 
 	return map[string]bool{"success": true}, nil
+}
+
+// handleTakeSnapshot is a device-side stub handler for takeSnapshot. It
+// returns the object shape ({jpegBack, jpegFront}) with a tiny hard-coded
+// base64 JPEG in both fields so round-trip tests can exercise the full path.
+func handleTakeSnapshot(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return map[string]string{
+		"jpegBack":  stubSnapshotJPEG,
+		"jpegFront": stubSnapshotJPEG,
+	}, nil
 }

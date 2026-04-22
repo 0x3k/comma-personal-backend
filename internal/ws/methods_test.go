@@ -469,11 +469,123 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 		"getNetworkType",
 		"getSimInfo",
 		"setNavDestination",
+		"takeSnapshot",
 	}
 
 	for _, method := range expected {
 		if _, ok := handlers[method]; !ok {
 			t.Errorf("handler not registered for method %q", method)
 		}
+	}
+}
+
+func TestCallTakeSnapshot_StringResponse(t *testing.T) {
+	caller := NewRPCCaller()
+	// Device returns the older single-string shape.
+	client := testClientWithResponder(t, caller, "AAAA", nil)
+
+	result, err := CallTakeSnapshot(caller, client)
+	if err != nil {
+		t.Fatalf("CallTakeSnapshot returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.RawString != "AAAA" {
+		t.Errorf("RawString = %q, want %q", result.RawString, "AAAA")
+	}
+	if result.JpegBack != "" || result.JpegFront != "" {
+		t.Errorf("expected jpeg fields empty for string response, got back=%q front=%q", result.JpegBack, result.JpegFront)
+	}
+}
+
+func TestCallTakeSnapshot_ObjectResponse(t *testing.T) {
+	caller := NewRPCCaller()
+	obj := map[string]string{
+		"jpegBack":  "BACKDATA",
+		"jpegFront": "FRONTDATA",
+	}
+	client := testClientWithResponder(t, caller, obj, nil)
+
+	result, err := CallTakeSnapshot(caller, client)
+	if err != nil {
+		t.Fatalf("CallTakeSnapshot returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.JpegBack != "BACKDATA" {
+		t.Errorf("JpegBack = %q, want %q", result.JpegBack, "BACKDATA")
+	}
+	if result.JpegFront != "FRONTDATA" {
+		t.Errorf("JpegFront = %q, want %q", result.JpegFront, "FRONTDATA")
+	}
+	if result.RawString != "" {
+		t.Errorf("RawString = %q, want empty", result.RawString)
+	}
+}
+
+func TestCallTakeSnapshot_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "not available while camerad is started")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallTakeSnapshot(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallTakeSnapshot")
+	}
+}
+
+func TestCallTakeSnapshot_NilResult(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, nil, nil)
+
+	_, err := CallTakeSnapshot(caller, client)
+	if err == nil {
+		t.Fatal("expected error for nil result")
+	}
+}
+
+func TestHandleTakeSnapshot_Stub(t *testing.T) {
+	result, rpcErr := handleTakeSnapshot("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]string)
+	if !ok {
+		t.Fatalf("result is not map[string]string, got %T", result)
+	}
+	if m["jpegBack"] == "" {
+		t.Error("expected non-empty jpegBack")
+	}
+	if m["jpegFront"] == "" {
+		t.Error("expected non-empty jpegFront")
+	}
+}
+
+func TestParseSnapshotResult_StringFromRawJSON(t *testing.T) {
+	// Simulate a wire-decoded string value.
+	r, err := parseSnapshotResult("aGVsbG8=")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.RawString != "aGVsbG8=" {
+		t.Errorf("RawString = %q, want %q", r.RawString, "aGVsbG8=")
+	}
+}
+
+func TestParseSnapshotResult_ObjectFromMap(t *testing.T) {
+	// Simulate a wire-decoded map[string]interface{} value, which is what
+	// json.Unmarshal produces for a JSON object into interface{}.
+	r, err := parseSnapshotResult(map[string]interface{}{
+		"jpegBack":  "B",
+		"jpegFront": "F",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.JpegBack != "B" || r.JpegFront != "F" {
+		t.Errorf("unexpected fields: back=%q front=%q", r.JpegBack, r.JpegFront)
 	}
 }
