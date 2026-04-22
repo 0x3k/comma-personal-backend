@@ -3,7 +3,7 @@
   "name": "Disk usage API endpoint",
   "description": "Report storage consumption so operators can monitor growth and the UI can surface it. Returns bytes used per device plus the filesystem total/available. Uses os.Stat walks behind a small cache (60s) so it never becomes a hot path.",
   "priority": 4,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/disk-usage-api",
   "base_branch": "main",
   "blocked_by": [],
@@ -17,5 +17,5 @@
     "go test ./... passes",
     "go vet ./... and go build ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "GET /v1/storage/usage is mounted on the authenticated /v1 group (JWT via JWTAuthFromDB). Storage.Usage memoizes the walk for 60s; ?refresh=1 or forceRefresh=true invalidates. Filesystem totals come from golang.org/x/sys/unix.Statfs_t (portable on linux+darwin). go test ./..., go vet ./..., go build ./... all pass."
 }
