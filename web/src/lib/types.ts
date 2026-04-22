@@ -116,3 +116,45 @@ export interface CreateShareResponse {
   token: string;
   expires_at: string;
 }
+
+/**
+ * A single aggregated trip row as returned by the stats and trip endpoints.
+ * snake_case field names match the Go handler in internal/api/trip.go
+ * (tripResponse) -- unlike most types in this file, these are NOT camelCase
+ * because the stats endpoint follows the device-facing API surface.
+ */
+export interface Trip {
+  id: number;
+  dongle_id: string;
+  route_id: number;
+  route_name: string;
+  start_time: string | null;
+  distance_meters: number | null;
+  duration_seconds: number | null;
+  max_speed_mps: number | null;
+  avg_speed_mps: number | null;
+  engaged_seconds: number | null;
+  start_address: string | null;
+  end_address: string | null;
+  start_lat: number | null;
+  start_lng: number | null;
+  end_lat: number | null;
+  end_lng: number | null;
+  computed_at: string | null;
+}
+
+/** Lifetime aggregate totals for a device. */
+export interface DeviceStatsTotals {
+  trip_count: number;
+  total_distance_meters: number;
+  total_duration_seconds: number;
+  total_engaged_seconds: number;
+}
+
+/** Response from GET /v1/devices/:dongle_id/stats. */
+export interface DeviceStats {
+  totals: DeviceStatsTotals;
+  recent: Trip[];
+  limit: number;
+  offset: number;
+}
