@@ -136,6 +136,14 @@ func main() {
 	settingsHandler := api.NewSettingsHandler(settingsStore, cfg.RetentionDays)
 	settingsHandler.RegisterRoutes(v1Config)
 
+	// Live device status panel feeds the web UI; it accepts either a session
+	// cookie (browser dashboard) or a device JWT (CLI/ad-hoc), so it lives on
+	// its own group with the session-or-JWT middleware rather than the
+	// device-only /v1 group above.
+	v1Live := e.Group("/v1", api.SessionOrJWT(cfg.SessionSecret, queries))
+	liveHandler := api.NewDeviceLiveHandler(hub, rpcCaller)
+	liveHandler.RegisterRoutes(v1Live)
+
 	// Storage usage (disk accounting) endpoint. The walk is memoized in the
 	// storage package so repeated polling stays cheap.
 	v1Storage := e.Group("/v1", auth)

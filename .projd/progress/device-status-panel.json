@@ -3,8 +3,9 @@
   "name": "Live device status panel",
   "description": "Add a live device status panel to the devices page (web/src/app/devices/page.tsx) showing online/offline status, current network type, is-metered flag, SIM info, free disk, and thermal status -- refreshed every ~5 seconds while the page is open by calling the relevant athena RPC endpoints. If the device is offline, show the last-known values + an 'offline' badge.",
   "priority": 3,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/device-status-panel",
+  "base_branch": "main",
   "blocked_by": ["athena-rpc-network-status"],
   "acceptance_criteria": [
     "Backend adds GET /v1/devices/:dongle_id/live which orchestrates parallel calls over the WebSocket to getNetworkType, getNetworkMetered, getSimInfo, getMessage('deviceState') (for free_space + thermal) -- any subset of missing values returns as null rather than failing the whole call; returns JSON { online, network_type, metered, sim, free_space_gb, thermal_status, fetched_at }",
