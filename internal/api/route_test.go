@@ -66,6 +66,15 @@ func (m *routeMockDB) QueryRow(_ context.Context, sql string, _ ...interface{}) 
 		}
 		return &mockCountRow{count: m.routeCount}
 	}
+	if strings.Contains(sql, "UPDATE routes") {
+		if m.routeErr != nil {
+			return &mockRouteRow{err: m.routeErr}
+		}
+		if m.route == nil {
+			return &mockRouteRow{err: pgx.ErrNoRows}
+		}
+		return &mockRouteRow{route: m.route}
+	}
 	if strings.Contains(sql, "FROM routes") {
 		if m.routeErr != nil {
 			return &mockRouteRow{err: m.routeErr}
@@ -88,8 +97,8 @@ func (r *mockRouteRow) Scan(dest ...interface{}) error {
 	if r.err != nil {
 		return r.err
 	}
-	if len(dest) < 7 {
-		return fmt.Errorf("expected 7 scan destinations, got %d", len(dest))
+	if len(dest) < 8 {
+		return fmt.Errorf("expected 8 scan destinations, got %d", len(dest))
 	}
 	*dest[0].(*int32) = r.route.ID
 	*dest[1].(*string) = r.route.DongleID
@@ -98,6 +107,7 @@ func (r *mockRouteRow) Scan(dest ...interface{}) error {
 	*dest[4].(*pgtype.Timestamptz) = r.route.EndTime
 	*dest[5].(*interface{}) = r.route.Geometry
 	*dest[6].(*pgtype.Timestamptz) = r.route.CreatedAt
+	*dest[7].(*bool) = r.route.Preserved
 	return nil
 }
 
@@ -146,6 +156,7 @@ func (r *mockRouteRows) Scan(dest ...interface{}) error {
 	*dest[4].(*pgtype.Timestamptz) = route.EndTime
 	*dest[5].(*interface{}) = route.Geometry
 	*dest[6].(*pgtype.Timestamptz) = route.CreatedAt
+	*dest[7].(*bool) = route.Preserved
 	return nil
 }
 
@@ -183,7 +194,8 @@ func (r *mockRouteWithCountRows) Scan(dest ...interface{}) error {
 	*dest[4].(*pgtype.Timestamptz) = route.EndTime
 	*dest[5].(*interface{}) = route.Geometry
 	*dest[6].(*pgtype.Timestamptz) = route.CreatedAt
-	*dest[7].(*int64) = r.segCount
+	*dest[7].(*bool) = route.Preserved
+	*dest[8].(*int64) = r.segCount
 	return nil
 }
 
@@ -680,6 +692,7 @@ func TestListRoutesIncludesMetadata(t *testing.T) {
 				StartTime: pgtype.Timestamptz{Time: now, Valid: true},
 				EndTime:   pgtype.Timestamptz{Time: endTime, Valid: true},
 				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+				Preserved: true,
 			},
 		},
 		segCount: 5,
@@ -728,6 +741,184 @@ func TestListRoutesIncludesMetadata(t *testing.T) {
 	}
 	if r.SegmentCount != 5 {
 		t.Errorf("segmentCount = %d, want 5", r.SegmentCount)
+	}
+	if !r.Preserved {
+		t.Error("expected preserved = true")
+	}
+
+	// The raw JSON must also include the preserved field so clients that
+	// speak the wire format (and don't use the Go struct) can read it.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("failed to parse raw response: %v", err)
+	}
+	routes, ok := raw["routes"].([]interface{})
+	if !ok || len(routes) == 0 {
+		t.Fatal("expected routes array in response")
+	}
+	firstRoute, ok := routes[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected first route to be an object")
+	}
+	if _, hasPreserved := firstRoute["preserved"]; !hasPreserved {
+		t.Error("expected 'preserved' field to be present in route JSON")
+	}
+}
+
+func TestSetPreserved(t *testing.T) {
+	now := time.Now()
+	baseRoute := func(preserved bool) *db.Route {
+		return &db.Route{
+			ID:        1,
+			DongleID:  "abc123",
+			RouteName: "2024-03-15--12-30-00",
+			StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+			EndTime:   pgtype.Timestamptz{Time: now.Add(10 * time.Minute), Valid: true},
+			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+			Preserved: preserved,
+		}
+	}
+
+	tests := []struct {
+		name          string
+		dongleID      string
+		routeName     string
+		authDongleID  string
+		body          string
+		mock          *routeMockDB
+		wantStatus    int
+		wantError     string
+		wantPreserved bool
+	}{
+		{
+			name:         "set preserved true succeeds",
+			dongleID:     "abc123",
+			routeName:    "2024-03-15--12-30-00",
+			authDongleID: "abc123",
+			body:         `{"preserved": true}`,
+			mock: &routeMockDB{
+				route: baseRoute(true),
+			},
+			wantStatus:    http.StatusOK,
+			wantPreserved: true,
+		},
+		{
+			name:         "set preserved false succeeds",
+			dongleID:     "abc123",
+			routeName:    "2024-03-15--12-30-00",
+			authDongleID: "abc123",
+			body:         `{"preserved": false}`,
+			mock: &routeMockDB{
+				route: baseRoute(false),
+			},
+			wantStatus:    http.StatusOK,
+			wantPreserved: false,
+		},
+		{
+			name:         "nonexistent route returns 404",
+			dongleID:     "abc123",
+			routeName:    "2099-01-01--00-00-00",
+			authDongleID: "abc123",
+			body:         `{"preserved": true}`,
+			mock: &routeMockDB{
+				routeErr: pgx.ErrNoRows,
+			},
+			wantStatus: http.StatusNotFound,
+			wantError:  "route 2099-01-01--00-00-00 not found",
+		},
+		{
+			name:         "dongle_id mismatch",
+			dongleID:     "abc123",
+			routeName:    "2024-03-15--12-30-00",
+			authDongleID: "other999",
+			body:         `{"preserved": true}`,
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusForbidden,
+			wantError:    "dongle_id does not match authenticated device",
+		},
+		{
+			name:         "database error",
+			dongleID:     "abc123",
+			routeName:    "2024-03-15--12-30-00",
+			authDongleID: "abc123",
+			body:         `{"preserved": true}`,
+			mock: &routeMockDB{
+				routeErr: fmt.Errorf("connection refused"),
+			},
+			wantStatus: http.StatusInternalServerError,
+			wantError:  "failed to update preserved flag",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			queries := db.New(tt.mock)
+			handler := NewRouteHandler(queries)
+
+			e := echo.New()
+			target := fmt.Sprintf("/v1/routes/%s/%s/preserved", tt.dongleID, tt.routeName)
+			req := httptest.NewRequest(http.MethodPut, target, strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("dongle_id", "route_name")
+			c.SetParamValues(tt.dongleID, tt.routeName)
+			c.Set(middleware.ContextKeyDongleID, tt.authDongleID)
+
+			if err := handler.SetPreserved(c); err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+
+			if rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d; body = %s", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+
+			if tt.wantError != "" {
+				var body errorResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatalf("failed to parse error body: %v", err)
+				}
+				if !strings.Contains(body.Error, tt.wantError) {
+					t.Errorf("error = %q, want substring %q", body.Error, tt.wantError)
+				}
+				return
+			}
+
+			var body routeListItem
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("failed to parse response body: %v", err)
+			}
+			if body.DongleID != tt.dongleID {
+				t.Errorf("dongleId = %q, want %q", body.DongleID, tt.dongleID)
+			}
+			if body.RouteName != tt.routeName {
+				t.Errorf("routeName = %q, want %q", body.RouteName, tt.routeName)
+			}
+			if body.Preserved != tt.wantPreserved {
+				t.Errorf("preserved = %v, want %v", body.Preserved, tt.wantPreserved)
+			}
+		})
+	}
+}
+
+func TestRouteHandlerRegisterPreservedRoute(t *testing.T) {
+	mock := &routeMockDB{}
+	queries := db.New(mock)
+	handler := NewRouteHandler(queries)
+
+	e := echo.New()
+	g := e.Group("/v1/routes")
+	handler.RegisterPreservedRoute(g)
+
+	var found bool
+	for _, r := range e.Routes() {
+		if r.Method == http.MethodPut && r.Path == "/v1/routes/:dongle_id/:route_name/preserved" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected PUT /v1/routes/:dongle_id/:route_name/preserved to be registered")
 	}
 }
 

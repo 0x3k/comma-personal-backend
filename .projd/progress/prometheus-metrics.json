@@ -3,8 +3,9 @@
   "name": "Prometheus /metrics endpoint",
   "description": "Expose a /metrics endpoint in Prometheus text format. Instrument the things that matter: HTTP request count and latency per route, upload bytes received, transcode durations, WebSocket RPC call latency per method, background-worker run durations, and current connected-device count.",
   "priority": 3,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/prometheus-metrics",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "Uses github.com/prometheus/client_golang/prometheus for metrics plus promhttp.Handler for the HTTP endpoint",
@@ -16,5 +17,5 @@
     "go test ./... passes",
     "go vet ./... and go build ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "Implemented internal/metrics package with a Metrics struct owning all collectors. Echo middleware records http_requests_total + http_request_duration_seconds. UploadHandler observes upload_bytes_total per dongle. Transcoder records transcode_duration_seconds and worker_run_duration_seconds. RPCCaller records rpc_call_duration_seconds + rpc_calls_total per method/status. Hub updates ws_connected_devices on Register/Unregister. /metrics endpoint mounted via promhttp, unauthenticated. metrics_test.go asserts names and labels on a simulated call flow."
 }
