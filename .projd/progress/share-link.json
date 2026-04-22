@@ -3,7 +3,7 @@
   "name": "Shareable read-only route links",
   "description": "Generate a signed, time-limited link to a single route that an unauthenticated viewer can use to watch video and see the map. No write access. The URL carries a signed token (HMAC-SHA256 over route_id + expiry using SESSION_SECRET). A new public page renders a stripped-down read-only view of the route.",
   "priority": 5,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/share-link",
   "base_branch": "main",
   "blocked_by": ["web-ui-auth-middleware"],
