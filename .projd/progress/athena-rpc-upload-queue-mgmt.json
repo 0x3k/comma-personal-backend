@@ -3,8 +3,9 @@
   "name": "Athena RPC: upload queue (listUploadQueue, cancelUpload)",
   "description": "Add two openpilot athenad RPC methods that let the server inspect and manipulate the device's upload queue. listUploadQueue returns the list of in-flight/pending UploadItem dicts the device is trying to send; cancelUpload accepts a single upload_id string (or a list of IDs) and removes them from the queue. Reference: openpilot/system/athena/athenad.py lines 449-467 (../../openpilot/system/athena/athenad.py). This is a prerequisite for the upload-queue-page frontend feature.",
   "priority": 2,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/athena-rpc-upload-queue-mgmt",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/ws/methods.go defines an UploadItem struct with JSON tags matching athenad's UploadItemDict (id, path, url, headers, priority, retry_count, created_at, current, progress, allow_cellular)",
