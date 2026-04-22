@@ -30,12 +30,12 @@ ON CONFLICT (route_id) DO UPDATE SET
     computed_at      = EXCLUDED.computed_at
 RETURNING id, route_id, distance_meters, duration_seconds, max_speed_mps,
           avg_speed_mps, engaged_seconds, start_address, end_address,
-          start_lat, start_lng, end_lat, end_lng, computed_at;
+          start_lat, start_lng, end_lat, end_lng, computed_at, events_computed_at;
 
 -- name: GetTripByRouteID :one
 SELECT id, route_id, distance_meters, duration_seconds, max_speed_mps,
        avg_speed_mps, engaged_seconds, start_address, end_address,
-       start_lat, start_lng, end_lat, end_lng, computed_at
+       start_lat, start_lng, end_lat, end_lng, computed_at, events_computed_at
 FROM trips
 WHERE route_id = $1;
 
@@ -43,12 +43,32 @@ WHERE route_id = $1;
 SELECT t.id, t.route_id, t.distance_meters, t.duration_seconds, t.max_speed_mps,
        t.avg_speed_mps, t.engaged_seconds, t.start_address, t.end_address,
        t.start_lat, t.start_lng, t.end_lat, t.end_lng, t.computed_at,
+       t.events_computed_at,
        r.dongle_id, r.route_name, r.start_time
 FROM trips t
 JOIN routes r ON r.id = t.route_id
 WHERE r.dongle_id = $1
 ORDER BY r.start_time DESC NULLS LAST, r.id DESC
 LIMIT $2 OFFSET $3;
+
+-- name: ListRoutesNeedingEventDetection :many
+-- Returns routes that have a trip row but have never been through event
+-- detection. The event detector worker polls this list, processes each route,
+-- and calls MarkTripEventsComputed when done.
+SELECT r.id, r.dongle_id, r.route_name, r.start_time, r.end_time
+FROM trips t
+JOIN routes r ON r.id = t.route_id
+WHERE t.events_computed_at IS NULL
+ORDER BY r.start_time ASC NULLS LAST, r.id ASC
+LIMIT $1;
+
+-- name: MarkTripEventsComputed :exec
+-- Stamp the trip row so the event detector skips it on subsequent polls.
+-- Passing a NULL resets the state so the detector will reprocess the route on
+-- the next poll (useful for tests and for forced re-runs).
+UPDATE trips
+SET events_computed_at = $2
+WHERE route_id = $1;
 
 -- name: SumTripStatsByDongleID :one
 SELECT

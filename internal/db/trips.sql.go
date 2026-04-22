@@ -14,7 +14,7 @@ import (
 const getTripByRouteID = `-- name: GetTripByRouteID :one
 SELECT id, route_id, distance_meters, duration_seconds, max_speed_mps,
        avg_speed_mps, engaged_seconds, start_address, end_address,
-       start_lat, start_lng, end_lat, end_lng, computed_at
+       start_lat, start_lng, end_lat, end_lng, computed_at, events_computed_at
 FROM trips
 WHERE route_id = $1
 `
@@ -37,14 +37,62 @@ func (q *Queries) GetTripByRouteID(ctx context.Context, routeID int32) (Trip, er
 		&i.EndLat,
 		&i.EndLng,
 		&i.ComputedAt,
+		&i.EventsComputedAt,
 	)
 	return i, err
+}
+
+const listRoutesNeedingEventDetection = `-- name: ListRoutesNeedingEventDetection :many
+SELECT r.id, r.dongle_id, r.route_name, r.start_time, r.end_time
+FROM trips t
+JOIN routes r ON r.id = t.route_id
+WHERE t.events_computed_at IS NULL
+ORDER BY r.start_time ASC NULLS LAST, r.id ASC
+LIMIT $1
+`
+
+type ListRoutesNeedingEventDetectionRow struct {
+	ID        int32              `json:"id"`
+	DongleID  string             `json:"dongleId"`
+	RouteName string             `json:"routeName"`
+	StartTime pgtype.Timestamptz `json:"startTime"`
+	EndTime   pgtype.Timestamptz `json:"endTime"`
+}
+
+// Returns routes that have a trip row but have never been through event
+// detection. The event detector worker polls this list, processes each route,
+// and calls MarkTripEventsComputed when done.
+func (q *Queries) ListRoutesNeedingEventDetection(ctx context.Context, limit int32) ([]ListRoutesNeedingEventDetectionRow, error) {
+	rows, err := q.db.Query(ctx, listRoutesNeedingEventDetection, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRoutesNeedingEventDetectionRow
+	for rows.Next() {
+		var i ListRoutesNeedingEventDetectionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DongleID,
+			&i.RouteName,
+			&i.StartTime,
+			&i.EndTime,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listTripsByDongleID = `-- name: ListTripsByDongleID :many
 SELECT t.id, t.route_id, t.distance_meters, t.duration_seconds, t.max_speed_mps,
        t.avg_speed_mps, t.engaged_seconds, t.start_address, t.end_address,
        t.start_lat, t.start_lng, t.end_lat, t.end_lng, t.computed_at,
+       t.events_computed_at,
        r.dongle_id, r.route_name, r.start_time
 FROM trips t
 JOIN routes r ON r.id = t.route_id
@@ -60,23 +108,24 @@ type ListTripsByDongleIDParams struct {
 }
 
 type ListTripsByDongleIDRow struct {
-	ID              int32              `json:"id"`
-	RouteID         int32              `json:"routeId"`
-	DistanceMeters  pgtype.Float8      `json:"distanceMeters"`
-	DurationSeconds pgtype.Int4        `json:"durationSeconds"`
-	MaxSpeedMps     pgtype.Float8      `json:"maxSpeedMps"`
-	AvgSpeedMps     pgtype.Float8      `json:"avgSpeedMps"`
-	EngagedSeconds  pgtype.Int4        `json:"engagedSeconds"`
-	StartAddress    pgtype.Text        `json:"startAddress"`
-	EndAddress      pgtype.Text        `json:"endAddress"`
-	StartLat        pgtype.Float8      `json:"startLat"`
-	StartLng        pgtype.Float8      `json:"startLng"`
-	EndLat          pgtype.Float8      `json:"endLat"`
-	EndLng          pgtype.Float8      `json:"endLng"`
-	ComputedAt      pgtype.Timestamptz `json:"computedAt"`
-	DongleID        string             `json:"dongleId"`
-	RouteName       string             `json:"routeName"`
-	StartTime       pgtype.Timestamptz `json:"startTime"`
+	ID               int32              `json:"id"`
+	RouteID          int32              `json:"routeId"`
+	DistanceMeters   pgtype.Float8      `json:"distanceMeters"`
+	DurationSeconds  pgtype.Int4        `json:"durationSeconds"`
+	MaxSpeedMps      pgtype.Float8      `json:"maxSpeedMps"`
+	AvgSpeedMps      pgtype.Float8      `json:"avgSpeedMps"`
+	EngagedSeconds   pgtype.Int4        `json:"engagedSeconds"`
+	StartAddress     pgtype.Text        `json:"startAddress"`
+	EndAddress       pgtype.Text        `json:"endAddress"`
+	StartLat         pgtype.Float8      `json:"startLat"`
+	StartLng         pgtype.Float8      `json:"startLng"`
+	EndLat           pgtype.Float8      `json:"endLat"`
+	EndLng           pgtype.Float8      `json:"endLng"`
+	ComputedAt       pgtype.Timestamptz `json:"computedAt"`
+	EventsComputedAt pgtype.Timestamptz `json:"eventsComputedAt"`
+	DongleID         string             `json:"dongleId"`
+	RouteName        string             `json:"routeName"`
+	StartTime        pgtype.Timestamptz `json:"startTime"`
 }
 
 func (q *Queries) ListTripsByDongleID(ctx context.Context, arg ListTripsByDongleIDParams) ([]ListTripsByDongleIDRow, error) {
@@ -103,6 +152,7 @@ func (q *Queries) ListTripsByDongleID(ctx context.Context, arg ListTripsByDongle
 			&i.EndLat,
 			&i.EndLng,
 			&i.ComputedAt,
+			&i.EventsComputedAt,
 			&i.DongleID,
 			&i.RouteName,
 			&i.StartTime,
@@ -115,6 +165,25 @@ func (q *Queries) ListTripsByDongleID(ctx context.Context, arg ListTripsByDongle
 		return nil, err
 	}
 	return items, nil
+}
+
+const markTripEventsComputed = `-- name: MarkTripEventsComputed :exec
+UPDATE trips
+SET events_computed_at = $2
+WHERE route_id = $1
+`
+
+type MarkTripEventsComputedParams struct {
+	RouteID          int32              `json:"routeId"`
+	EventsComputedAt pgtype.Timestamptz `json:"eventsComputedAt"`
+}
+
+// Stamp the trip row so the event detector skips it on subsequent polls.
+// Passing a NULL resets the state so the detector will reprocess the route on
+// the next poll (useful for tests and for forced re-runs).
+func (q *Queries) MarkTripEventsComputed(ctx context.Context, arg MarkTripEventsComputedParams) error {
+	_, err := q.db.Exec(ctx, markTripEventsComputed, arg.RouteID, arg.EventsComputedAt)
+	return err
 }
 
 const sumTripStatsByDongleID = `-- name: SumTripStatsByDongleID :one
@@ -179,7 +248,7 @@ ON CONFLICT (route_id) DO UPDATE SET
     computed_at      = EXCLUDED.computed_at
 RETURNING id, route_id, distance_meters, duration_seconds, max_speed_mps,
           avg_speed_mps, engaged_seconds, start_address, end_address,
-          start_lat, start_lng, end_lat, end_lng, computed_at
+          start_lat, start_lng, end_lat, end_lng, computed_at, events_computed_at
 `
 
 type UpsertTripParams struct {
@@ -230,6 +299,7 @@ func (q *Queries) UpsertTrip(ctx context.Context, arg UpsertTripParams) (Trip, e
 		&i.EndLat,
 		&i.EndLng,
 		&i.ComputedAt,
+		&i.EventsComputedAt,
 	)
 	return i, err
 }
