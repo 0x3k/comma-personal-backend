@@ -11,16 +11,51 @@ interface RequestOptions extends Omit<RequestInit, "body"> {
 }
 
 /**
+ * ApiUnauthorizedError is thrown after the client has already initiated a
+ * redirect to the login page. Handlers can catch it to short-circuit any
+ * follow-up UI work (e.g. showing an inline error), since the browser is
+ * already navigating away.
+ */
+class ApiUnauthorizedError extends Error {
+  constructor(message: string = "unauthorized") {
+    super(message);
+    this.name = "ApiUnauthorizedError";
+  }
+}
+
+/**
+ * redirectToLogin navigates the browser to the login page, preserving the
+ * current path + query as the `next` parameter so the login handler can
+ * bounce back. No-op on the server (SSR) and on the login page itself, to
+ * avoid redirect loops.
+ */
+function redirectToLogin(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const { pathname, search } = window.location;
+  // Do not loop if we're already on /login.
+  if (pathname === "/login") {
+    return;
+  }
+  const next = pathname + search;
+  const target = `/login?next=${encodeURIComponent(next)}`;
+  window.location.assign(target);
+}
+
+/**
  * Fetch wrapper for making typed API calls to the Go backend.
- * Prepends the configurable base URL and handles JSON serialization.
+ * Prepends the configurable base URL, sends credentials so the session
+ * cookie is included on every request, and redirects to /login on 401.
  */
 export async function apiFetch<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const { body, headers, ...rest } = options;
+  const { body, headers, credentials, ...rest } = options;
 
   const response = await fetch(`${BASE_URL}${path}`, {
+    credentials: credentials ?? "include",
     headers: {
       "Content-Type": "application/json",
       ...headers,
@@ -28,6 +63,11 @@ export async function apiFetch<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
     ...rest,
   });
+
+  if (response.status === 401) {
+    redirectToLogin();
+    throw new ApiUnauthorizedError();
+  }
 
   if (!response.ok) {
     const errorBody: ApiError = await response.json().catch(() => ({
@@ -45,4 +85,4 @@ export async function apiFetch<T>(
   return response.json() as Promise<T>;
 }
 
-export { BASE_URL };
+export { BASE_URL, ApiUnauthorizedError };

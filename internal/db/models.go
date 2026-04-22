@@ -59,13 +59,6 @@ type Segment struct {
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
 }
 
-type UiUser struct {
-	ID           int32              `json:"id"`
-	Username     string             `json:"username"`
-	PasswordHash string             `json:"passwordHash"`
-	CreatedAt    pgtype.Timestamptz `json:"createdAt"`
-}
-
 type Setting struct {
 	Key       string             `json:"key"`
 	Value     string             `json:"value"`
@@ -87,4 +80,11 @@ type Trip struct {
 	EndLat          pgtype.Float8      `json:"endLat"`
 	EndLng          pgtype.Float8      `json:"endLng"`
 	ComputedAt      pgtype.Timestamptz `json:"computedAt"`
+}
+
+type UiUser struct {
+	ID           int32              `json:"id"`
+	Username     string             `json:"username"`
+	PasswordHash string             `json:"passwordHash"`
+	CreatedAt    pgtype.Timestamptz `json:"createdAt"`
 }

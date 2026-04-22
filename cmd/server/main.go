@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,6 +20,7 @@ import (
 	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
+	"comma-personal-backend/internal/worker"
 	"comma-personal-backend/internal/ws"
 )
 
@@ -114,6 +117,8 @@ func main() {
 	routeHandler.RegisterPreservedRoute(v1Routes)
 	exportHandler := api.NewExportHandler(queries, store)
 	exportHandler.RegisterRoutes(v1Routes)
+	signalsHandler := api.NewSignalsHandler(queries, store)
+	signalsHandler.RegisterRoutes(v1Routes)
 
 	// Trip stats: per-device lifetime totals + recent trip list on /v1, and
 	// per-route aggregated trip detail on /v1/routes.
@@ -145,6 +150,14 @@ func main() {
 	// share the /v1 auth group with config params and settings.
 	tripHandler.RegisterStatsRoute(v1Config)
 
+	// Live device status panel feeds the web UI; it accepts either a session
+	// cookie (browser dashboard) or a device JWT (CLI/ad-hoc), so it lives on
+	// its own group with the session-or-JWT middleware rather than the
+	// device-only /v1 group above.
+	v1Live := e.Group("/v1", api.SessionOrJWT(cfg.SessionSecret, queries))
+	liveHandler := api.NewDeviceLiveHandler(hub, rpcCaller)
+	liveHandler.RegisterRoutes(v1Live)
+
 	// Storage usage (disk accounting) endpoint. The walk is memoized in the
 	// storage package so repeated polling stays cheap.
 	v1Storage := e.Group("/v1", auth)
@@ -154,6 +167,24 @@ func main() {
 	// WebSocket for device communication.
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
 	wsHandler.RegisterRoutes(e)
+
+	// Cleanup worker: deletes non-preserved routes older than the
+	// configured retention window. CLEANUP_ENABLED defaults to true.
+	// DELETE_DRY_RUN defaults to true so first-time operators see what
+	// would happen before enabling real deletion.
+	if envBool("CLEANUP_ENABLED", true) {
+		cleanup := &worker.CleanupWorker{
+			Queries:          queries,
+			Storage:          store,
+			Settings:         settingsStore,
+			Interval:         worker.DefaultCleanupInterval,
+			EnvRetentionDays: cfg.RetentionDays,
+			DryRun:           envBool("DELETE_DRY_RUN", true),
+		}
+		go cleanup.Run(context.Background())
+	} else {
+		log.Printf("cleanup worker: disabled via CLEANUP_ENABLED=false")
+	}
 
 	s := &http.Server{
 		Addr:              ":" + cfg.Port,
@@ -165,5 +196,24 @@ func main() {
 	log.Printf("starting server on :%s", cfg.Port)
 	if err := e.StartServer(s); err != nil {
 		log.Fatalf("failed to start server: %v", err)
+	}
+}
+
+// envBool parses a boolean environment variable. Missing or unparseable
+// values fall back to defaultValue. Accepted truthy values: "true", "1",
+// "yes", "on" (case-insensitive); accepted falsy: "false", "0", "no", "off".
+func envBool(name string, defaultValue bool) bool {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return defaultValue
+	}
+	switch strings.ToLower(v) {
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	default:
+		log.Printf("warning: %s=%q is not a valid boolean; using default %v", name, v, defaultValue)
+		return defaultValue
 	}
 }

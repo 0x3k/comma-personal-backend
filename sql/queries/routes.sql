@@ -40,3 +40,21 @@ SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, pr
 FROM routes
 WHERE preserved = true
 ORDER BY created_at DESC;
+
+-- name: ListStaleRoutes :many
+-- Returns non-preserved routes whose end_time is older than the given cutoff.
+-- Used by the cleanup worker; ordered by end_time asc so the oldest routes are
+-- deleted first when MaxDeletionsPerRun caps the batch.
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
+FROM routes
+WHERE preserved = false
+  AND end_time IS NOT NULL
+  AND end_time < $1
+ORDER BY end_time ASC
+LIMIT $2;
+
+-- name: DeleteRoute :exec
+-- Deletes a route row. Segments and trips reference it with ON DELETE CASCADE
+-- so they are removed automatically.
+DELETE FROM routes
+WHERE id = $1;
