@@ -173,6 +173,12 @@ func main() {
 	liveHandler := api.NewDeviceLiveHandler(hub, rpcCaller)
 	liveHandler.RegisterRoutes(v1ConfigRead)
 
+	// Events "Moments" listing: paginated, filterable events per device.
+	// Mounted on the shared read group so the dashboard (session cookie) and
+	// ad-hoc device JWT callers both work.
+	eventsHandler := api.NewEventsHandler(queries)
+	eventsHandler.RegisterRoutes(v1ConfigRead)
+
 	// Storage usage (disk accounting) endpoint. The walk is memoized in the
 	// storage package so repeated polling stays cheap. Dashboard-facing.
 	v1Storage := e.Group("/v1", sessionOrJWT)

@@ -3,8 +3,9 @@
   "name": "Events 'Moments' page",
   "description": "Add a 'Moments' page that lists detected events across all routes with filters by type and severity. Each row links to the route detail page at the event's offset so the video starts playing from that moment. Also add an inline strip of event markers on the video signal timeline, if log-overlay-ui has landed (wire it in via a conditional render).",
   "priority": 5,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/events-ui",
+  "base_branch": "main",
   "blocked_by": ["event-detector-worker"],
   "acceptance_criteria": [
     "Backend adds GET /v1/devices/:dongle_id/events?type=&severity=&limit=&offset= returning { events: [{id, route_name, type, severity, route_offset_seconds, occurred_at, payload}], total } using ListEventsByDongleID; session-or-JWT auth",
