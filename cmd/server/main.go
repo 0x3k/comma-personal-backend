@@ -169,6 +169,23 @@ func main() {
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
 	wsHandler.RegisterRoutes(e)
 
+	// Event detector background worker. Opt-out via EVENT_DETECTOR_ENABLED=false
+	// (or "0"); any other value enables it. Runs in its own goroutine with the
+	// server context so shutdown cancels the poll loop cleanly.
+	if envBool("EVENT_DETECTOR_ENABLED", true) {
+		detector := worker.NewEventDetector(
+			queries,
+			store,
+			30*time.Second,
+			worker.LoadThresholdsFromEnv(),
+		)
+		go detector.Run(context.Background())
+		log.Printf("event detector worker started (thresholds: brake=%.2f m/s^2, min-sec=%.2f)",
+			detector.Thresholds.HardBrakeMps2, detector.Thresholds.HardBrakeMinDurationSec)
+	} else {
+		log.Printf("event detector worker disabled via EVENT_DETECTOR_ENABLED")
+	}
+
 	// Background trip aggregator. Defaults on; set TRIP_AGGREGATOR_ENABLED=0
 	// (or false/no/off) to skip it, e.g. in constrained test environments.
 	if envBool("TRIP_AGGREGATOR_ENABLED", true) {

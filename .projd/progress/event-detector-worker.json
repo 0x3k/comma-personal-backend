@@ -3,8 +3,9 @@
   "name": "Event detector background worker",
   "description": "Worker that consumes parsed log signals from cereal-log-parser and writes detected events to the events table. First-pass rule set: hard_brake when deceleration > 4.5 m/s^2 sustained for >=0.3s; disengage on the trailing edge of controlsState.enabled; fcw when controlsState alertText1 starts with 'FCW' or 'Forward Collision'; alert_warning for any warn-severity alert. Tunable thresholds via env vars with sensible defaults. Runs after trip-aggregator has marked a route stable.",
   "priority": 4,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/event-detector-worker",
+  "base_branch": "main",
   "blocked_by": ["cereal-log-parser", "event-schema"],
   "acceptance_criteria": [
     "internal/worker/event_detector.go defines EventDetector { Queries, Storage, PollInterval, Thresholds struct{ HardBrakeMps2, HardBrakeMinDurationSec float64 } }",
@@ -17,5 +18,5 @@
     "go test ./internal/worker/... passes",
     "go vet ./... and go build ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "Added events_computed_at nullable column on trips (migration 008) to track detection state per route; rationale in migration comment. DetectEvents is a pure function over DrivingSignals so tests bypass the cereal round-trip. Worker is idempotent via the (route_id, type, route_offset_seconds) UNIQUE constraint on events and the events_computed_at stamp on trips. Smoke lint/typecheck failures are pre-existing frontend dep issues on main; go vet, go build, go test pass."
 }
