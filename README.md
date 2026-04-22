@@ -69,6 +69,7 @@ psql comma -c "CREATE EXTENSION IF NOT EXISTS postgis;"
 ```bash
 psql comma < sql/migrations/001_init.up.sql
 psql comma < sql/migrations/002_device_params.up.sql
+psql comma < sql/migrations/006_ui_users.up.sql
 ```
 
 **3. Configure environment**
@@ -86,6 +87,9 @@ cp .env.example .env
 | `STORAGE_PATH` | no | `./data` | Directory for uploaded video/log files |
 | `PORT` | no | `8080` | API server listen port |
 | `ALLOWED_SERIALS` | no | -- | Comma-separated allowlist of device serials permitted to register (all allowed if unset). The dongle ID is assigned server-side, so restriction is by hardware serial. |
+| `SESSION_SECRET` | no | -- | Required to enable the web UI login. Used as the HMAC key for signed session cookies. If unset, UI auth is disabled (a warning is logged) -- device auth still works. |
+| `ADMIN_USERNAME` | no | -- | When both ADMIN_USERNAME and ADMIN_PASSWORD are set, the server bootstraps (or updates) this user row in `ui_users` on startup so you can log into the dashboard with env-configured credentials. |
+| `ADMIN_PASSWORD` | no | -- | Plaintext admin password; stored hashed with bcrypt (cost 12). See ADMIN_USERNAME. |
 
 **4. Start the backend**
 
@@ -123,6 +127,8 @@ The local dev setup above is fine for testing. For an always-on server that rece
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/v2/pilotauth/` | Device registration, returns a signed JWT |
+| POST | `/v1/session/login` | Dashboard login (username + password). Sets an HttpOnly session cookie. Enabled only when `SESSION_SECRET` is set. Rate limited to 5 attempts / 15 min per IP. |
+| POST | `/v1/session/logout` | Dashboard logout. Clears the session cookie. |
 
 ### Devices
 | Method | Path | Description |
