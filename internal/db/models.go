@@ -46,3 +46,10 @@ type Segment struct {
 	QcameraUploaded bool               `json:"qcameraUploaded"`
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
 }
+
+type UiUser struct {
+	ID           int32              `json:"id"`
+	Username     string             `json:"username"`
+	PasswordHash string             `json:"passwordHash"`
+	CreatedAt    pgtype.Timestamptz `json:"createdAt"`
+}
