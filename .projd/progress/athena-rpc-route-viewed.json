@@ -3,8 +3,9 @@
   "name": "Athena RPC: setRouteViewed",
   "description": "Add the setRouteViewed openpilot athenad RPC method. Takes a route name (e.g., 'a2a0ccea32023010|2023-07-13--11-06-38') and tells the device to record that this route has been viewed, so the device can tag or deprioritize it in its local queue. Reference: openpilot/system/athena/athenad.py lines 468-483 (../../openpilot/system/athena/athenad.py). This feature only implements the RPC wrapper; the web UI hook-up is a separate concern.",
   "priority": 4,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/athena-rpc-route-viewed",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "internal/ws/methods.go defines SetRouteViewedParams { Route string `json:\"route\"` }",
