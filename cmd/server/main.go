@@ -114,6 +114,8 @@ func main() {
 	routeHandler.RegisterPreservedRoute(v1Routes)
 	exportHandler := api.NewExportHandler(queries, store)
 	exportHandler.RegisterRoutes(v1Routes)
+	signalsHandler := api.NewSignalsHandler(queries, store)
+	signalsHandler.RegisterRoutes(v1Routes)
 
 	// Upload URL and file upload.
 	v14 := e.Group("/v1.4", auth)

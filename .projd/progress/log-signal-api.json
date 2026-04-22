@@ -3,8 +3,9 @@
   "name": "Log signal API endpoint",
   "description": "Expose parsed log signals via HTTP so the frontend video player can overlay a timeline. Reads the qlog file for the route (smaller than rlog, fine for UI scale), runs it through the cereal parser, and returns a JSON time-series. Cache the parsed result on disk next to the qlog (e.g., signals.json) so repeat requests are fast.",
   "priority": 3,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/log-signal-api",
+  "base_branch": "main",
   "blocked_by": ["cereal-log-parser"],
   "acceptance_criteria": [
     "GET /v1/routes/:dongle_id/:route_name/signals returns JSON { times: [unix_ms...], speed_mps: [...], steering_deg: [...], engaged: [bool...], alerts: [string...] } built from concatenated qlogs across all segments of the route (in segment-number order)",
