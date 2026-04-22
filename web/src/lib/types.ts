@@ -84,6 +84,39 @@ export interface RetentionSetting {
   retention_days: number;
 }
 
+/** A segment as returned by the public GET /v1/share/:token endpoint.
+ *  Intentionally trimmer than Segment -- rlog/qlog are not exposed.
+ */
+export interface ShareSegment {
+  number: number;
+  fcameraUploaded: boolean;
+  ecameraUploaded: boolean;
+  dcameraUploaded: boolean;
+  qcameraUploaded: boolean;
+}
+
+/** Response from GET /v1/share/:token (public, token-gated). */
+export interface ShareRouteResponse {
+  routeName: string;
+  startTime: string | null;
+  endTime: string | null;
+  segmentCount: number;
+  segments: ShareSegment[];
+  /** GPS track as an array of [lat, lng] coordinate pairs. */
+  geometry: [number, number][] | null;
+  /** ISO timestamp at which this share link stops being valid. */
+  expiresAt: string;
+  /** Base path for per-segment media, e.g. "/v1/share/<token>/segments". */
+  mediaBaseUrl: string;
+}
+
+/** Response from POST /v1/routes/:dongle_id/:route_name/share. */
+export interface CreateShareResponse {
+  url: string;
+  token: string;
+  expires_at: string;
+}
+
 /**
  * A single aggregated trip row as returned by the stats and trip endpoints.
  * snake_case field names match the Go handler in internal/api/trip.go

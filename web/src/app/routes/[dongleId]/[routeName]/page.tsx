@@ -19,6 +19,7 @@ import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Button } from "@/components/ui/Button";
 import TripMap from "@/components/map/TripMap";
 import { LogViewer } from "@/components/logs/LogViewer";
+import { ShareButton } from "@/components/ShareButton";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
   { key: "fcameraUploaded", label: "fcamera" },
@@ -168,9 +169,15 @@ export default function RouteDetailPage() {
           {/* Route info header */}
           <Card className="mb-6">
             <CardHeader>
-              <h1 className="text-subheading text-[var(--text-primary)]">
-                {route.routeName}
-              </h1>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <h1 className="text-subheading text-[var(--text-primary)]">
+                  {route.routeName}
+                </h1>
+                <ShareButton
+                  dongleId={route.dongleId}
+                  routeName={route.routeName}
+                />
+              </div>
             </CardHeader>
             <CardBody>
               <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-4 text-sm">
