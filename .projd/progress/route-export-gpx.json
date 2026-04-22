@@ -3,8 +3,9 @@
   "name": "Route export: GPX download",
   "description": "Expose a GPX (XML) download of a route's GPS track, built from the routes.geometry PostGIS column. Simple and small -- one endpoint, one query, one XML serializer.",
   "priority": 4,
-  "status": "pending",
-  "branch": "",
+  "status": "complete",
+  "branch": "agent/route-export-gpx",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "GET /v1/routes/:dongle_id/:route_name/export.gpx returns GPX 1.1 XML with a single <trk>/<trkseg> containing one <trkpt lat=... lon=...> per coordinate in the geometry, in order",
