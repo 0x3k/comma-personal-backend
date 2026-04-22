@@ -142,6 +142,20 @@ func main() {
 	storageHandler := api.NewStorageHandler(store)
 	storageHandler.RegisterRoutes(v1Storage)
 
+	// Upload queue inspection and cancellation. The GET endpoint accepts
+	// either a UI session cookie or a device JWT so either side can read it;
+	// POST is session-only because only the operator should be cancelling
+	// the device's own uploads.
+	uploadQueueHandler := api.NewUploadQueueHandler(hub, rpcCaller)
+	sessionSecret := []byte(cfg.SessionSecret)
+	readAuth := api.SessionOrJWTAuth(sessionSecret, queries, queries)
+	v1UploadQueueRead := e.Group("/v1", readAuth)
+	uploadQueueHandler.RegisterListRoute(v1UploadQueueRead)
+	if cfg.UIAuthEnabled() {
+		v1UploadQueueCancel := e.Group("/v1", api.SessionAuth(sessionSecret, queries))
+		uploadQueueHandler.RegisterCancelRoute(v1UploadQueueCancel)
+	}
+
 	// WebSocket for device communication.
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
 	wsHandler.RegisterRoutes(e)
