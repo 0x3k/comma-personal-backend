@@ -3,8 +3,9 @@
   "name": "Preserve flag on routes",
   "description": "Add a 'preserved' boolean column on routes that the cleanup worker will respect (preserved routes are never auto-deleted). Expose an API to toggle it. Modeled after comma connect's 'preserve' behavior. Frontend wiring (a star/bookmark button on the route detail page) is out of scope here -- this feature is schema + API only.",
   "priority": 2,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/preserve-flag",
+  "base_branch": "main",
   "blocked_by": [],
   "acceptance_criteria": [
     "sql/migrations/004_route_preserved.up.sql adds: ALTER TABLE routes ADD COLUMN preserved BOOLEAN NOT NULL DEFAULT false; plus an index WHERE preserved = true to keep preserved-lookup fast",
