@@ -8,6 +8,7 @@ import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
+import { DeviceStatusPanel } from "@/components/DeviceStatusPanel";
 import { SnapshotButton } from "@/components/SnapshotButton";
 
 interface Device {
@@ -106,40 +107,43 @@ export default function DevicesPage() {
       {!loading && !error && devices.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {devices.map((device) => (
-            <Card key={device.dongleId} className="h-full">
-              <CardHeader>
-                <div className="flex items-center justify-between gap-2">
-                  <Link
-                    href={`/routes?device=${device.dongleId}`}
-                    className="truncate rounded text-sm font-medium font-mono text-[var(--text-primary)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring-focus)]"
-                  >
-                    {device.dongleId}
-                  </Link>
-                  <Badge variant="success">Registered</Badge>
-                </div>
-              </CardHeader>
-              <CardBody>
-                <dl className="space-y-1 text-sm">
-                  {device.serial && (
-                    <div className="flex justify-between">
-                      <dt className="text-[var(--text-secondary)]">Serial</dt>
-                      <dd className="font-mono text-xs text-[var(--text-primary)]">
-                        {device.serial}
-                      </dd>
+            <div key={device.dongleId} className="flex flex-col gap-3">
+              <Link
+                href={`/routes?device=${device.dongleId}`}
+                className="block rounded-lg transition-transform hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring-focus)]"
+              >
+                <Card className="h-full">
+                  <CardHeader>
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 className="text-sm font-medium font-mono text-[var(--text-primary)] truncate">
+                        {device.dongleId}
+                      </h2>
+                      <Badge variant="success">Registered</Badge>
                     </div>
-                  )}
-                  <div className="flex justify-between">
-                    <dt className="text-[var(--text-secondary)]">Last seen</dt>
-                    <dd className="text-[var(--text-primary)]">
-                      {formatLastSeen(device.lastSeen)}
-                    </dd>
-                  </div>
-                </dl>
-                <div className="mt-4">
-                  <SnapshotButton dongleId={device.dongleId} />
-                </div>
-              </CardBody>
-            </Card>
+                  </CardHeader>
+                  <CardBody>
+                    <dl className="space-y-1 text-sm">
+                      {device.serial && (
+                        <div className="flex justify-between">
+                          <dt className="text-[var(--text-secondary)]">Serial</dt>
+                          <dd className="font-mono text-xs text-[var(--text-primary)]">
+                            {device.serial}
+                          </dd>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <dt className="text-[var(--text-secondary)]">Last seen</dt>
+                        <dd className="text-[var(--text-primary)]">
+                          {formatLastSeen(device.lastSeen)}
+                        </dd>
+                      </div>
+                    </dl>
+                  </CardBody>
+                </Card>
+              </Link>
+              <DeviceStatusPanel dongleId={device.dongleId} />
+              <SnapshotButton dongleId={device.dongleId} />
+            </div>
           ))}
         </div>
       )}

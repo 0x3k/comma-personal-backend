@@ -62,3 +62,24 @@ export interface LogEntry {
   /** The log message text. */
   message: string;
 }
+
+/** Per-device disk consumption as returned by GET /v1/storage/usage. */
+export interface DeviceUsage {
+  dongleId: string;
+  bytes: number;
+  routeCount: number;
+}
+
+/** Full disk usage report from GET /v1/storage/usage. */
+export interface StorageUsageReport {
+  devices: DeviceUsage[];
+  totalBytes: number;
+  filesystemTotalBytes: number;
+  filesystemAvailableBytes: number;
+  computedAt: string;
+}
+
+/** Response from GET/PUT /v1/settings/retention. */
+export interface RetentionSetting {
+  retention_days: number;
+}

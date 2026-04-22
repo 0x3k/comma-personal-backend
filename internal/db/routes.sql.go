@@ -56,6 +56,18 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 	return i, err
 }
 
+const deleteRoute = `-- name: DeleteRoute :exec
+DELETE FROM routes
+WHERE id = $1
+`
+
+// Deletes a route row. Segments and trips reference it with ON DELETE CASCADE
+// so they are removed automatically.
+func (q *Queries) DeleteRoute(ctx context.Context, id int32) error {
+	_, err := q.db.Exec(ctx, deleteRoute, id)
+	return err
+}
+
 const getRoute = `-- name: GetRoute :one
 SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
 FROM routes
@@ -193,6 +205,53 @@ type ListRoutesByDevicePaginatedParams struct {
 
 func (q *Queries) ListRoutesByDevicePaginated(ctx context.Context, arg ListRoutesByDevicePaginatedParams) ([]Route, error) {
 	rows, err := q.db.Query(ctx, listRoutesByDevicePaginated, arg.DongleID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Route
+	for rows.Next() {
+		var i Route
+		if err := rows.Scan(
+			&i.ID,
+			&i.DongleID,
+			&i.RouteName,
+			&i.StartTime,
+			&i.EndTime,
+			&i.Geometry,
+			&i.CreatedAt,
+			&i.Preserved,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStaleRoutes = `-- name: ListStaleRoutes :many
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
+FROM routes
+WHERE preserved = false
+  AND end_time IS NOT NULL
+  AND end_time < $1
+ORDER BY end_time ASC
+LIMIT $2
+`
+
+type ListStaleRoutesParams struct {
+	EndTime pgtype.Timestamptz `json:"endTime"`
+	Limit   int32              `json:"limit"`
+}
+
+// Returns non-preserved routes whose end_time is older than the given cutoff.
+// Used by the cleanup worker; ordered by end_time asc so the oldest routes are
+// deleted first when MaxDeletionsPerRun caps the batch.
+func (q *Queries) ListStaleRoutes(ctx context.Context, arg ListStaleRoutesParams) ([]Route, error) {
+	rows, err := q.db.Query(ctx, listStaleRoutes, arg.EndTime, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
