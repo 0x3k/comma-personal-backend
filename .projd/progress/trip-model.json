@@ -1,0 +1,18 @@
+{
+  "id": "trip-model",
+  "name": "Trip model: schema migration + sqlc queries",
+  "description": "Introduce a 'trip' as a derived summary of a route, holding aggregate stats (distance, duration, speeds, engagement, start/end addresses). Every route has at most one trip. This feature only adds the schema and data-access layer -- the aggregation worker, API, and UI are separate features. Why a separate table from routes: routes represent raw ingest state (what segments uploaded); trips represent human-meaningful drive summaries that are recomputed when inputs change.",
+  "priority": 1,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "sql/migrations/003_trips.up.sql creates a trips table: id SERIAL PK, route_id INT UNIQUE NOT NULL REFERENCES routes(id) ON DELETE CASCADE, distance_meters DOUBLE PRECISION, duration_seconds INT, max_speed_mps DOUBLE PRECISION, avg_speed_mps DOUBLE PRECISION, engaged_seconds INT, start_address TEXT, end_address TEXT, start_lat DOUBLE PRECISION, start_lng DOUBLE PRECISION, end_lat DOUBLE PRECISION, end_lng DOUBLE PRECISION, computed_at TIMESTAMPTZ",
+    "sql/migrations/003_trips.down.sql drops the table",
+    "sql/queries/trips.sql defines sqlc queries: UpsertTrip, GetTripByRouteID, ListTripsByDongleID (paginated, joined with routes to return dongle_id, route_name, start_time), SumTripStatsByDongleID (lifetime totals: total_distance, total_duration, total_engaged, trip_count)",
+    "Running sqlc generate produces internal/db/trips.sql.go without errors",
+    "The migration applies cleanly against a fresh database: psql -c 'CREATE EXTENSION postgis;' then apply 001, 002, 003",
+    "go build ./... and go vet ./... pass cleanly"
+  ],
+  "notes": ""
+}

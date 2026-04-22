@@ -1,0 +1,21 @@
+{
+  "id": "web-ui-auth-backend",
+  "name": "Web UI authentication backend (login, bcrypt, session cookie)",
+  "description": "The backend currently has no login for the dashboard -- anyone reachable on the network sees every drive. Add single-user login: an admin credential (username + password) is configured via env var and/or initial DB row; login returns an HttpOnly, SameSite=Lax, Secure session cookie signed + encrypted server-side. Keep this strictly separate from the device-facing JWT auth (which stays on /v1/* device endpoints). The dashboard auth gates the web UI's read endpoints and the settings mutation endpoints.",
+  "priority": 1,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "sql/migrations/006_ui_users.up.sql creates a ui_users table (id SERIAL PK, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at TIMESTAMPTZ); .down drops it",
+    "New env vars: ADMIN_USERNAME, ADMIN_PASSWORD (if set, the server bootstraps/updates that user row on startup). SESSION_SECRET (required to enable UI auth; if unset, server logs a warning and UI auth is disabled -- device auth still works)",
+    "internal/api/session.go adds POST /v1/session/login (body: {username, password}; sets signed session cookie on success, 401 on failure) and POST /v1/session/logout (clears the cookie)",
+    "Passwords are bcrypt-hashed via golang.org/x/crypto/bcrypt (cost 12)",
+    "Session cookie is a signed token (HMAC-SHA256 over 'userID|expiresAt') with a 7-day expiry; stored as cookie name 'session', HttpOnly, Secure when TLS, SameSite=Lax",
+    "Rate-limit login attempts to 5 per 15 minutes per remote IP (in-memory sliding window is fine for a single-process server)",
+    "internal/api/session_test.go covers: successful login, wrong password, unknown user, logout, signed-cookie tamper rejection, rate limit kicks in after 5 failures",
+    "go test ./internal/api/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

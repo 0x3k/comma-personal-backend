@@ -1,0 +1,20 @@
+{
+  "id": "log-signal-api",
+  "name": "Log signal API endpoint",
+  "description": "Expose parsed log signals via HTTP so the frontend video player can overlay a timeline. Reads the qlog file for the route (smaller than rlog, fine for UI scale), runs it through the cereal parser, and returns a JSON time-series. Cache the parsed result on disk next to the qlog (e.g., signals.json) so repeat requests are fast.",
+  "priority": 3,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["cereal-log-parser"],
+  "acceptance_criteria": [
+    "GET /v1/routes/:dongle_id/:route_name/signals returns JSON { times: [unix_ms...], speed_mps: [...], steering_deg: [...], engaged: [bool...], alerts: [string...] } built from concatenated qlogs across all segments of the route (in segment-number order)",
+    "First request computes and writes <STORAGE_PATH>/<dongle_id>/<route>/<segment>/signals.json per segment; subsequent requests read the cached JSON if present and the qlog mtime is unchanged",
+    "If a segment has no qlog yet, that segment is skipped (not treated as an error) so partial routes still return useful data",
+    "Endpoint requires JWT auth via existing middleware",
+    "internal/api/signals.go (new) holds the handler; registered in the same place route endpoints are",
+    "internal/api/signals_test.go covers: cache miss (computes and writes), cache hit (does not recompute -- verified by deleting the qlog after first call and expecting success), missing qlog across whole route (returns 200 with empty arrays, not 500), 404 on unknown route",
+    "go test ./internal/api/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

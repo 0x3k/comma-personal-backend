@@ -1,0 +1,20 @@
+{
+  "id": "route-export-gpx",
+  "name": "Route export: GPX download",
+  "description": "Expose a GPX (XML) download of a route's GPS track, built from the routes.geometry PostGIS column. Simple and small -- one endpoint, one query, one XML serializer.",
+  "priority": 4,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "GET /v1/routes/:dongle_id/:route_name/export.gpx returns GPX 1.1 XML with a single <trk>/<trkseg> containing one <trkpt lat=... lon=...> per coordinate in the geometry, in order",
+    "Uses ST_AsText or ST_DumpPoints to read the LineString; encode via encoding/xml (no external lib)",
+    "Content-Type: application/gpx+xml; Content-Disposition: attachment; filename=\"<route_name>.gpx\"",
+    "404 when the route has no geometry (not a 500 or empty file)",
+    "Requires session-or-JWT auth",
+    "internal/api/export_test.go (or a new gpx_test.go) covers: valid GPX schema (parseable by encoding/xml round-trip), 404 when geometry is NULL, 200 with the right byte count when geometry has N points",
+    "go test ./internal/api/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

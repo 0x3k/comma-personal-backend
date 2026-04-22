@@ -1,0 +1,20 @@
+{
+  "id": "web-ui-login-page",
+  "name": "Web UI login page",
+  "description": "Add a login page that posts to /v1/session/login. Redirects to / on success. All protected pages, when they get a 401 from the API, redirect here. A simple 'Log out' button in the existing layout nav calls /v1/session/logout.",
+  "priority": 2,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["web-ui-auth-backend"],
+  "acceptance_criteria": [
+    "web/src/app/login/page.tsx renders username + password inputs and a submit button; posts credentials JSON to /v1/session/login with credentials: 'include'",
+    "On success, redirects to the 'next' query param if safe (same origin, starts with '/') else '/'",
+    "On failure, shows the server's error message inline without leaving the page",
+    "web/src/lib/api.ts is updated to send credentials: 'include' on all requests and to redirect to /login?next=<current_path> when any response is 401",
+    "web/src/components/layout/ adds a small user menu (or inline button) with 'Log out' that posts to /v1/session/logout and then redirects to /login",
+    "When SESSION_SECRET is unset (open mode), hitting /login is still allowed but the submit redirects to / immediately since auth is disabled",
+    "pnpm --dir web lint, pnpm --dir web type-check, and pnpm --dir web build pass",
+    "Manual check against a running backend with SESSION_SECRET set: can log in, session persists across reloads, logout works"
+  ],
+  "notes": ""
+}

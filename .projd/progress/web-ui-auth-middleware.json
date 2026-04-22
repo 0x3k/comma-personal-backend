@@ -1,0 +1,20 @@
+{
+  "id": "web-ui-auth-middleware",
+  "name": "Web UI auth middleware (gate dashboard routes)",
+  "description": "Apply the session-cookie check from web-ui-auth-backend to the endpoints the dashboard uses (routes, trips, signals, storage, settings). Device-facing endpoints (pilotauth, upload, /ws/) must keep using their existing JWT auth -- do not conflate the two. Endpoints that accept either cookie or JWT (for shared read endpoints) should explicitly try both.",
+  "priority": 2,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["web-ui-auth-backend"],
+  "acceptance_criteria": [
+    "internal/api/middleware/session.go adds SessionRequired() echo.MiddlewareFunc that validates the signed session cookie; 401 when missing/invalid",
+    "internal/api/middleware/session.go adds SessionOrJWT() echo.MiddlewareFunc that accepts either a valid session cookie OR a valid JWT (tries cookie first, falls back to existing JWT middleware logic)",
+    "Route groups in internal/api/ are updated so: /v1/session/* is public; /v1/route/*, /v1/routes/*, /v1/devices/:id/stats, /v1/devices/:id/params (GET), /v1/storage/*, /v1/settings/*, /v1/trips/* use SessionOrJWT; /v1/devices/:id/params (PUT/DELETE) and /v1/settings/* mutations require a session (humans, not devices)",
+    "Device-facing endpoints (/v2/pilotauth/, /v1.4/upload_url/, /upload/, /ws/v2/) continue using device JWT only",
+    "When SESSION_SECRET is unset (UI auth disabled), SessionRequired/SessionOrJWT degrade to allowing all (open mode); server logs a single warning on startup explaining the state",
+    "Middleware test coverage in internal/api/middleware/ for: valid session, expired session, tampered cookie, JWT fallback for SessionOrJWT, open-mode pass-through",
+    "go test ./... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

@@ -1,0 +1,20 @@
+{
+  "id": "prometheus-metrics",
+  "name": "Prometheus /metrics endpoint",
+  "description": "Expose a /metrics endpoint in Prometheus text format. Instrument the things that matter: HTTP request count and latency per route, upload bytes received, transcode durations, WebSocket RPC call latency per method, background-worker run durations, and current connected-device count.",
+  "priority": 3,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "Uses github.com/prometheus/client_golang/prometheus for metrics plus promhttp.Handler for the HTTP endpoint",
+    "GET /metrics returns the Prometheus exposition format; endpoint is NOT authed (common convention; if an operator wants auth, they can front it with nginx)",
+    "Counters/histograms: http_requests_total{method, path, status}, http_request_duration_seconds{method, path}, upload_bytes_total{dongle_id}, transcode_duration_seconds{camera, result}, rpc_call_duration_seconds{method}, rpc_calls_total{method, status}, ws_connected_devices (gauge), worker_run_duration_seconds{worker}",
+    "HTTP middleware hooks the counters/histograms via an Echo middleware registered once in main.go",
+    "The transcoder, WebSocket RPC caller, and each background worker accept a *Metrics struct in their constructors so they can call .Observe / .Inc -- tests can pass a dummy or real registry",
+    "internal/metrics/metrics_test.go asserts the metric names + labels exist after a simulated call",
+    "go test ./... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

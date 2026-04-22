@@ -1,0 +1,20 @@
+{
+  "id": "reverse-geocode",
+  "name": "Reverse geocoding client (Nominatim)",
+  "description": "Add a reusable reverse-geocoding client that turns (lat, lng) into a short human-readable address string. Use OpenStreetMap Nominatim by default (https://nominatim.openstreetmap.org/reverse) because we already use OSM for the map and it is free. The client must be pluggable (take a base URL) so operators on a high-volume server can point at their own Nominatim instance. This feature only adds the client library; consumers (trip-aggregator-worker) pull it in.",
+  "priority": 3,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/geocode/geocode.go defines a Client struct with fields: BaseURL string, UserAgent string, HTTP *http.Client",
+    "NewClient(baseURL, userAgent string) *Client constructor; defaults to https://nominatim.openstreetmap.org when baseURL is empty",
+    "Client.Reverse(ctx, lat, lng float64) (string, error) returns a single short display string (prefer suburb+city+country, fall back to display_name)",
+    "Respects Nominatim's usage policy: sends a meaningful User-Agent, default 1-second timeout, single in-flight request per client via a sync.Mutex and 1 req/sec rate limit",
+    "Returns a typed sentinel error ErrNotFound when Nominatim returns no result",
+    "internal/geocode/geocode_test.go uses httptest.NewServer to stub Nominatim and covers: success, no-result, HTTP error, and rate-limit spacing (two calls take >=1s)",
+    "go test ./internal/geocode/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

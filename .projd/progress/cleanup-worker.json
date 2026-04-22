@@ -1,0 +1,21 @@
+{
+  "id": "cleanup-worker",
+  "name": "Cleanup background worker (retention-based deletion)",
+  "description": "Background worker that deletes routes (and their files on disk) that are older than the configured retention window AND not marked preserved. Runs on a daily tick by default. Safety rails: dry-run mode by default on first start, a hard cap of N deletions per run, and structured logging of every deletion so operators can audit.",
+  "priority": 3,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["preserve-flag", "retention-policy-config"],
+  "acceptance_criteria": [
+    "internal/worker/cleanup.go defines CleanupWorker { Queries *db.Queries; Storage *storage.Storage; Settings *settings.Store; Interval time.Duration; MaxDeletionsPerRun int; DryRun bool }",
+    "CleanupWorker.Run(ctx) loops on Interval (default 24h); each pass: resolve effective retention_days; if 0, skip; otherwise query routes WHERE preserved=false AND end_time < now() - interval * retention_days, ordered by end_time asc, limited to MaxDeletionsPerRun",
+    "For each stale route: delete files under <STORAGE_PATH>/<dongle_id>/<route_name>/ via the storage layer, then delete the routes row (ON DELETE CASCADE handles segments/trips)",
+    "A DELETE_DRY_RUN env var (default 'true') makes the worker log what it would delete without touching anything. Setting it to 'false' enables real deletion",
+    "Each deletion logs dongle_id, route_name, end_time, bytes_freed at info level",
+    "cmd/server/main.go wires up the worker behind CLEANUP_ENABLED env var (default true)",
+    "internal/worker/cleanup_test.go uses a real Postgres + tmp STORAGE_PATH: create a route with fake files older than retention, run once, verify files gone and row deleted; verify preserved routes are skipped; verify dry-run does not delete",
+    "go test ./internal/worker/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

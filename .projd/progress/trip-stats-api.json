@@ -1,0 +1,19 @@
+{
+  "id": "trip-stats-api",
+  "name": "Trip stats API endpoints",
+  "description": "Expose the trip data computed by trip-aggregator-worker over HTTP so the frontend can render summaries. Two endpoints: one for a single device's lifetime totals + recent trip list (dashboard-home consumes this), and one for a single trip by route_id (route detail page can overlay stats).",
+  "priority": 2,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["trip-model"],
+  "acceptance_criteria": [
+    "GET /v1/devices/:dongle_id/stats returns JSON { totals: {trip_count, total_distance_meters, total_duration_seconds, total_engaged_seconds}, recent: [Trip...] } using the SumTripStatsByDongleID and ListTripsByDongleID queries; recent list is limited to 20 by default with optional ?limit= ?offset=",
+    "GET /v1/routes/:dongle_id/:route_name/trip returns the Trip row for that route (404 if not yet aggregated)",
+    "Both endpoints are registered in internal/api/route.go or a new internal/api/trip.go following the existing Echo group pattern",
+    "Both endpoints require JWT auth via the existing auth middleware",
+    "internal/api/trip_test.go covers: 200 happy path for both endpoints, 404 when the trip row does not exist, 401 without JWT, and correct pagination for ?limit= ?offset=",
+    "go test ./internal/api/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

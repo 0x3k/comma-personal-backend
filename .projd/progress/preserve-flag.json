@@ -1,0 +1,20 @@
+{
+  "id": "preserve-flag",
+  "name": "Preserve flag on routes",
+  "description": "Add a 'preserved' boolean column on routes that the cleanup worker will respect (preserved routes are never auto-deleted). Expose an API to toggle it. Modeled after comma connect's 'preserve' behavior. Frontend wiring (a star/bookmark button on the route detail page) is out of scope here -- this feature is schema + API only.",
+  "priority": 2,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "sql/migrations/004_route_preserved.up.sql adds: ALTER TABLE routes ADD COLUMN preserved BOOLEAN NOT NULL DEFAULT false; plus an index WHERE preserved = true to keep preserved-lookup fast",
+    "sql/migrations/004_route_preserved.down.sql drops the column",
+    "sql/queries/routes.sql adds SetRoutePreserved(dongle_id, route_name, preserved) and ListPreservedRoutes queries; sqlc generate produces matching Go",
+    "PUT /v1/routes/:dongle_id/:route_name/preserved with JSON body { \"preserved\": true|false } sets the flag (requires JWT auth); returns the updated route row",
+    "GET /v1/route/:dongle_id response (existing list endpoint) now includes 'preserved' on each route in the JSON",
+    "internal/api/route_test.go adds: set-preserved happy path, set-preserved on nonexistent route -> 404, list includes preserved field",
+    "go test ./internal/api/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

@@ -1,0 +1,22 @@
+{
+  "id": "share-link",
+  "name": "Shareable read-only route links",
+  "description": "Generate a signed, time-limited link to a single route that an unauthenticated viewer can use to watch video and see the map. No write access. The URL carries a signed token (HMAC-SHA256 over route_id + expiry using SESSION_SECRET). A new public page renders a stripped-down read-only view of the route.",
+  "priority": 5,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["web-ui-auth-middleware"],
+  "acceptance_criteria": [
+    "POST /v1/routes/:dongle_id/:route_name/share with body { expires_in_hours: int (default 72, max 720) } returns { url: \"https://<host>/share/<token>\", token, expires_at } -- requires an authenticated session",
+    "Token format: base64url(JSON({route_id, exp})) || '.' || base64url(hmac); verified on read via constant-time comparison",
+    "GET /v1/share/:token returns route + segment list + geometry + HLS playlist URLs scoped to that route and no other -- no auth required, but token must validate and not be expired",
+    "Signed-URL generation for HLS segments: the share handler re-signs /upload/ or a new /share-media/:token/:path endpoint that validates the token and streams the file. Do NOT leak the generic /v1/route/ endpoint contents for other routes",
+    "web/src/app/share/[token]/page.tsx renders a read-only player + map using the shared endpoints; no nav chrome, no login redirect on 401",
+    "When SESSION_SECRET is unset, POST returns 501 Not Implemented (no secret to sign with)",
+    "Token-expired token returns 410 Gone",
+    "Backend tests cover: create + consume happy path, expired token rejection, tampered token rejection, cross-route media access denied",
+    "pnpm --dir web lint, type-check, build pass",
+    "go test ./... passes"
+  ],
+  "notes": ""
+}

@@ -1,0 +1,19 @@
+{
+  "id": "athena-rpc-get-message",
+  "name": "Athena RPC: getMessage (cereal message proxy)",
+  "description": "Add the getMessage openpilot athenad RPC method. Takes a cereal service name (e.g., 'carState', 'deviceState', 'liveLocationKalman') and an optional timeout in ms, and returns the next message from that service as a JSON dict. Reference: openpilot/system/athena/athenad.py lines 340-357 (../../openpilot/system/athena/athenad.py). This is the primary mechanism for reading live device telemetry over the control channel; device-status-panel will depend on it.",
+  "priority": 4,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/ws/methods.go defines GetMessageParams { Service string `json:\"service\"`; Timeout int `json:\"timeout,omitempty\"` }",
+    "CallGetMessage(caller, client, service string, timeoutMs int) (map[string]interface{}, error) is added; if timeoutMs <= 0, default to 1000 to match athenad's default",
+    "The RPC call itself uses CallWithTimeout so the Go-side context cancels a few hundred ms after the device-side timeout (add a small buffer)",
+    "RegisterDefaultHandlers installs a device-side stub that returns a canned message dict keyed by the service name",
+    "internal/ws/methods_test.go covers the happy path, invalid-service error, and the timeout-buffer behavior",
+    "go test ./internal/ws/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

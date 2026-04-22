@@ -1,0 +1,20 @@
+{
+  "id": "trip-aggregator-worker",
+  "name": "Trip aggregator background worker",
+  "description": "Background worker that computes trip summary rows from a route's segments and GPS track once the route looks finalized (no new segments in the last N minutes OR all expected segment files uploaded). Reads GPS geometry from the routes.geometry column (PostGIS LineString) for distance/max-speed/avg-speed estimates; uses segment timestamps for duration. Calls the reverse-geocode client for start_address/end_address. Writes into the trips table via UpsertTrip so re-runs are idempotent.",
+  "priority": 2,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["trip-model", "reverse-geocode"],
+  "acceptance_criteria": [
+    "internal/worker/trip_aggregator.go defines a TripAggregator struct with Queries (db), Geocoder (*geocode.Client), and config (PollInterval, FinalizedAfter time.Duration)",
+    "TripAggregator.Run(ctx context.Context) loops: find routes without a trip row (or with stale computed_at before the latest segment), aggregate, UpsertTrip, sleep PollInterval",
+    "Aggregation computes: distance_meters from ST_Length on the geography cast of geometry; duration_seconds from end_time - start_time; max_speed_mps + avg_speed_mps by segment-pair haversine / dt (engagement metric can be 0 for now, filled in by event-detector-worker later)",
+    "For a route missing a geometry, the aggregator still writes a trip row with NULLed distance/speed fields so the UI can show 'no GPS' rather than missing entirely",
+    "cmd/server/main.go wires up the aggregator (starts in a goroutine with the server context) behind a TRIP_AGGREGATOR_ENABLED env var (defaults true)",
+    "internal/worker/trip_aggregator_test.go uses a real Postgres (matches the pattern existing tests use; skip with t.Skip if DATABASE_URL is unset) to verify: fresh route computes a trip, re-running is idempotent, missing geometry leaves stats NULL",
+    "go test ./internal/worker/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

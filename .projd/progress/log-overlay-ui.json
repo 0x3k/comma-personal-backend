@@ -1,0 +1,20 @@
+{
+  "id": "log-overlay-ui",
+  "name": "Log signal overlay on video player",
+  "description": "Add a signal timeline below the multi-camera video player that stays in sync with playback. Shows speed as a line chart, engagement state as a colored band (engaged = green, disengaged = gray, alert = red), and steering angle as a second line. Clicking anywhere on the timeline seeks the video. Pulls from /v1/routes/:dongleId/:routeName/signals.",
+  "priority": 4,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["log-signal-api"],
+  "acceptance_criteria": [
+    "web/src/components/video/SignalTimeline.tsx is a new component that fetches the signals endpoint and renders three horizontally-aligned tracks: engaged state band, speed line, steering line",
+    "Takes currentTime (seconds, route-relative) and onSeek(seconds) props and draws a vertical playhead that moves with currentTime; clicking the timeline calls onSeek",
+    "Integrated into the existing route detail page (web/src/app/routes/[dongleId]/[routeName]/page.tsx) below the multi-camera player; uses the player's onTimeUpdate to feed currentTime and its seek method for onSeek",
+    "Rendering is done via a simple <canvas> (no heavy charting lib needed); handles window resize and device pixel ratio",
+    "Graceful fallback: if the signals endpoint returns empty arrays, the component shows 'No log data' instead of a blank box",
+    "pnpm --dir web lint and pnpm --dir web type-check pass",
+    "pnpm --dir web build succeeds",
+    "Manual check: load a route with uploaded qlogs, scrub the video, verify the playhead follows and clicking the timeline seeks"
+  ],
+  "notes": ""
+}

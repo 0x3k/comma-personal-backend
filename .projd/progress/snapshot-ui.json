@@ -1,0 +1,20 @@
+{
+  "id": "snapshot-ui",
+  "name": "On-demand snapshot button + modal",
+  "description": "Add a 'Take Snapshot' button on the devices page that calls takeSnapshot on the connected device and shows the returned JPEG(s) in a modal. Useful for 'is the car OK?' moments.",
+  "priority": 4,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["athena-rpc-take-snapshot"],
+  "acceptance_criteria": [
+    "Backend adds POST /v1/devices/:dongle_id/snapshot that calls CallTakeSnapshot and returns { jpeg_back, jpeg_front } as base64 data-url strings (data:image/jpeg;base64,...); 503 if the device is offline; requires session-or-JWT auth",
+    "Backend endpoint has a server-side rate limit of 1 snapshot every 5 seconds per device to protect the car's cameras",
+    "web/src/components/SnapshotButton.tsx renders a button that posts to the endpoint, shows a spinner while waiting (up to 20s), and opens a modal with the two images side-by-side (front and rear camera)",
+    "Modal shows a graceful error state if the device is offline or times out",
+    "Integrated into web/src/app/devices/page.tsx below the status panel",
+    "Unit test for the backend endpoint covering offline, success, and rate-limit paths",
+    "pnpm --dir web lint, type-check, build pass",
+    "go test ./internal/api/... passes"
+  ],
+  "notes": ""
+}

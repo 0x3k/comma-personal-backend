@@ -1,0 +1,19 @@
+{
+  "id": "upload-queue-page",
+  "name": "Upload queue page",
+  "description": "Add a page that shows the device's current upload queue (via listUploadQueue) and lets the operator cancel stuck items (via cancelUpload). Helpful for diagnosing why a route is slow to appear in the dashboard.",
+  "priority": 4,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["athena-rpc-upload-queue-mgmt"],
+  "acceptance_criteria": [
+    "Backend adds GET /v1/devices/:dongle_id/upload-queue that calls CallListUploadQueue and returns the list; POST /v1/devices/:dongle_id/upload-queue/cancel with body { ids: [...] } calls CallCancelUpload",
+    "503 if device is offline; session-or-JWT auth required for GET and session required for POST",
+    "web/src/app/devices/[dongleId]/upload-queue/page.tsx is a new Next.js page that polls the GET endpoint every 10s, renders a table (path, url, priority, retry_count, progress, allow_cellular), and has a 'Cancel' button on each row plus a 'Cancel all' action",
+    "Progress column renders current_byte / total_byte as a percentage (if both are present) or 'queued' / 'in-flight'",
+    "Backend unit tests cover online/offline branches and the cancel endpoint",
+    "pnpm --dir web lint, type-check, build pass",
+    "go test ./internal/api/... passes"
+  ],
+  "notes": ""
+}

@@ -1,0 +1,21 @@
+{
+  "id": "event-detector-worker",
+  "name": "Event detector background worker",
+  "description": "Worker that consumes parsed log signals from cereal-log-parser and writes detected events to the events table. First-pass rule set: hard_brake when deceleration > 4.5 m/s^2 sustained for >=0.3s; disengage on the trailing edge of controlsState.enabled; fcw when controlsState alertText1 starts with 'FCW' or 'Forward Collision'; alert_warning for any warn-severity alert. Tunable thresholds via env vars with sensible defaults. Runs after trip-aggregator has marked a route stable.",
+  "priority": 4,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["cereal-log-parser", "event-schema"],
+  "acceptance_criteria": [
+    "internal/worker/event_detector.go defines EventDetector { Queries, Storage, PollInterval, Thresholds struct{ HardBrakeMps2, HardBrakeMinDurationSec float64 } }",
+    "EventDetector.Run(ctx) loops: find routes that have a trip row but have never been through event detection (track via a 'events_computed_at' column added to trips, or a separate table -- pick one and document why)",
+    "For each candidate route, concatenates qlogs from all uploaded segments, runs signals.ExtractDriving, and walks the time series to detect hard_brake / disengage / fcw / alert_warning events",
+    "Each detected event is inserted with route_offset_seconds computed from the first log timestamp in the route",
+    "Env-tunable thresholds: EVENT_HARD_BRAKE_MPS2 (default 4.5), EVENT_HARD_BRAKE_MIN_SEC (default 0.3)",
+    "cmd/server/main.go wires the worker behind EVENT_DETECTOR_ENABLED (default true)",
+    "internal/worker/event_detector_test.go uses a fabricated DrivingSignals input (skip full cereal round-trip) to verify each rule fires on the expected shape and is idempotent on re-run",
+    "go test ./internal/worker/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

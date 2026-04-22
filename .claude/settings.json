@@ -15,7 +15,23 @@
       "Bash(ls *)",
       "Bash(test *)",
       "Bash(rm *)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(sqlc *)",
+      "Bash(capnp *)",
+      "Bash(migrate *)",
+      "Bash(ffmpeg *)",
+      "Bash(jq *)",
+      "Bash(make *)",
+      "Bash(curl *)",
+      "Bash(grep *)",
+      "Bash(find *)",
+      "Bash(which *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(awk *)",
+      "Bash(sed *)"
     ]
   },
   "statusLine": {

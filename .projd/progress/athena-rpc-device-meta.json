@@ -1,0 +1,19 @@
+{
+  "id": "athena-rpc-device-meta",
+  "name": "Athena RPC: device metadata (version, public key, SSH keys, GitHub username)",
+  "description": "Add four parameterless openpilot athenad RPC methods to the server-initiated RPC layer so the backend can query device metadata over the existing WebSocket channel. The four methods are getVersion, getPublicKey, getSshAuthorizedKeys, and getGithubUsername. Reference implementation on the device side: openpilot/system/athena/athenad.py lines 358-538 (../../openpilot/system/athena/athenad.py). These wrappers let the web UI show openpilot version, authorized SSH keys, and the GitHub username configured on the device.",
+  "priority": 1,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/ws/methods.go gains four new server-to-device Call* functions following the existing CallGetNetworkType pattern: CallGetVersion, CallGetPublicKey, CallGetSshAuthorizedKeys, CallGetGithubUsername",
+    "CallGetVersion returns a map[string]string with fields: openpilot_version, openpilot_agnos_version, openpilot_git_commit, openpilot_git_branch (matching openpilot getVersion())",
+    "CallGetPublicKey, CallGetSshAuthorizedKeys, CallGetGithubUsername each return (string, error)",
+    "RegisterDefaultHandlers in internal/ws/methods.go is extended to install device-side stub handlers for all four methods so hub tests can exercise round-trip behavior",
+    "internal/ws/methods_test.go gains a subtest for each new Call* function using the same test harness as TestCallUploadFileToUrl / TestCallGetNetworkType",
+    "go test ./internal/ws/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

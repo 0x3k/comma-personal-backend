@@ -1,0 +1,21 @@
+{
+  "id": "retention-policy-config",
+  "name": "Retention policy configuration",
+  "description": "Expose a configurable retention policy (how long to keep non-preserved routes before deletion) via env var at startup and DB-backed override at runtime. The cleanup-worker feature consumes this; this feature only plumbs the configuration.",
+  "priority": 3,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "New env var RETENTION_DAYS (integer, default 0 which means 'never delete'); documented in CLAUDE.md and README.md",
+    "sql/migrations/005_retention_settings.up.sql creates a settings table (key TEXT PK, value TEXT, updated_at) -- simple KV for operator-configurable runtime settings; seeds 'retention_days' from the env var on first boot if the row does not exist",
+    "internal/config loads RETENTION_DAYS from env; a new internal/settings package reads/writes the settings table with methods GetInt(ctx, key) (int, error) and SetInt(ctx, key string, value int) error",
+    "At cleanup time, effective retention is settings['retention_days'] with env var as fallback; 0 always means 'never delete'",
+    "GET /v1/settings/retention returns { retention_days: int } (JWT-authed)",
+    "PUT /v1/settings/retention with { retention_days: int } updates the setting (JWT-authed); value must be 0 or a positive integer, else 400",
+    "internal/settings/settings_test.go and internal/api/*_test.go cover the API + DB path",
+    "go test ./... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

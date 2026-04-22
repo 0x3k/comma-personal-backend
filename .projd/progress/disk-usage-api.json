@@ -1,0 +1,20 @@
+{
+  "id": "disk-usage-api",
+  "name": "Disk usage API endpoint",
+  "description": "Report storage consumption so operators can monitor growth and the UI can surface it. Returns bytes used per device plus the filesystem total/available. Uses os.Stat walks behind a small cache (60s) so it never becomes a hot path.",
+  "priority": 4,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/storage/usage.go adds Storage.Usage(ctx) (*UsageReport, error) returning { Devices: []{DongleID, Bytes, RouteCount}, TotalBytes, FilesystemTotalBytes, FilesystemAvailableBytes, ComputedAt time.Time }",
+    "Results are cached in-memory for 60 seconds to avoid repeated full walks; a forceRefresh bool flag or a ?refresh=1 query param invalidates the cache",
+    "Uses syscall.Statfs (or golang.org/x/sys unix.Statfs) for filesystem totals; portable to linux + darwin (project is developed on macOS, deployed on Linux)",
+    "GET /v1/storage/usage returns the report as JSON; requires JWT auth",
+    "internal/storage/usage_test.go covers a tmp STORAGE_PATH with a fabricated device/route tree and asserts byte counts + route counts",
+    "internal/api/*_test.go covers the HTTP endpoint end-to-end",
+    "go test ./... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

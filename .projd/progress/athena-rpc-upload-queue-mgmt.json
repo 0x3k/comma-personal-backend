@@ -1,0 +1,19 @@
+{
+  "id": "athena-rpc-upload-queue-mgmt",
+  "name": "Athena RPC: upload queue (listUploadQueue, cancelUpload)",
+  "description": "Add two openpilot athenad RPC methods that let the server inspect and manipulate the device's upload queue. listUploadQueue returns the list of in-flight/pending UploadItem dicts the device is trying to send; cancelUpload accepts a single upload_id string (or a list of IDs) and removes them from the queue. Reference: openpilot/system/athena/athenad.py lines 449-467 (../../openpilot/system/athena/athenad.py). This is a prerequisite for the upload-queue-page frontend feature.",
+  "priority": 2,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/ws/methods.go defines an UploadItem struct with JSON tags matching athenad's UploadItemDict (id, path, url, headers, priority, retry_count, created_at, current, progress, allow_cellular)",
+    "CallListUploadQueue(caller, client) ([]UploadItem, error) is added, calling the listUploadQueue RPC and unmarshaling the array result",
+    "CallCancelUpload(caller, client, ids []string) (map[string]interface{}, error) is added; if len(ids)==1 it sends a single-string param, otherwise sends the list (matches athenad's str|list[str] signature)",
+    "RegisterDefaultHandlers installs device-side stubs that return an empty queue / a success ack",
+    "internal/ws/methods_test.go covers both Call* functions, including the single-id vs list-of-ids branches for cancelUpload",
+    "go test ./internal/ws/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

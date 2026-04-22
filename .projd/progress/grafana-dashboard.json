@@ -1,0 +1,18 @@
+{
+  "id": "grafana-dashboard",
+  "name": "Grafana dashboard JSON",
+  "description": "Ship a ready-to-import Grafana dashboard JSON that visualizes the Prometheus metrics added in prometheus-metrics. Operators can import it as-is; it provides request rate + p95 latency, upload throughput, transcode queue depth + duration, RPC latency, connected device count, and worker health panels.",
+  "priority": 5,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["prometheus-metrics"],
+  "acceptance_criteria": [
+    "docs/grafana-dashboard.json is a valid Grafana v9+ dashboard JSON targeting a Prometheus datasource",
+    "Panels include: HTTP request rate by status, HTTP p50/p95/p99 latency, upload bytes/s by device, transcode duration histogram, RPC call duration by method, connected devices, worker run duration by worker name, error-rate panel",
+    "Dashboard has a $datasource Prometheus template variable so import works without editing",
+    "docs/DEPLOYMENT.md gains a 'Monitoring' subsection with one paragraph + import steps",
+    "The JSON passes jq '.' (valid JSON) and the file is checked into the repo",
+    "Manual check: import into a Grafana instance pointed at the running server -> panels render (document this in a PR screenshot when opening the PR)"
+  ],
+  "notes": ""
+}

@@ -1,0 +1,20 @@
+{
+  "id": "cereal-log-parser",
+  "name": "Cereal log parser (rlog/qlog -> structured signals)",
+  "description": "Add a Go package that parses openpilot's rlog and qlog files into time-series signals. rlogs are Cap'n Proto messages in the cereal schema (repo: openpilot/cereal/log.capnp at ../../openpilot/cereal/log.capnp). qlogs are a sampled subset. For a first pass, extract: carState (vEgo, steeringAngleDeg, brakePressed, gasPressed), controlsState (enabled, alertText1), deviceState (thermalStatus). Downstream features (log-signal-api, event-detector-worker) depend on this.",
+  "priority": 2,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/cereal/parser.go defines a Parser that accepts an io.Reader (a raw or bz2-compressed rlog/qlog) and yields cereal.Event objects",
+    "Use a pure-Go Cap'n Proto library: github.com/capnproto/go-capnp/v3. Generate schema bindings from openpilot/cereal/log.capnp into internal/cereal/schema/ via capnp compile (document the exact command in a top-of-file comment in parser.go)",
+    "Parser.Parse(r io.Reader, handler func(Event)) error streams events without buffering the whole file",
+    "internal/cereal/signals.go defines SignalExtractor with one method ExtractDriving(r io.Reader) (*DrivingSignals, error) that returns a struct of slices: Times []time.Time, VEgo []float64, SteeringAngleDeg []float64, BrakePressed []bool, GasPressed []bool, Engaged []bool, AlertText []string",
+    "Handles both uncompressed rlog (raw Cap'n Proto stream) and bz2-compressed (wraps Reader in bzip2.NewReader when the file is .bz2 or magic matches)",
+    "internal/cereal/parser_test.go includes a small fixture rlog (generate with a tiny Python script documented in testdata/README -- or check in a pre-captured sample <1MB if permitted) and verifies non-empty extracted signals",
+    "go test ./internal/cereal/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

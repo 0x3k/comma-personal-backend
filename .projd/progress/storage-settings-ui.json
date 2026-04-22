@@ -1,0 +1,20 @@
+{
+  "id": "storage-settings-ui",
+  "name": "Storage + retention settings UI panel",
+  "description": "Add a 'Storage' panel to the existing web/src/app/settings/page.tsx that shows disk usage (total, per-device, filesystem available) and lets the operator edit the retention window. Pulls from /v1/storage/usage and /v1/settings/retention.",
+  "priority": 5,
+  "status": "pending",
+  "branch": "",
+  "blocked_by": ["disk-usage-api", "retention-policy-config"],
+  "acceptance_criteria": [
+    "web/src/app/settings/page.tsx gains a Storage section: a filesystem-available progress bar, a per-device byte breakdown table, and a 'Retention' subsection",
+    "The retention subsection is a number input (days, min 0) with a Save button; 0 shows a help string 'Never delete automatically'",
+    "Save performs PUT /v1/settings/retention; success shows a toast, failure shows an inline error",
+    "Bytes are rendered with a humanize helper (KB/MB/GB/TB)",
+    "No new dependencies required; use existing components under web/src/components/ui/",
+    "pnpm --dir web lint and pnpm --dir web type-check pass",
+    "pnpm --dir web build succeeds",
+    "Manual check: load /settings, confirm usage loads and retention save round-trips"
+  ],
+  "notes": ""
+}
