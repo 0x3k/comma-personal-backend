@@ -109,6 +109,12 @@ Rules:
 
 Use `--dry-run` to preview the dispatch plan without spawning agents.
 
+### Known Gotchas
+
+- **Resolving conflicts without force-push**: `.projd/agent.json` sets `allow_force_push: false`, and GitHub's "Update branch" button returns 422 on conflicts. When a feature branch falls behind main, run `git merge origin/main` on the feature branch (NOT `git rebase`). The PR's squash-merge flattens the extra merge commit.
+- **Where new backend code goes**: `cmd/server/main.go` is a thin bootstrap. New HTTP route registrations belong in `cmd/server/routes.go`; new background goroutines belong in `cmd/server/workers.go`; shared helpers (e.g. `envBool`) live in `cmd/server/env.go`. Shared deps are threaded via the `deps` struct in `cmd/server/deps.go`. Adding code to `main.go` is almost always wrong and creates merge conflicts across parallel feature branches.
+- **Worktree writes are hook-guarded**: `.claude/hooks/check-worktree-isolation.sh` blocks `Write`/`Edit` calls from a worktree session whose target resolves into the main repo tree (or a sibling worktree). If the hook denies an edit, retarget the path under the active worktree rather than trying to bypass it.
+
 ### Planning Sessions
 
 Use `/projd-plan` for planning:
