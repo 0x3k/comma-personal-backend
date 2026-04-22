@@ -46,3 +46,9 @@ type Segment struct {
 	QcameraUploaded bool               `json:"qcameraUploaded"`
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
 }
+
+type Setting struct {
+	Key       string             `json:"key"`
+	Value     string             `json:"value"`
+	UpdatedAt pgtype.Timestamptz `json:"updatedAt"`
+}
