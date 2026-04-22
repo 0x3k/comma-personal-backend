@@ -304,6 +304,167 @@ func TestCallSetNavDestination_ParamsMarshaled(t *testing.T) {
 	}
 }
 
+func TestCallGetVersion(t *testing.T) {
+	caller := NewRPCCaller()
+	versionResult := map[string]interface{}{
+		"openpilot_version":       "0.9.8",
+		"openpilot_agnos_version": "10.1",
+		"openpilot_git_commit":    "abc123",
+		"openpilot_git_branch":    "release3",
+	}
+	client := testClientWithResponder(t, caller, versionResult, nil)
+
+	result, err := CallGetVersion(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetVersion returned error: %v", err)
+	}
+	if result["openpilot_version"] != "0.9.8" {
+		t.Errorf("openpilot_version = %q, want 0.9.8", result["openpilot_version"])
+	}
+	if result["openpilot_agnos_version"] != "10.1" {
+		t.Errorf("openpilot_agnos_version = %q, want 10.1", result["openpilot_agnos_version"])
+	}
+	if result["openpilot_git_commit"] != "abc123" {
+		t.Errorf("openpilot_git_commit = %q, want abc123", result["openpilot_git_commit"])
+	}
+	if result["openpilot_git_branch"] != "release3" {
+		t.Errorf("openpilot_git_branch = %q, want release3", result["openpilot_git_branch"])
+	}
+}
+
+func TestCallGetVersion_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "version error")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetVersion(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallGetVersion")
+	}
+}
+
+func TestCallGetVersion_NonStringField(t *testing.T) {
+	caller := NewRPCCaller()
+	result := map[string]interface{}{
+		"openpilot_version": 123,
+	}
+	client := testClientWithResponder(t, caller, result, nil)
+
+	_, err := CallGetVersion(caller, client)
+	if err == nil {
+		t.Fatal("expected error when a version field is non-string")
+	}
+}
+
+func TestCallGetPublicKey(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, "ssh-rsa AAAAB3Nza... comma", nil)
+
+	result, err := CallGetPublicKey(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetPublicKey returned error: %v", err)
+	}
+	if result != "ssh-rsa AAAAB3Nza... comma" {
+		t.Errorf("public key = %q, want ssh-rsa AAAAB3Nza... comma", result)
+	}
+}
+
+func TestCallGetPublicKey_Nil(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, nil, nil)
+
+	result, err := CallGetPublicKey(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetPublicKey returned error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("public key = %q, want empty string for nil result", result)
+	}
+}
+
+func TestCallGetPublicKey_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "no key")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetPublicKey(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallGetPublicKey")
+	}
+}
+
+func TestCallGetPublicKey_WrongType(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, 42, nil)
+
+	_, err := CallGetPublicKey(caller, client)
+	if err == nil {
+		t.Fatal("expected error when getPublicKey returns a non-string result")
+	}
+}
+
+func TestCallGetSshAuthorizedKeys(t *testing.T) {
+	caller := NewRPCCaller()
+	keys := "ssh-rsa AAA user1\nssh-ed25519 BBB user2\n"
+	client := testClientWithResponder(t, caller, keys, nil)
+
+	result, err := CallGetSshAuthorizedKeys(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetSshAuthorizedKeys returned error: %v", err)
+	}
+	if result != keys {
+		t.Errorf("authorized keys = %q, want %q", result, keys)
+	}
+}
+
+func TestCallGetSshAuthorizedKeys_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "keys error")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetSshAuthorizedKeys(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallGetSshAuthorizedKeys")
+	}
+}
+
+func TestCallGetGithubUsername(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, "commauser", nil)
+
+	result, err := CallGetGithubUsername(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetGithubUsername returned error: %v", err)
+	}
+	if result != "commauser" {
+		t.Errorf("github username = %q, want commauser", result)
+	}
+}
+
+func TestCallGetGithubUsername_Empty(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, "", nil)
+
+	result, err := CallGetGithubUsername(caller, client)
+	if err != nil {
+		t.Fatalf("CallGetGithubUsername returned error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("github username = %q, want empty string", result)
+	}
+}
+
+func TestCallGetGithubUsername_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "username error")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallGetGithubUsername(caller, client)
+	if err == nil {
+		t.Fatal("expected error from CallGetGithubUsername")
+	}
+}
+
 func TestRPCCaller_Timeout(t *testing.T) {
 	caller := NewRPCCaller()
 	hub := NewHub()
@@ -460,6 +621,54 @@ func TestHandleSetNavDestination_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestHandleGetVersion(t *testing.T) {
+	result, rpcErr := handleGetVersion("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]string)
+	if !ok {
+		t.Fatalf("result is not map[string]string, got %T", result)
+	}
+
+	for _, field := range []string{"openpilot_version", "openpilot_agnos_version", "openpilot_git_commit", "openpilot_git_branch"} {
+		if _, present := m[field]; !present {
+			t.Errorf("expected field %q in result", field)
+		}
+	}
+}
+
+func TestHandleGetPublicKey(t *testing.T) {
+	result, rpcErr := handleGetPublicKey("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+	if _, ok := result.(string); !ok {
+		t.Fatalf("result is not string, got %T", result)
+	}
+}
+
+func TestHandleGetSshAuthorizedKeys(t *testing.T) {
+	result, rpcErr := handleGetSshAuthorizedKeys("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+	if _, ok := result.(string); !ok {
+		t.Fatalf("result is not string, got %T", result)
+	}
+}
+
+func TestHandleGetGithubUsername(t *testing.T) {
+	result, rpcErr := handleGetGithubUsername("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+	if _, ok := result.(string); !ok {
+		t.Fatalf("result is not string, got %T", result)
+	}
+}
+
 func TestRegisterDefaultHandlers(t *testing.T) {
 	handlers := make(map[string]MethodHandler)
 	RegisterDefaultHandlers(handlers)
@@ -469,6 +678,10 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 		"getNetworkType",
 		"getSimInfo",
 		"setNavDestination",
+		"getVersion",
+		"getPublicKey",
+		"getSshAuthorizedKeys",
+		"getGithubUsername",
 	}
 
 	for _, method := range expected {

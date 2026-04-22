@@ -174,6 +174,109 @@ func CallGetSimInfo(caller *RPCCaller, client *Client) (interface{}, error) {
 	return resp.Result, nil
 }
 
+// CallGetVersion asks the device for its openpilot version metadata. It
+// returns a map with the fields openpilot_version, openpilot_agnos_version,
+// openpilot_git_commit, and openpilot_git_branch.
+func CallGetVersion(caller *RPCCaller, client *Client) (map[string]string, error) {
+	resp, err := caller.Call(client, "getVersion", nil)
+	if err != nil {
+		return nil, fmt.Errorf("getVersion failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("getVersion returned error: %w", resp.Error)
+	}
+
+	return decodeStringMap(resp.Result, "getVersion")
+}
+
+// CallGetPublicKey asks the device for its SSH public key.
+func CallGetPublicKey(caller *RPCCaller, client *Client) (string, error) {
+	resp, err := caller.Call(client, "getPublicKey", nil)
+	if err != nil {
+		return "", fmt.Errorf("getPublicKey failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return "", fmt.Errorf("getPublicKey returned error: %w", resp.Error)
+	}
+
+	return decodeString(resp.Result, "getPublicKey")
+}
+
+// CallGetSshAuthorizedKeys asks the device for the contents of its
+// authorized_keys file (the SSH keys imported from GitHub).
+func CallGetSshAuthorizedKeys(caller *RPCCaller, client *Client) (string, error) {
+	resp, err := caller.Call(client, "getSshAuthorizedKeys", nil)
+	if err != nil {
+		return "", fmt.Errorf("getSshAuthorizedKeys failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return "", fmt.Errorf("getSshAuthorizedKeys returned error: %w", resp.Error)
+	}
+
+	return decodeString(resp.Result, "getSshAuthorizedKeys")
+}
+
+// CallGetGithubUsername asks the device for the GitHub username configured
+// for SSH key import.
+func CallGetGithubUsername(caller *RPCCaller, client *Client) (string, error) {
+	resp, err := caller.Call(client, "getGithubUsername", nil)
+	if err != nil {
+		return "", fmt.Errorf("getGithubUsername failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return "", fmt.Errorf("getGithubUsername returned error: %w", resp.Error)
+	}
+
+	return decodeString(resp.Result, "getGithubUsername")
+}
+
+// decodeString converts an arbitrary JSON-RPC result into a string. A nil
+// result is treated as the empty string to match openpilot's behavior (the
+// device returns None when the underlying Param is unset).
+func decodeString(result interface{}, method string) (string, error) {
+	if result == nil {
+		return "", nil
+	}
+	s, ok := result.(string)
+	if !ok {
+		return "", fmt.Errorf("%s returned non-string result: %T", method, result)
+	}
+	return s, nil
+}
+
+// decodeStringMap converts a JSON-RPC result into a map[string]string. The
+// raw result may be a map[string]interface{} (from a round-tripped JSON
+// decode) or the typed map[string]string returned by local stub handlers.
+func decodeStringMap(result interface{}, method string) (map[string]string, error) {
+	if result == nil {
+		return nil, fmt.Errorf("%s returned nil result", method)
+	}
+	switch v := result.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for k, val := range v {
+			out[k] = val
+		}
+		return out, nil
+	case map[string]interface{}:
+		out := make(map[string]string, len(v))
+		for k, raw := range v {
+			s, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s result field %q is not a string: %T", method, k, raw)
+			}
+			out[k] = s
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("%s returned unexpected result type: %T", method, result)
+	}
+}
+
 // SetNavDestinationParams are the parameters for the setNavDestination RPC method.
 type SetNavDestinationParams struct {
 	Latitude  float64 `json:"latitude"`
@@ -209,6 +312,10 @@ func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["getNetworkType"] = handleGetNetworkType
 	handlers["getSimInfo"] = handleGetSimInfo
 	handlers["setNavDestination"] = handleSetNavDestination
+	handlers["getVersion"] = handleGetVersion
+	handlers["getPublicKey"] = handleGetPublicKey
+	handlers["getSshAuthorizedKeys"] = handleGetSshAuthorizedKeys
+	handlers["getGithubUsername"] = handleGetGithubUsername
 }
 
 // handleUploadFileToUrl is a device-side stub handler for uploadFileToUrl.
@@ -253,4 +360,33 @@ func handleSetNavDestination(_ string, params json.RawMessage) (interface{}, *RP
 	}
 
 	return map[string]bool{"success": true}, nil
+}
+
+// handleGetVersion is a device-side stub handler for getVersion. Real
+// devices return the fields openpilot_version, openpilot_agnos_version,
+// openpilot_git_commit, and openpilot_git_branch; the stub returns the
+// same shape with empty values so callers can exercise round-trip parsing.
+func handleGetVersion(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return map[string]string{
+		"openpilot_version":       "",
+		"openpilot_agnos_version": "",
+		"openpilot_git_commit":    "",
+		"openpilot_git_branch":    "",
+	}, nil
+}
+
+// handleGetPublicKey is a device-side stub handler for getPublicKey.
+func handleGetPublicKey(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return "", nil
+}
+
+// handleGetSshAuthorizedKeys is a device-side stub handler for
+// getSshAuthorizedKeys.
+func handleGetSshAuthorizedKeys(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return "", nil
+}
+
+// handleGetGithubUsername is a device-side stub handler for getGithubUsername.
+func handleGetGithubUsername(_ string, _ json.RawMessage) (interface{}, *RPCError) {
+	return "", nil
 }
