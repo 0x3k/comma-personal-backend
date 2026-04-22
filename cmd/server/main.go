@@ -72,6 +72,12 @@ func main() {
 	routeHandler := api.NewRouteHandler(queries)
 	routeHandler.RegisterRoutes(v1Route)
 
+	// Route export endpoints (e.g. GPX download). Mounted under the plural
+	// /v1/routes/ path so they do not collide with /v1/route/:dongle_id.
+	v1Routes := e.Group("/v1/routes", auth)
+	exportHandler := api.NewExportHandler(queries)
+	exportHandler.RegisterRoutes(v1Routes)
+
 	// Upload URL and file upload.
 	v14 := e.Group("/v1.4", auth)
 	uploadHandler := api.NewUploadHandler(store, queries)
