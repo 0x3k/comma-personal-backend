@@ -3,7 +3,7 @@
   "name": "Dashboard home page (lifetime stats + recent drives)",
   "description": "Replace the placeholder root page (web/src/app/page.tsx) with a dashboard that shows lifetime stats (total distance, total drive time, engagement %, drive count) for the primary device, a list of the most recent ~10 drives with inline trip summary (date, duration, distance, start/end address), and links to the full route list. Pulls from /v1/devices/:dongle_id/stats.",
   "priority": 3,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/dashboard-home",
   "base_branch": "main",
   "blocked_by": ["trip-stats-api"],
@@ -17,5 +17,5 @@
     "pnpm --dir web build succeeds",
     "Manual check against a running backend: loads the home page, sees stats and recent drives"
   ],
-  "notes": ""
+  "notes": "Implemented in web/src/app/page.tsx. Added formatDistance / formatDurationHM / formatTotalDuration / formatEngagementPct helpers and DeviceStats / Trip types. Imperial default per spec. Multi-device switcher appears only when len(devices) > 1. pnpm --dir web lint, type-check, and build all pass."
 }
