@@ -3,8 +3,9 @@
   "name": "Web UI login page",
   "description": "Add a login page that posts to /v1/session/login. Redirects to / on success. All protected pages, when they get a 401 from the API, redirect here. A simple 'Log out' button in the existing layout nav calls /v1/session/logout.",
   "priority": 2,
-  "status": "pending",
-  "branch": "",
+  "status": "in_progress",
+  "branch": "agent/web-ui-login-page",
+  "base_branch": "main",
   "blocked_by": ["web-ui-auth-backend"],
   "acceptance_criteria": [
     "web/src/app/login/page.tsx renders username + password inputs and a submit button; posts credentials JSON to /v1/session/login with credentials: 'include'",
