@@ -41,6 +41,7 @@ type routeDetailResponse struct {
 	RouteName    string            `json:"routeName"`
 	StartTime    *time.Time        `json:"startTime"`
 	EndTime      *time.Time        `json:"endTime"`
+	Preserved    bool              `json:"preserved"`
 	SegmentCount int64             `json:"segmentCount"`
 	Segments     []segmentResponse `json:"segments"`
 }
@@ -51,6 +52,7 @@ type routeListItem struct {
 	RouteName    string     `json:"routeName"`
 	StartTime    *time.Time `json:"startTime"`
 	EndTime      *time.Time `json:"endTime"`
+	Preserved    bool       `json:"preserved"`
 	SegmentCount int64      `json:"segmentCount"`
 }
 
@@ -60,6 +62,12 @@ type routeListResponse struct {
 	Total  int64           `json:"total"`
 	Limit  int32           `json:"limit"`
 	Offset int32           `json:"offset"`
+}
+
+// setPreservedRequest is the expected JSON body for
+// PUT /v1/routes/:dongle_id/:route_name/preserved.
+type setPreservedRequest struct {
+	Preserved bool `json:"preserved"`
 }
 
 const (
@@ -134,6 +142,7 @@ func (h *RouteHandler) GetRoute(c echo.Context) error {
 		RouteName:    route.RouteName,
 		StartTime:    startTime,
 		EndTime:      endTime,
+		Preserved:    route.Preserved,
 		SegmentCount: int64(len(segments)),
 		Segments:     segResponses,
 	})
@@ -212,6 +221,7 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 			RouteName:    r.RouteName,
 			StartTime:    startTime,
 			EndTime:      endTime,
+			Preserved:    r.Preserved,
 			SegmentCount: r.SegmentCount,
 		})
 	}
@@ -224,11 +234,78 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 	})
 }
 
+// SetPreserved handles PUT /v1/routes/:dongle_id/:route_name/preserved and
+// toggles the preserved flag on the route. Preserved routes are exempt from
+// automatic cleanup.
+func (h *RouteHandler) SetPreserved(c echo.Context) error {
+	dongleID := c.Param("dongle_id")
+	routeName := c.Param("route_name")
+
+	authDongleID, _ := c.Get(middleware.ContextKeyDongleID).(string)
+	if authDongleID != dongleID {
+		return c.JSON(http.StatusForbidden, errorResponse{
+			Error: "dongle_id does not match authenticated device",
+			Code:  http.StatusForbidden,
+		})
+	}
+
+	var req setPreservedRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "failed to parse request body",
+			Code:  http.StatusBadRequest,
+		})
+	}
+
+	ctx := c.Request().Context()
+
+	route, err := h.queries.SetRoutePreserved(ctx, db.SetRoutePreservedParams{
+		DongleID:  dongleID,
+		RouteName: routeName,
+		Preserved: req.Preserved,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.JSON(http.StatusNotFound, errorResponse{
+				Error: fmt.Sprintf("route %s not found", routeName),
+				Code:  http.StatusNotFound,
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, errorResponse{
+			Error: "failed to update preserved flag",
+			Code:  http.StatusInternalServerError,
+		})
+	}
+
+	var startTime, endTime *time.Time
+	if route.StartTime.Valid {
+		startTime = &route.StartTime.Time
+	}
+	if route.EndTime.Valid {
+		endTime = &route.EndTime.Time
+	}
+
+	return c.JSON(http.StatusOK, routeListItem{
+		DongleID:  route.DongleID,
+		RouteName: route.RouteName,
+		StartTime: startTime,
+		EndTime:   endTime,
+		Preserved: route.Preserved,
+	})
+}
+
 // RegisterRoutes wires up the route endpoints on the given Echo group.
 // The group should already have JWT auth middleware applied.
 func (h *RouteHandler) RegisterRoutes(g *echo.Group) {
 	g.GET("/:dongle_id/:route_name", h.GetRoute)
 	g.GET("/:dongle_id", h.ListRoutes)
+}
+
+// RegisterPreservedRoute wires up the preserve-toggle endpoint on an Echo
+// group mounted at /v1/routes. The group should already have JWT auth
+// middleware applied.
+func (h *RouteHandler) RegisterPreservedRoute(g *echo.Group) {
+	g.PUT("/:dongle_id/:route_name/preserved", h.SetPreserved)
 }
 
 // parseIntParam parses a string as an int32, returning the default value if the
