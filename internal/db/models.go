@@ -59,6 +59,13 @@ type Segment struct {
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
 }
 
+type UiUser struct {
+	ID           int32              `json:"id"`
+	Username     string             `json:"username"`
+	PasswordHash string             `json:"passwordHash"`
+	CreatedAt    pgtype.Timestamptz `json:"createdAt"`
+}
+
 type Setting struct {
 	Key       string             `json:"key"`
 	Value     string             `json:"value"`

@@ -76,6 +76,19 @@ func main() {
 	pilotAuth := api.NewPilotAuthHandler(queries, cfg)
 	pilotAuth.RegisterRoutes(e)
 
+	// Web UI authentication. Kept separate from the device-facing JWT auth so
+	// operators without a SESSION_SECRET still get device uploads working.
+	if cfg.UIAuthEnabled() {
+		sessionHandler := api.NewSessionHandler(queries, cfg.SessionSecret)
+		sessionHandler.RegisterRoutes(e)
+
+		if err := api.BootstrapAdmin(context.Background(), queries, cfg.AdminUsername, cfg.AdminPassword); err != nil {
+			log.Fatalf("failed to bootstrap admin user: %v", err)
+		}
+	} else {
+		log.Printf("warning: SESSION_SECRET is not set; web UI authentication is disabled. Device auth is unaffected.")
+	}
+
 	// Authenticated API groups. Every request carries a per-device JWT
 	// signed with the private key openpilot generated during pilotauth; the
 	// middleware verifies it against the public_key stored for that device.
