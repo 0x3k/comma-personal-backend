@@ -3,7 +3,7 @@
   "name": "Retention policy configuration",
   "description": "Expose a configurable retention policy (how long to keep non-preserved routes before deletion) via env var at startup and DB-backed override at runtime. The cleanup-worker feature consumes this; this feature only plumbs the configuration.",
   "priority": 3,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/retention-policy-config",
   "base_branch": "main",
   "blocked_by": [],
@@ -18,5 +18,5 @@
     "go test ./... passes",
     "go vet ./... and go build ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "Implemented in commits 522bfa1, 279713f, 914d5c6, a742e65. Settings table is a simple KV store seeded from RETENTION_DAYS at boot via InsertSettingIfMissing. internal/settings.Store exposes GetInt/SetInt plus a RetentionDays helper that falls back to the env value when the row is missing. Settings handler wired into the authed /v1 group. go test, go vet, go build all clean; smoke.sh frontend lint/typecheck failures are pre-existing and unrelated (script tries to run eslint/tsc from repo root instead of web/)."
 }
