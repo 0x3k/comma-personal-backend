@@ -3,7 +3,7 @@
   "name": "Athena RPC: device metadata (version, public key, SSH keys, GitHub username)",
   "description": "Add four parameterless openpilot athenad RPC methods to the server-initiated RPC layer so the backend can query device metadata over the existing WebSocket channel. The four methods are getVersion, getPublicKey, getSshAuthorizedKeys, and getGithubUsername. Reference implementation on the device side: openpilot/system/athena/athenad.py lines 358-538 (../../openpilot/system/athena/athenad.py). These wrappers let the web UI show openpilot version, authorized SSH keys, and the GitHub username configured on the device.",
   "priority": 1,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/athena-rpc-device-meta",
   "base_branch": "main",
   "blocked_by": [],
