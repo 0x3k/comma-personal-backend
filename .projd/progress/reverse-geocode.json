@@ -3,7 +3,7 @@
   "name": "Reverse geocoding client (Nominatim)",
   "description": "Add a reusable reverse-geocoding client that turns (lat, lng) into a short human-readable address string. Use OpenStreetMap Nominatim by default (https://nominatim.openstreetmap.org/reverse) because we already use OSM for the map and it is free. The client must be pluggable (take a base URL) so operators on a high-volume server can point at their own Nominatim instance. This feature only adds the client library; consumers (trip-aggregator-worker) pull it in.",
   "priority": 3,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/reverse-geocode",
   "base_branch": "main",
   "blocked_by": [],
@@ -17,5 +17,5 @@
     "go test ./internal/geocode/... passes",
     "go vet ./... and go build ./... pass cleanly"
   ],
-  "notes": ""
+  "notes": "Implemented internal/geocode package. Rate-limit test uses the real 1s default (test takes ~1s wall-clock) per the acceptance criterion 'two calls take >=1s'; a separate context-cancel test uses a larger minInterval to validate that ctx cancels during the rate-limit wait. go test/vet/build all pass. Pre-existing smoke.sh lint/typecheck failures (ESLint path, missing tsc) are unrelated to this feature."
 }
