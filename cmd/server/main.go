@@ -164,16 +164,14 @@ func main() {
 	settingsHandler.RegisterMutationRoutes(v1ConfigWrite)
 
 	// Per-device trip stats live at /v1/devices/:dongle_id/stats, so they
-	// share the /v1 auth group with config params and settings.
-	tripHandler.RegisterStatsRoute(v1Config)
+	// accept either a session cookie or a device JWT via the shared read group.
+	tripHandler.RegisterStatsRoute(v1ConfigRead)
 
 	// Live device status panel feeds the web UI; it accepts either a session
-	// cookie (browser dashboard) or a device JWT (CLI/ad-hoc), so it lives on
-	// its own group with the session-or-JWT middleware rather than the
-	// device-only /v1 group above.
-	v1Live := e.Group("/v1", api.SessionOrJWT(cfg.SessionSecret, queries))
+	// cookie (browser dashboard) or a device JWT (CLI/ad-hoc) via the shared
+	// read group.
 	liveHandler := api.NewDeviceLiveHandler(hub, rpcCaller)
-	liveHandler.RegisterRoutes(v1Live)
+	liveHandler.RegisterRoutes(v1ConfigRead)
 
 	// Storage usage (disk accounting) endpoint. The walk is memoized in the
 	// storage package so repeated polling stays cheap. Dashboard-facing.
@@ -184,23 +182,18 @@ func main() {
 	// Upload queue inspection and cancellation. The GET endpoint accepts
 	// either a UI session cookie or a device JWT so either side can read it;
 	// POST is session-only because only the operator should be cancelling
-	// the device's own uploads.
-	sessionSecret := []byte(cfg.SessionSecret)
-	readAuth := api.SessionOrJWTAuth(sessionSecret, queries, queries)
+	// the device's own uploads. Uses the same sessionOrJWT/sessionOnly
+	// middleware chain as the other dashboard endpoints.
 	uploadQueueHandler := api.NewUploadQueueHandler(hub, rpcCaller)
-	v1UploadQueueRead := e.Group("/v1", readAuth)
-	uploadQueueHandler.RegisterListRoute(v1UploadQueueRead)
+	uploadQueueHandler.RegisterListRoute(v1ConfigRead)
 	if cfg.UIAuthEnabled() {
-		v1UploadQueueCancel := e.Group("/v1", api.SessionAuth(sessionSecret, queries))
-		uploadQueueHandler.RegisterCancelRoute(v1UploadQueueCancel)
+		uploadQueueHandler.RegisterCancelRoute(v1ConfigWrite)
 	}
 
 	// Snapshot endpoint accepts either a session cookie (operator from the
-	// web UI) or a device JWT. It lives on its own group because the default
-	// /v1 group is JWT-only.
-	v1Snapshot := e.Group("/v1", readAuth)
+	// web UI) or a device JWT, so it rides the shared read group.
 	snapshotHandler := api.NewSnapshotHandler(hub, rpcCaller)
-	snapshotHandler.RegisterRoutes(v1Snapshot)
+	snapshotHandler.RegisterRoutes(v1ConfigRead)
 
 	// WebSocket for device communication.
 	wsHandler := ws.NewHandler(hub, queries, nil, rpcCaller)
