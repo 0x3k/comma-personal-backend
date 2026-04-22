@@ -1,6 +1,6 @@
 # Issues
 
-> Last audited: 2026-04-21
+> Last audited: 2026-04-22
 
 | ID | Severity | Status | Title |
 |----|----------|--------|-------|
@@ -10,6 +10,8 @@
 | IH-004 | low | fixed | `Transcoder.Start` releases the mutex during `wg.Wait()`, exposing a concurrent-start race |
 | IH-005 | low | fixed | `ListRoutesByDevicePaginated` has no tiebreaker, so paging through routes with equal `created_at` can skip or duplicate rows |
 | IH-006 | low | fixed | `HandleWebSocket` returns an error after `upgrader.Upgrade` already wrote the HTTP error response |
+| IH-007 | high | open | `TripHandler.GetStats` and `GetTripByRoute` reject every session-authenticated request with 403 |
+| IH-008 | high | open | `SignalsHandler.GetRouteSignals` rejects every session-authenticated request with 403 |
 
 ---
 
@@ -147,3 +149,59 @@
   Echo's default error handler receives the returned error and attempts to write its own JSON error body, producing a double-write. `net/http` logs `http: superfluous response.WriteHeader call from ...` and the client sees the first response plus extra bytes, which is harmless but noisy and can confuse clients or proxies. The same file returns a similar wrapped error from other points (`authenticate`) where the response has not yet been written, so callers cannot tell the two cases apart.
 
 - **Suggested fix**: Return `nil` after a failed `Upgrade` (log the error instead) so Echo does not attempt to send a second response. Leave the other error returns in `HandleWebSocket` untouched — they run before any response is sent.
+
+---
+
+## IH-007: `TripHandler.GetStats` and `GetTripByRoute` reject every session-authenticated request with 403
+
+- **Severity**: high
+- **Category**: logic
+- **Location**: `internal/api/trip.go:87-93` (`GetStats`) and `internal/api/trip.go:170-176` (`GetTripByRoute`)
+- **Status**: open
+- **Description**: Both handlers hand-roll a per-device authorization check that only considers the JWT case and never looks at `ContextKeyAuthMode`:
+
+  ```go
+  authDongleID, _ := c.Get(middleware.ContextKeyDongleID).(string)
+  if authDongleID != dongleID {
+      return c.JSON(http.StatusForbidden, errorResponse{
+          Error: "dongle_id does not match authenticated device",
+          Code:  http.StatusForbidden,
+      })
+  }
+  ```
+
+  In `cmd/server/main.go:146` and `:178` these handlers are registered on groups gated by `sessionOrJWT` (`v1Routes` and `v1ConfigRead`). The session middleware (`internal/api/middleware/session.go:82-86`) stamps `ContextKeyAuthMode = "session"` but does *not* set `ContextKeyDongleID`, so for every dashboard request `authDongleID` is the empty string. Because `"" != "abc123"` is always true for any real dongle_id, the handler returns `403 Forbidden` to every session-authenticated caller.
+
+  Concretely:
+  - `web/src/app/page.tsx:193` fetches `/v1/devices/{dongleId}/stats` for the dashboard-home totals + recent-drives card, which now always renders the "Failed to load stats" error state.
+  - `/v1/routes/{dongleId}/{routeName}/trip` is similarly unreachable from any session-authenticated page.
+
+  The sibling handlers in the same package (e.g. `EventsHandler.ListEvents`, `RouteHandler.GetRoute`, `ExportHandler.ExportRouteGPX`, `ShareHandler.CreateShare`, `ConfigHandler` reads and writes) all funnel through the shared `checkDongleAccess(c, dongleID)` helper in `internal/api/auth_check.go`, which short-circuits when `mode == middleware.AuthModeSession`. `TripHandler` predates that helper and was never migrated; the unit tests in `trip_test.go:413` inject `ContextKeyDongleID` directly so they never exercise the session path.
+
+- **Suggested fix**: Replace both inline checks in `trip.go` with `if handled, err := checkDongleAccess(c, dongleID); handled { return err }`, matching the rest of `internal/api/*`. Add a test case that sets `ContextKeyAuthMode = middleware.AuthModeSession` (with `ContextKeyDongleID` unset) and asserts the handler proceeds to 200.
+
+---
+
+## IH-008: `SignalsHandler.GetRouteSignals` rejects every session-authenticated request with 403
+
+- **Severity**: high
+- **Category**: logic
+- **Location**: `internal/api/signals.go:81-87`
+- **Status**: open
+- **Description**: Same pattern as IH-007 in a different handler:
+
+  ```go
+  authDongleID, _ := c.Get(middleware.ContextKeyDongleID).(string)
+  if authDongleID != dongleID {
+      return c.JSON(http.StatusForbidden, errorResponse{
+          Error: "dongle_id does not match authenticated device",
+          Code:  http.StatusForbidden,
+      })
+  }
+  ```
+
+  The endpoint is registered in `cmd/server/main.go:131` under `v1Routes := e.Group("/v1/routes", sessionOrJWT)`, so dashboard sessions are expected to work. `web/src/components/video/SignalTimeline.tsx:119` fetches `/v1/routes/{dongleId}/{routeName}/signals` via `apiFetch`, which sends the browser's session cookie (`credentials: "include"` in `web/src/lib/api.ts:66`) but no Authorization header. Because `ContextKeyDongleID` is only populated by the JWT branch of the middleware, session requests fall into `authDongleID == ""`, which never matches the URL's dongle_id, and the route-detail page's signal timeline is unreachable.
+
+  A byproduct of fixing IH-007 by routing through `checkDongleAccess` is that the same migration can be applied here for free.
+
+- **Suggested fix**: Swap the hand-rolled check for `if handled, err := checkDongleAccess(c, dongleID); handled { return err }`. Optionally audit the package once more: `internal/api/signals.go`, `internal/api/trip.go`, and `internal/api/device_live.go`/`snapshot.go` are the only remaining files that inspect `ContextKeyDongleID` directly. `DeviceLiveHandler.GetLive` does no dongle check at all (it authorizes implicitly via the hub lookup), which is a separate, lower-severity consideration not tracked here.
