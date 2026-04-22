@@ -528,6 +528,7 @@ func RegisterDefaultHandlers(handlers map[string]MethodHandler) {
 	handlers["getMessage"] = handleGetMessage
 	handlers["listUploadQueue"] = handleListUploadQueue
 	handlers["cancelUpload"] = handleCancelUpload
+	handlers["setRouteViewed"] = handleSetRouteViewed
 }
 
 // knownStubServices is a small allowlist of cereal service names the device
@@ -791,4 +792,44 @@ func handleCancelUpload(_ string, params json.RawMessage) (interface{}, *RPCErro
 	}
 
 	return map[string]int{"success": 1}, nil
+}
+
+// SetRouteViewedParams are the parameters for the setRouteViewed RPC method.
+type SetRouteViewedParams struct {
+	Route string `json:"route"`
+}
+
+// CallSetRouteViewed instructs the device to record that a route has been
+// viewed, so the device can tag or deprioritize it in its local queue.
+func CallSetRouteViewed(caller *RPCCaller, client *Client, route string) error {
+	params := SetRouteViewedParams{
+		Route: route,
+	}
+
+	resp, err := caller.Call(client, "setRouteViewed", params)
+	if err != nil {
+		return fmt.Errorf("setRouteViewed failed: %w", err)
+	}
+
+	if resp.Error != nil {
+		return fmt.Errorf("setRouteViewed returned error: %w", resp.Error)
+	}
+
+	return nil
+}
+
+// handleSetRouteViewed is a device-side stub handler for setRouteViewed.
+// A real device would record the route in AthenadRecentlyViewedRoutes; this
+// handler validates that a route name was provided and acknowledges.
+func handleSetRouteViewed(_ string, params json.RawMessage) (interface{}, *RPCError) {
+	var p SetRouteViewedParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid params: %v", err))
+	}
+
+	if p.Route == "" {
+		return nil, NewRPCError(CodeInvalidParams, "route is required")
+	}
+
+	return map[string]bool{"success": true}, nil
 }

@@ -819,6 +819,7 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 		"getMessage",
 		"listUploadQueue",
 		"cancelUpload",
+		"setRouteViewed",
 	}
 
 	for _, method := range expected {
@@ -1580,6 +1581,117 @@ func TestHandleCancelUpload_List(t *testing.T) {
 
 func TestHandleCancelUpload_InvalidJSON(t *testing.T) {
 	_, rpcErr := handleCancelUpload("test-dongle", json.RawMessage(`{not valid`))
+	if rpcErr == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+func TestCallSetRouteViewed(t *testing.T) {
+	caller := NewRPCCaller()
+	client := testClientWithResponder(t, caller, map[string]bool{"success": true}, nil)
+
+	err := CallSetRouteViewed(caller, client, "a2a0ccea32023010|2023-07-13--11-06-38")
+	if err != nil {
+		t.Fatalf("CallSetRouteViewed returned error: %v", err)
+	}
+}
+
+func TestCallSetRouteViewed_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInvalidParams, "route is required")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	err := CallSetRouteViewed(caller, client, "")
+	if err == nil {
+		t.Fatal("expected error from CallSetRouteViewed")
+	}
+}
+
+func TestCallSetRouteViewed_ParamsMarshaled(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "route-viewed-params",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		var p SetRouteViewedParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return
+		}
+		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
+		if p.Route != "a2a0ccea32023010|2023-07-13--11-06-38" {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected params")
+		} else {
+			resp.Result = map[string]bool{"success": true}
+		}
+		caller.HandleResponse(resp)
+	}()
+
+	t.Cleanup(func() { c.Close() })
+
+	err := CallSetRouteViewed(caller, c, "a2a0ccea32023010|2023-07-13--11-06-38")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleSetRouteViewed_Valid(t *testing.T) {
+	params := json.RawMessage(`{"route":"a2a0ccea32023010|2023-07-13--11-06-38"}`)
+
+	result, rpcErr := handleSetRouteViewed("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	m, ok := result.(map[string]bool)
+	if !ok {
+		t.Fatalf("result is not map[string]bool, got %T", result)
+	}
+	if !m["success"] {
+		t.Error("expected success=true")
+	}
+}
+
+func TestHandleSetRouteViewed_EmptyRoute(t *testing.T) {
+	params := json.RawMessage(`{"route":""}`)
+
+	_, rpcErr := handleSetRouteViewed("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for empty route")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+
+func TestHandleSetRouteViewed_MissingRoute(t *testing.T) {
+	params := json.RawMessage(`{}`)
+
+	_, rpcErr := handleSetRouteViewed("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for missing route")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
+	}
+}
+
+func TestHandleSetRouteViewed_InvalidJSON(t *testing.T) {
+	params := json.RawMessage(`not json`)
+
+	_, rpcErr := handleSetRouteViewed("test-dongle", params)
 	if rpcErr == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
