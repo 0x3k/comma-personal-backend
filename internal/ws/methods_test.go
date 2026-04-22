@@ -2,6 +2,7 @@ package ws
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -469,11 +470,207 @@ func TestRegisterDefaultHandlers(t *testing.T) {
 		"getNetworkType",
 		"getSimInfo",
 		"setNavDestination",
+		"listDataDirectory",
 	}
 
 	for _, method := range expected {
 		if _, ok := handlers[method]; !ok {
 			t.Errorf("handler not registered for method %q", method)
 		}
+	}
+}
+
+func TestCallListDataDirectory_NoPrefix(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "list-no-prefix",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+
+	expected := []string{"a/rlog.bz2", "b/qlog.bz2"}
+
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
+		// When prefix is empty, the client should omit params entirely or send
+		// an empty/null value. Either is acceptable; reject any non-empty prefix.
+		if len(req.Params) > 0 && string(req.Params) != "null" {
+			var p ListDataDirectoryParams
+			if err := json.Unmarshal(req.Params, &p); err != nil {
+				resp.Error = NewRPCError(CodeInvalidParams, "bad params")
+				caller.HandleResponse(resp)
+				return
+			}
+			if p.Prefix != "" {
+				resp.Error = NewRPCError(CodeInvalidParams, "unexpected non-empty prefix")
+				caller.HandleResponse(resp)
+				return
+			}
+		}
+		resp.Result = expected
+		caller.HandleResponse(resp)
+	}()
+
+	t.Cleanup(func() { c.Close() })
+
+	files, err := CallListDataDirectory(caller, c, "")
+	if err != nil {
+		t.Fatalf("CallListDataDirectory returned error: %v", err)
+	}
+	if len(files) != len(expected) {
+		t.Fatalf("files length = %d, want %d", len(files), len(expected))
+	}
+	for i, want := range expected {
+		if files[i] != want {
+			t.Errorf("files[%d] = %q, want %q", i, files[i], want)
+		}
+	}
+}
+
+func TestCallListDataDirectory_WithPrefix(t *testing.T) {
+	caller := NewRPCCaller()
+	hub := NewHub()
+	c := &Client{
+		DongleID: "list-with-prefix",
+		hub:      hub,
+		sendCh:   make(chan []byte, sendChSize),
+		done:     make(chan struct{}),
+		handlers: make(map[string]MethodHandler),
+	}
+
+	expected := []string{"2024-01-01--12-00-00--0/rlog.bz2"}
+
+	go func() {
+		msg := <-c.sendCh
+		var req RPCRequest
+		if err := json.Unmarshal(msg, &req); err != nil {
+			return
+		}
+		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
+		var p ListDataDirectoryParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			resp.Error = NewRPCError(CodeInvalidParams, "bad params")
+			caller.HandleResponse(resp)
+			return
+		}
+		if p.Prefix != "2024-01-01" {
+			resp.Error = NewRPCError(CodeInvalidParams, "unexpected prefix")
+			caller.HandleResponse(resp)
+			return
+		}
+		resp.Result = expected
+		caller.HandleResponse(resp)
+	}()
+
+	t.Cleanup(func() { c.Close() })
+
+	files, err := CallListDataDirectory(caller, c, "2024-01-01")
+	if err != nil {
+		t.Fatalf("CallListDataDirectory returned error: %v", err)
+	}
+	if len(files) != len(expected) {
+		t.Fatalf("files length = %d, want %d", len(files), len(expected))
+	}
+	if files[0] != expected[0] {
+		t.Errorf("files[0] = %q, want %q", files[0], expected[0])
+	}
+}
+
+func TestCallListDataDirectory_RPCError(t *testing.T) {
+	caller := NewRPCCaller()
+	rpcErr := NewRPCError(CodeInternalError, "list failed")
+	client := testClientWithResponder(t, caller, nil, rpcErr)
+
+	_, err := CallListDataDirectory(caller, client, "")
+	if err == nil {
+		t.Fatal("expected error from CallListDataDirectory")
+	}
+}
+
+func TestHandleListDataDirectory_NoPrefix(t *testing.T) {
+	result, rpcErr := handleListDataDirectory("test-dongle", nil)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	files, ok := result.([]string)
+	if !ok {
+		t.Fatalf("result is not []string, got %T", result)
+	}
+	if len(files) != len(stubDataDirectoryFiles) {
+		t.Errorf("files length = %d, want %d", len(files), len(stubDataDirectoryFiles))
+	}
+}
+
+func TestHandleListDataDirectory_EmptyPrefixParam(t *testing.T) {
+	params := json.RawMessage(`{"prefix":""}`)
+	result, rpcErr := handleListDataDirectory("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	files, ok := result.([]string)
+	if !ok {
+		t.Fatalf("result is not []string, got %T", result)
+	}
+	if len(files) != len(stubDataDirectoryFiles) {
+		t.Errorf("files length = %d, want %d (full list)", len(files), len(stubDataDirectoryFiles))
+	}
+}
+
+func TestHandleListDataDirectory_WithPrefix(t *testing.T) {
+	params := json.RawMessage(`{"prefix":"2024-01-01--12-00-00--0"}`)
+	result, rpcErr := handleListDataDirectory("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	files, ok := result.([]string)
+	if !ok {
+		t.Fatalf("result is not []string, got %T", result)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected at least one file matching prefix")
+	}
+	for _, f := range files {
+		if !strings.HasPrefix(f, "2024-01-01--12-00-00--0") {
+			t.Errorf("file %q does not match prefix", f)
+		}
+	}
+}
+
+func TestHandleListDataDirectory_PrefixNoMatch(t *testing.T) {
+	params := json.RawMessage(`{"prefix":"no-such-prefix"}`)
+	result, rpcErr := handleListDataDirectory("test-dongle", params)
+	if rpcErr != nil {
+		t.Fatalf("unexpected error: %v", rpcErr)
+	}
+
+	files, ok := result.([]string)
+	if !ok {
+		t.Fatalf("result is not []string, got %T", result)
+	}
+	if len(files) != 0 {
+		t.Errorf("expected empty list for non-matching prefix, got %d files", len(files))
+	}
+}
+
+func TestHandleListDataDirectory_InvalidJSON(t *testing.T) {
+	params := json.RawMessage(`not json`)
+
+	_, rpcErr := handleListDataDirectory("test-dongle", params)
+	if rpcErr == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if rpcErr.Code != CodeInvalidParams {
+		t.Errorf("error code = %d, want %d", rpcErr.Code, CodeInvalidParams)
 	}
 }
