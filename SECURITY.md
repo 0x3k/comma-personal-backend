@@ -34,7 +34,7 @@ This backend is designed to run on a private network or behind a reverse proxy. 
 ### Authentication
 
 - Device authentication uses JWTs signed with `JWT_SECRET`. Use a strong, random secret (at least 32 bytes).
-- The `ALLOWED_DONGLE_IDS` environment variable restricts which devices can register. Set this if your server is exposed to the internet.
+- The `ALLOWED_SERIALS` environment variable restricts which devices can register (keyed on the hardware serial, since the dongle_id is server-assigned). Set this if your server is exposed to the internet.
 - There is no user authentication for the web UI -- it is intended for single-user, trusted-network deployments. Put it behind a VPN or reverse proxy with authentication if exposing to the internet.
 
 ### Network exposure

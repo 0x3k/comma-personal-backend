@@ -9,6 +9,21 @@ import (
 	"context"
 )
 
+const deleteDeviceParam = `-- name: DeleteDeviceParam :exec
+DELETE FROM device_params
+WHERE dongle_id = $1 AND key = $2
+`
+
+type DeleteDeviceParamParams struct {
+	DongleID string `json:"dongleId"`
+	Key      string `json:"key"`
+}
+
+func (q *Queries) DeleteDeviceParam(ctx context.Context, arg DeleteDeviceParamParams) error {
+	_, err := q.db.Exec(ctx, deleteDeviceParam, arg.DongleID, arg.Key)
+	return err
+}
+
 const getDeviceParam = `-- name: GetDeviceParam :one
 SELECT id, dongle_id, key, value, updated_at
 FROM device_params
@@ -22,32 +37,6 @@ type GetDeviceParamParams struct {
 
 func (q *Queries) GetDeviceParam(ctx context.Context, arg GetDeviceParamParams) (DeviceParam, error) {
 	row := q.db.QueryRow(ctx, getDeviceParam, arg.DongleID, arg.Key)
-	var i DeviceParam
-	err := row.Scan(
-		&i.ID,
-		&i.DongleID,
-		&i.Key,
-		&i.Value,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const setDeviceParam = `-- name: SetDeviceParam :one
-INSERT INTO device_params (dongle_id, key, value)
-VALUES ($1, $2, $3)
-ON CONFLICT (dongle_id, key) DO UPDATE SET value = $3, updated_at = now()
-RETURNING id, dongle_id, key, value, updated_at
-`
-
-type SetDeviceParamParams struct {
-	DongleID string `json:"dongleId"`
-	Key      string `json:"key"`
-	Value    string `json:"value"`
-}
-
-func (q *Queries) SetDeviceParam(ctx context.Context, arg SetDeviceParamParams) (DeviceParam, error) {
-	row := q.db.QueryRow(ctx, setDeviceParam, arg.DongleID, arg.Key, arg.Value)
 	var i DeviceParam
 	err := row.Scan(
 		&i.ID,
@@ -92,17 +81,28 @@ func (q *Queries) ListDeviceParams(ctx context.Context, dongleID string) ([]Devi
 	return items, nil
 }
 
-const deleteDeviceParam = `-- name: DeleteDeviceParam :exec
-DELETE FROM device_params
-WHERE dongle_id = $1 AND key = $2
+const setDeviceParam = `-- name: SetDeviceParam :one
+INSERT INTO device_params (dongle_id, key, value)
+VALUES ($1, $2, $3)
+ON CONFLICT (dongle_id, key) DO UPDATE SET value = $3, updated_at = now()
+RETURNING id, dongle_id, key, value, updated_at
 `
 
-type DeleteDeviceParamParams struct {
+type SetDeviceParamParams struct {
 	DongleID string `json:"dongleId"`
 	Key      string `json:"key"`
+	Value    string `json:"value"`
 }
 
-func (q *Queries) DeleteDeviceParam(ctx context.Context, arg DeleteDeviceParamParams) error {
-	_, err := q.db.Exec(ctx, deleteDeviceParam, arg.DongleID, arg.Key)
-	return err
+func (q *Queries) SetDeviceParam(ctx context.Context, arg SetDeviceParamParams) (DeviceParam, error) {
+	row := q.db.QueryRow(ctx, setDeviceParam, arg.DongleID, arg.Key, arg.Value)
+	var i DeviceParam
+	err := row.Scan(
+		&i.ID,
+		&i.DongleID,
+		&i.Key,
+		&i.Value,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

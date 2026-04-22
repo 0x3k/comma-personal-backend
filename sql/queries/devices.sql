@@ -3,6 +3,12 @@ SELECT dongle_id, serial, public_key, created_at, updated_at
 FROM devices
 WHERE dongle_id = $1;
 
+-- name: GetDeviceByPublicKey :one
+SELECT dongle_id, serial, public_key, created_at, updated_at
+FROM devices
+WHERE public_key = $1
+LIMIT 1;
+
 -- name: CreateDevice :one
 INSERT INTO devices (dongle_id, serial, public_key)
 VALUES ($1, $2, $3)

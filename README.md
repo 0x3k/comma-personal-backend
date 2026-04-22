@@ -86,7 +86,7 @@ cp .env.example .env
 | `JWT_SECRET` | yes | -- | Secret key for signing device auth tokens |
 | `STORAGE_PATH` | no | `./data` | Directory for uploaded video/log files |
 | `PORT` | no | `8080` | API server listen port |
-| `ALLOWED_DONGLE_IDS` | no | -- | Comma-separated allowlist of dongle IDs permitted to register (all allowed if unset) |
+| `ALLOWED_SERIALS` | no | -- | Comma-separated allowlist of device serials permitted to register (all allowed if unset). The dongle ID is assigned server-side, so restriction is by hardware serial. |
 
 **4. Start the backend**
 

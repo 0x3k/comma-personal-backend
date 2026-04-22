@@ -62,7 +62,7 @@ DATABASE_URL=postgres://comma:password@localhost:5432/comma
 JWT_SECRET=<generate with: openssl rand -hex 32>
 STORAGE_PATH=/var/lib/comma/data
 PORT=8080
-# ALLOWED_DONGLE_IDS=abc123,def456
+# ALLOWED_SERIALS=SERIAL001,SERIAL002
 ```
 
 Create the storage directory:

@@ -8,11 +8,11 @@ import (
 
 // Config holds the application configuration loaded from environment variables.
 type Config struct {
-	DatabaseURL      string
-	StoragePath      string
-	Port             string
-	JWTSecret        string
-	AllowedDongleIDs []string
+	DatabaseURL    string
+	StoragePath    string
+	Port           string
+	JWTSecret      string
+	AllowedSerials []string
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -25,11 +25,11 @@ func Load() (*Config, error) {
 		JWTSecret:   os.Getenv("JWT_SECRET"),
 	}
 
-	if v := os.Getenv("ALLOWED_DONGLE_IDS"); v != "" {
-		for _, id := range strings.Split(v, ",") {
-			id = strings.TrimSpace(id)
-			if id != "" {
-				cfg.AllowedDongleIDs = append(cfg.AllowedDongleIDs, id)
+	if v := os.Getenv("ALLOWED_SERIALS"); v != "" {
+		for _, s := range strings.Split(v, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				cfg.AllowedSerials = append(cfg.AllowedSerials, s)
 			}
 		}
 	}
@@ -53,14 +53,14 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// IsDongleAllowed reports whether the given dongle_id is permitted to register.
-// If no allowlist is configured, all dongle IDs are allowed.
-func (c *Config) IsDongleAllowed(dongleID string) bool {
-	if len(c.AllowedDongleIDs) == 0 {
+// IsSerialAllowed reports whether the given device serial is permitted to
+// register. If no allowlist is configured, all serials are allowed.
+func (c *Config) IsSerialAllowed(serial string) bool {
+	if len(c.AllowedSerials) == 0 {
 		return true
 	}
-	for _, id := range c.AllowedDongleIDs {
-		if id == dongleID {
+	for _, s := range c.AllowedSerials {
+		if s == serial {
 			return true
 		}
 	}

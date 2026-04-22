@@ -50,7 +50,7 @@ func main() {
 	})
 
 	// Device registration (unauthenticated).
-	pilotAuth := api.NewPilotAuthHandler(queries, cfg.JWTSecret, cfg)
+	pilotAuth := api.NewPilotAuthHandler(queries, cfg)
 	pilotAuth.RegisterRoutes(e)
 
 	// Authenticated API groups.

@@ -13,7 +13,7 @@ var configEnvVars = []string{
 	"STORAGE_PATH",
 	"PORT",
 	"JWT_SECRET",
-	"ALLOWED_DONGLE_IDS",
+	"ALLOWED_SERIALS",
 }
 
 // clearConfigEnv unsets all config-related environment variables.
@@ -127,36 +127,36 @@ func TestLoad_AllMissing(t *testing.T) {
 	}
 }
 
-func TestLoad_AllowedDongleIDs(t *testing.T) {
+func TestLoad_AllowedSerials(t *testing.T) {
 	tests := []struct {
-		name    string
-		envVal  string
-		wantIDs []string
+		name        string
+		envVal      string
+		wantSerials []string
 	}{
 		{
-			name:    "single dongle ID",
-			envVal:  "abc123",
-			wantIDs: []string{"abc123"},
+			name:        "single serial",
+			envVal:      "SERIAL001",
+			wantSerials: []string{"SERIAL001"},
 		},
 		{
-			name:    "multiple dongle IDs",
-			envVal:  "abc123,def456,ghi789",
-			wantIDs: []string{"abc123", "def456", "ghi789"},
+			name:        "multiple serials",
+			envVal:      "SERIAL001,SERIAL002,SERIAL003",
+			wantSerials: []string{"SERIAL001", "SERIAL002", "SERIAL003"},
 		},
 		{
-			name:    "whitespace trimmed",
-			envVal:  " abc123 , def456 , ghi789 ",
-			wantIDs: []string{"abc123", "def456", "ghi789"},
+			name:        "whitespace trimmed",
+			envVal:      " SERIAL001 , SERIAL002 , SERIAL003 ",
+			wantSerials: []string{"SERIAL001", "SERIAL002", "SERIAL003"},
 		},
 		{
-			name:    "empty value",
-			envVal:  "",
-			wantIDs: nil,
+			name:        "empty value",
+			envVal:      "",
+			wantSerials: nil,
 		},
 		{
-			name:    "trailing comma ignored",
-			envVal:  "abc123,",
-			wantIDs: []string{"abc123"},
+			name:        "trailing comma ignored",
+			envVal:      "SERIAL001,",
+			wantSerials: []string{"SERIAL001"},
 		},
 	}
 
@@ -167,7 +167,7 @@ func TestLoad_AllowedDongleIDs(t *testing.T) {
 			t.Setenv("JWT_SECRET", "secret")
 
 			if tt.envVal != "" {
-				t.Setenv("ALLOWED_DONGLE_IDS", tt.envVal)
+				t.Setenv("ALLOWED_SERIALS", tt.envVal)
 			}
 
 			cfg, err := Load()
@@ -175,52 +175,52 @@ func TestLoad_AllowedDongleIDs(t *testing.T) {
 				t.Fatalf("Load() returned unexpected error: %v", err)
 			}
 
-			if len(cfg.AllowedDongleIDs) != len(tt.wantIDs) {
-				t.Fatalf("AllowedDongleIDs has %d entries, want %d: got %v",
-					len(cfg.AllowedDongleIDs), len(tt.wantIDs), cfg.AllowedDongleIDs)
+			if len(cfg.AllowedSerials) != len(tt.wantSerials) {
+				t.Fatalf("AllowedSerials has %d entries, want %d: got %v",
+					len(cfg.AllowedSerials), len(tt.wantSerials), cfg.AllowedSerials)
 			}
-			for i, want := range tt.wantIDs {
-				if cfg.AllowedDongleIDs[i] != want {
-					t.Errorf("AllowedDongleIDs[%d] = %q, want %q", i, cfg.AllowedDongleIDs[i], want)
+			for i, want := range tt.wantSerials {
+				if cfg.AllowedSerials[i] != want {
+					t.Errorf("AllowedSerials[%d] = %q, want %q", i, cfg.AllowedSerials[i], want)
 				}
 			}
 		})
 	}
 }
 
-func TestIsDongleAllowed(t *testing.T) {
+func TestIsSerialAllowed(t *testing.T) {
 	tests := []struct {
-		name     string
-		allowed  []string
-		dongleID string
-		want     bool
+		name    string
+		allowed []string
+		serial  string
+		want    bool
 	}{
 		{
-			name:     "empty allowlist permits all",
-			allowed:  nil,
-			dongleID: "anything",
-			want:     true,
+			name:    "empty allowlist permits all",
+			allowed: nil,
+			serial:  "anything",
+			want:    true,
 		},
 		{
-			name:     "dongle in allowlist",
-			allowed:  []string{"abc123", "def456"},
-			dongleID: "abc123",
-			want:     true,
+			name:    "serial in allowlist",
+			allowed: []string{"SERIAL001", "SERIAL002"},
+			serial:  "SERIAL001",
+			want:    true,
 		},
 		{
-			name:     "dongle not in allowlist",
-			allowed:  []string{"abc123", "def456"},
-			dongleID: "unknown",
-			want:     false,
+			name:    "serial not in allowlist",
+			allowed: []string{"SERIAL001", "SERIAL002"},
+			serial:  "unknown",
+			want:    false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &Config{AllowedDongleIDs: tt.allowed}
-			got := cfg.IsDongleAllowed(tt.dongleID)
+			cfg := &Config{AllowedSerials: tt.allowed}
+			got := cfg.IsSerialAllowed(tt.serial)
 			if got != tt.want {
-				t.Errorf("IsDongleAllowed(%q) = %v, want %v", tt.dongleID, got, tt.want)
+				t.Errorf("IsSerialAllowed(%q) = %v, want %v", tt.serial, got, tt.want)
 			}
 		})
 	}

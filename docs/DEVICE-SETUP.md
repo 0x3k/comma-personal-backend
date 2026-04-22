@@ -52,12 +52,12 @@ Openpilot's athenad connects to `ATHENA_HOST/ws/v2/<dongle_id>`. The backend lis
 
 ## Authentication flow
 
-1. On first boot (or when the device has no cached token), athenad calls `POST /v2/pilotauth/` with the device's `dongle_id`, `public_key`, and `serial`
-2. The backend upserts the device record and returns a signed JWT (`access_token`)
-3. The device caches this token and includes it in all subsequent requests as `Authorization: JWT <token>` (REST) or `cookie: jwt=<token>` (WebSocket)
-4. Tokens are valid for 90 days
+1. On first boot (no cached `DongleId`), the device generates an RSA (or ECDSA) keypair, then calls `POST /v2/pilotauth/` with `imei`, `imei2`, `serial`, `public_key`, and a `register_token` JWT self-signed with the private key and claiming `register: true`
+2. The backend verifies `register_token` against the supplied `public_key`, assigns a fresh 16-char hex `dongle_id` (or returns the existing one if the public key is already registered), and responds with `{"dongle_id": "..."}`
+3. For every subsequent API call, the device mints a fresh RS256/ES256 JWT signed with its private key (claims: `identity: <dongle_id>`), sent as `Authorization: JWT <token>` (REST) or in the `jwt` cookie (WebSocket)
+4. These per-request JWTs are short-lived (1 hour); the keypair persists on the device and is the long-term identity
 
-If you set `ALLOWED_DONGLE_IDS` on the backend, only listed devices can register. Unrecognized devices get a 403.
+If you set `ALLOWED_SERIALS` on the backend, only devices whose hardware serial is in the list can register (the dongle_id itself is assigned by the server). Unrecognized serials get a 403.
 
 ## Upload flow
 
@@ -90,7 +90,7 @@ After configuring the device and rebooting:
 **Device won't register**
 - Confirm the server is reachable from the device's network (cellular or Wi-Fi)
 - Check that TLS certificates are valid (not self-signed, not expired)
-- If using `ALLOWED_DONGLE_IDS`, verify the device's dongle ID is in the list
+- If using `ALLOWED_SERIALS`, verify the device's hardware serial is in the list
 - Check backend logs for 4xx/5xx responses on `/v2/pilotauth/`
 
 **Files not uploading**

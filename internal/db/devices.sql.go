@@ -55,21 +55,15 @@ func (q *Queries) GetDevice(ctx context.Context, dongleID string) (Device, error
 	return i, err
 }
 
-const upsertDevice = `-- name: UpsertDevice :one
-INSERT INTO devices (dongle_id, serial, public_key)
-VALUES ($1, $2, $3)
-ON CONFLICT (dongle_id) DO UPDATE SET serial = $2, public_key = $3, updated_at = now()
-RETURNING dongle_id, serial, public_key, created_at, updated_at
+const getDeviceByPublicKey = `-- name: GetDeviceByPublicKey :one
+SELECT dongle_id, serial, public_key, created_at, updated_at
+FROM devices
+WHERE public_key = $1
+LIMIT 1
 `
 
-type UpsertDeviceParams struct {
-	DongleID  string      `json:"dongleId"`
-	Serial    pgtype.Text `json:"serial"`
-	PublicKey pgtype.Text `json:"publicKey"`
-}
-
-func (q *Queries) UpsertDevice(ctx context.Context, arg UpsertDeviceParams) (Device, error) {
-	row := q.db.QueryRow(ctx, upsertDevice, arg.DongleID, arg.Serial, arg.PublicKey)
+func (q *Queries) GetDeviceByPublicKey(ctx context.Context, publicKey pgtype.Text) (Device, error) {
+	row := q.db.QueryRow(ctx, getDeviceByPublicKey, publicKey)
 	var i Device
 	err := row.Scan(
 		&i.DongleID,
@@ -111,4 +105,30 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const upsertDevice = `-- name: UpsertDevice :one
+INSERT INTO devices (dongle_id, serial, public_key)
+VALUES ($1, $2, $3)
+ON CONFLICT (dongle_id) DO UPDATE SET serial = $2, public_key = $3, updated_at = now()
+RETURNING dongle_id, serial, public_key, created_at, updated_at
+`
+
+type UpsertDeviceParams struct {
+	DongleID  string      `json:"dongleId"`
+	Serial    pgtype.Text `json:"serial"`
+	PublicKey pgtype.Text `json:"publicKey"`
+}
+
+func (q *Queries) UpsertDevice(ctx context.Context, arg UpsertDeviceParams) (Device, error) {
+	row := q.db.QueryRow(ctx, upsertDevice, arg.DongleID, arg.Serial, arg.PublicKey)
+	var i Device
+	err := row.Scan(
+		&i.DongleID,
+		&i.Serial,
+		&i.PublicKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
