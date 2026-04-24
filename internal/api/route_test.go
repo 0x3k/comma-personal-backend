@@ -31,6 +31,8 @@ type routeMockDB struct {
 	segments    []db.Segment
 	segmentsErr error
 	segCount    int64
+	tags        []string
+	tagsErr     error
 
 	// lastListSQL, lastListArgs, lastCountSQL, and lastCountArgs capture the
 	// most recent filtered-list and filtered-count invocations so tests can
@@ -39,9 +41,28 @@ type routeMockDB struct {
 	lastListArgs  []interface{}
 	lastCountSQL  string
 	lastCountArgs []interface{}
+
+	// lastExecSQL / lastExecArgs capture the most recent Exec invocation
+	// for tests that need to assert on tag inserts, deletes, or preserved
+	// updates. Multiple Exec calls overwrite; tests that need the full
+	// trace should use execLog instead.
+	lastExecSQL  string
+	lastExecArgs []interface{}
+	execLog      []execRecord
 }
 
-func (m *routeMockDB) Exec(_ context.Context, _ string, _ ...interface{}) (pgconn.CommandTag, error) {
+// execRecord is a single captured Exec call for tests that need to inspect
+// a sequence (for example, asserting the delete-then-insert ordering
+// ReplaceRouteTags uses).
+type execRecord struct {
+	sql  string
+	args []interface{}
+}
+
+func (m *routeMockDB) Exec(_ context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+	m.lastExecSQL = sql
+	m.lastExecArgs = args
+	m.execLog = append(m.execLog, execRecord{sql: sql, args: args})
 	return pgconn.CommandTag{}, nil
 }
 
@@ -52,7 +73,19 @@ func (m *routeMockDB) Query(_ context.Context, sql string, args ...interface{}) 
 		if m.routesErr != nil {
 			return nil, m.routesErr
 		}
-		return &mockRouteWithCountRows{routes: m.routes, segCount: m.segCount}, nil
+		return &mockRouteWithCountRows{routes: m.routes, segCount: m.segCount, tags: m.tags}, nil
+	}
+	if strings.Contains(sql, "FROM route_tags") || strings.Contains(sql, "FROM routes r") && strings.Contains(sql, "rt.tag") {
+		if m.tagsErr != nil {
+			return nil, m.tagsErr
+		}
+		return &mockTagsRows{tags: m.tags}, nil
+	}
+	if strings.Contains(sql, "route_tags") {
+		if m.tagsErr != nil {
+			return nil, m.tagsErr
+		}
+		return &mockTagsRows{tags: m.tags}, nil
 	}
 	if strings.Contains(sql, "FROM routes") {
 		if m.routesErr != nil {
@@ -183,6 +216,7 @@ func (r *mockRouteRows) Values() ([]interface{}, error) { return nil, nil }
 type mockRouteWithCountRows struct {
 	routes   []db.Route
 	segCount int64
+	tags     []string
 	idx      int
 	closed   bool
 }
@@ -214,12 +248,46 @@ func (r *mockRouteWithCountRows) Scan(dest ...interface{}) error {
 	*dest[7].(*bool) = route.Preserved
 	*dest[8].(*string) = route.Note
 	*dest[9].(*bool) = route.Starred
-	*dest[10].(*[]string) = []string{}
+	tags := r.tags
+	if tags == nil {
+		tags = []string{}
+	}
+	*dest[10].(*[]string) = tags
 	*dest[11].(*int64) = r.segCount
 	return nil
 }
 
 func (r *mockRouteWithCountRows) Values() ([]interface{}, error) { return nil, nil }
+
+// mockTagsRows implements pgx.Rows for ListTagsForRoute and
+// ListTagsForDevice. Both queries scan a single string per row.
+type mockTagsRows struct {
+	tags   []string
+	idx    int
+	closed bool
+}
+
+func (r *mockTagsRows) Close()                                       { r.closed = true }
+func (r *mockTagsRows) Err() error                                   { return nil }
+func (r *mockTagsRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *mockTagsRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *mockTagsRows) RawValues() [][]byte                          { return nil }
+func (r *mockTagsRows) Conn() *pgx.Conn                              { return nil }
+
+func (r *mockTagsRows) Next() bool {
+	if r.idx < len(r.tags) {
+		r.idx++
+		return true
+	}
+	return false
+}
+
+func (r *mockTagsRows) Scan(dest ...interface{}) error {
+	*dest[0].(*string) = r.tags[r.idx-1]
+	return nil
+}
+
+func (r *mockTagsRows) Values() ([]interface{}, error) { return nil, nil }
 
 // mockSegmentRows implements pgx.Rows for listing segments.
 type mockSegmentRows struct {

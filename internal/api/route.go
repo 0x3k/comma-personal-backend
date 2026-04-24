@@ -42,6 +42,9 @@ type routeDetailResponse struct {
 	StartTime    *time.Time        `json:"startTime"`
 	EndTime      *time.Time        `json:"endTime"`
 	Preserved    bool              `json:"preserved"`
+	Note         string            `json:"note"`
+	Starred      bool              `json:"starred"`
+	Tags         []string          `json:"tags"`
 	SegmentCount int64             `json:"segmentCount"`
 	Segments     []segmentResponse `json:"segments"`
 }
@@ -53,6 +56,9 @@ type routeListItem struct {
 	StartTime    *time.Time `json:"startTime"`
 	EndTime      *time.Time `json:"endTime"`
 	Preserved    bool       `json:"preserved"`
+	Note         string     `json:"note"`
+	Starred      bool       `json:"starred"`
+	Tags         []string   `json:"tags"`
 	SegmentCount int64      `json:"segmentCount"`
 }
 
@@ -112,6 +118,17 @@ func (h *RouteHandler) GetRoute(c echo.Context) error {
 		})
 	}
 
+	tags, err := h.queries.ListTagsForRoute(ctx, route.ID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errorResponse{
+			Error: "failed to retrieve tags",
+			Code:  http.StatusInternalServerError,
+		})
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+
 	segResponses := make([]segmentResponse, 0, len(segments))
 	for _, s := range segments {
 		segResponses = append(segResponses, segmentResponse{
@@ -139,6 +156,9 @@ func (h *RouteHandler) GetRoute(c echo.Context) error {
 		StartTime:    startTime,
 		EndTime:      endTime,
 		Preserved:    route.Preserved,
+		Note:         route.Note,
+		Starred:      route.Starred,
+		Tags:         tags,
 		SegmentCount: int64(len(segments)),
 		Segments:     segResponses,
 	})
@@ -351,12 +371,19 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 			endTime = &r.EndTime.Time
 		}
 
+		tags := r.Tags
+		if tags == nil {
+			tags = []string{}
+		}
 		items = append(items, routeListItem{
 			DongleID:     r.DongleID,
 			RouteName:    r.RouteName,
 			StartTime:    startTime,
 			EndTime:      endTime,
 			Preserved:    r.Preserved,
+			Note:         r.Note,
+			Starred:      r.Starred,
+			Tags:         tags,
 			SegmentCount: r.SegmentCount,
 		})
 	}
@@ -422,6 +449,9 @@ func (h *RouteHandler) SetPreserved(c echo.Context) error {
 		StartTime: startTime,
 		EndTime:   endTime,
 		Preserved: route.Preserved,
+		Note:      route.Note,
+		Starred:   route.Starred,
+		Tags:      []string{},
 	})
 }
 
