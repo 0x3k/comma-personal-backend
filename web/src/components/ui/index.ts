@@ -4,3 +4,4 @@ export { Badge, type BadgeProps, type BadgeVariant } from "./Badge";
 export { Spinner, type SpinnerProps, type SpinnerSize } from "./Spinner";
 export { ErrorMessage, type ErrorMessageProps } from "./ErrorMessage";
 export { Toast, type ToastProps, type ToastVariant } from "./Toast";
+export { ThemeToggle, THEME_STORAGE_KEY } from "./ThemeToggle";
