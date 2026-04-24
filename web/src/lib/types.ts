@@ -50,6 +50,14 @@ export interface RouteDetailResponse {
   routeName: string;
   startTime: string | null;
   endTime: string | null;
+  /** Preserved routes are exempt from retention-based cleanup. */
+  preserved: boolean;
+  /** Free-form user note, empty string when unset. */
+  note: string;
+  /** Starred / favourite flag; toggled via the annotations API. */
+  starred: boolean;
+  /** User-assigned tags, alphabetically sorted by the backend. */
+  tags: string[];
   segmentCount: number;
   segments: Segment[];
   /** GPS track as an array of [lat, lng] coordinate pairs. May be null/empty. */

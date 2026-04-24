@@ -1,0 +1,21 @@
+{
+  "id": "route-annotations-ui",
+  "name": "Route annotations: UI for note, starred, tags",
+  "description": "Expose route annotations in the web UI. On the route detail page, the user can edit a free-form note, toggle a star, and add/remove tags with autocomplete against the device's existing tag catalog. On the routes list, each card shows the starred state and any tags, so users can orient themselves at a glance. Existing visual language (Badge, Card, the amber/gray palette) is reused.",
+  "acceptance_criteria": [
+    "Route detail page (web/src/app/routes/[dongleId]/[routeName]/page.tsx or equivalent) renders: a star toggle button (filled = starred), a tags editor (chip list with an input for adding tags and an x on each chip to remove), and a collapsible notes textarea with an explicit Save button; all three are read-only when the user is not session-authenticated (e.g. JWT-only or share-link view)",
+    "Tag input autocompletes from GET /v1/devices/:dongle_id/tags; suggestions narrow as the user types; pressing Enter or comma commits the current token; duplicate-after-normalization tokens are silently collapsed",
+    "Save-note and toggle-star calls use the new PUT endpoints with optimistic UI that rolls back on error; a toast or inline ErrorMessage surfaces failures",
+    "Routes list page renders a small star icon on cards where starred=true and a horizontal list of up to 3 tag chips (with a +N indicator when there are more); empty annotations are invisible (no placeholder clutter)",
+    "New types in web/src/lib/types.ts: RouteListItem gains note: string, starred: boolean, tags: string[]",
+    "pnpm --dir web lint, pnpm --dir web type-check, and pnpm --dir web test pass",
+    "Manually verified in the dev server: star persists across reload, tag add/remove persists, note saves and reappears, list view reflects changes immediately"
+  ],
+  "priority": 5,
+  "status": "complete",
+  "branch": "agent/route-annotations-ui",
+  "base_branch": "main",
+  "blocked_by": ["route-annotations-api"],
+  "pr": "https://github.com/0x3k/comma-personal-backend/pull/70",
+  "notes": "Detail page: new RouteAnnotations component (web/src/components/routes/RouteAnnotations.tsx) renders star toggle, tag chip editor with autocomplete (Enter/comma to commit, Backspace on empty input peels last chip), and a collapsible note textarea with explicit Save. Star and tag edits are optimistic; failures roll the local copy back and surface via an inline banner + Toast. Tag normalization (trim+lowercase) and the 4000/32-char length budgets mirror the server-side CHECK constraints in route-annotations-schema. List page: star icon next to route name and a chip strip (up to 3 tags, +N overflow) under the date/duration block; empty annotations render nothing. Read-only mode: RouteAnnotations accepts a readOnly prop that swaps editors for plain-text views; the route detail page is session-gated in practice (the share-link viewer lives on /share/[token] and never hits this page) so the prop is mostly defensive but documented for future callers. RouteDetailResponse in web/src/lib/types.ts gained note/starred/tags/preserved to mirror the Go routeDetailResponse; RouteListItem already had them from PR #69. Smoke: lint + type-check + go vet + gofmt all pass; pnpm --dir web build succeeds; pnpm --dir web test is a no-op (intentional: no test script in web/package.json)."
+}
