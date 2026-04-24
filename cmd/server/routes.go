@@ -80,6 +80,7 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	routeHandler.RegisterPreservedRoute(v1Routes)
 	api.NewExportHandler(d.queries, d.store).RegisterRoutes(v1Routes)
 	api.NewSignalsHandler(d.queries, d.store).RegisterRoutes(v1Routes)
+	api.NewThumbnailHandler(d.store).RegisterRoutes(v1Routes)
 
 	// Share link creation is a mutation (mints a signed token) so it rides
 	// the session-only group. The public /v1/share/:token endpoints are
