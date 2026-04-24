@@ -1,0 +1,20 @@
+{
+  "id": "route-list-filters-api",
+  "name": "Routes list: filter/sort query params",
+  "description": "Extend GET /v1/route/:dongle_id to accept filter and sort query parameters so the dashboard can narrow a large routes list. Today the endpoint only supports limit/offset; this adds server-side filtering on date range, duration, distance, and boolean flags, plus an explicit sort order. Implemented as a new sqlc query (or extension of ListRoutesByDeviceWithCounts) so pagination remains deterministic and keyset-friendly. No UI in this feature.",
+  "acceptance_criteria": [
+    "GET /v1/route/:dongle_id accepts query params: from (RFC3339), to (RFC3339), min_duration_s (int seconds), max_duration_s (int seconds), min_distance_m (int meters), max_distance_m (int meters), preserved (bool), has_events (bool), sort (one of date_desc, date_asc, duration_desc, distance_desc); limit/offset continue to work",
+    "Unknown or malformed query params return 400 with the consistent {error, code} envelope; the existing no-param call keeps returning the same shape as today (date_desc, all routes, paginated)",
+    "The sqlc query (or its successor) joins against trips so min/max_distance_m filters use trips.distance_meters and min/max_duration_s uses trips.duration_seconds; routes without an aggregated trip are included unless a duration/distance filter is set (in which case they are excluded, documented in the handler)",
+    "has_events=true filters to routes that have at least one row in events; has_events=false filters to routes with zero events (use an EXISTS subquery, not a LEFT JOIN GROUP BY, to keep the query planner happy on large tables)",
+    "The result stays stable across pages: ORDER BY <chosen sort key>, routes.id DESC as the tiebreaker (extends the IH-005 fix)",
+    "Table-driven unit test in route_test.go covers at least: date range, preserved=true, preserved=false, has_events=true, combined filter+sort, invalid sort value rejected, invalid boolean rejected",
+    "go test ./internal/api/... and go vet ./... pass; sqlc generate is re-run and generated files are committed"
+  ],
+  "priority": 1,
+  "status": "complete",
+  "branch": "agent/route-list-filters-api",
+  "base_branch": "main",
+  "blocked_by": [],
+  "notes": ""
+}

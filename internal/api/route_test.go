@@ -31,14 +31,24 @@ type routeMockDB struct {
 	segments    []db.Segment
 	segmentsErr error
 	segCount    int64
+
+	// lastListSQL, lastListArgs, lastCountSQL, and lastCountArgs capture the
+	// most recent filtered-list and filtered-count invocations so tests can
+	// assert that query params flowed through to the db layer unchanged.
+	lastListSQL   string
+	lastListArgs  []interface{}
+	lastCountSQL  string
+	lastCountArgs []interface{}
 }
 
 func (m *routeMockDB) Exec(_ context.Context, _ string, _ ...interface{}) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil
 }
 
-func (m *routeMockDB) Query(_ context.Context, sql string, _ ...interface{}) (pgx.Rows, error) {
+func (m *routeMockDB) Query(_ context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
 	if strings.Contains(sql, "segment_count") {
+		m.lastListSQL = sql
+		m.lastListArgs = args
 		if m.routesErr != nil {
 			return nil, m.routesErr
 		}
@@ -59,8 +69,11 @@ func (m *routeMockDB) Query(_ context.Context, sql string, _ ...interface{}) (pg
 	return nil, fmt.Errorf("unexpected query: %s", sql)
 }
 
-func (m *routeMockDB) QueryRow(_ context.Context, sql string, _ ...interface{}) pgx.Row {
-	if strings.Contains(sql, "count(*)") && strings.Contains(sql, "routes") {
+func (m *routeMockDB) QueryRow(_ context.Context, sql string, args ...interface{}) pgx.Row {
+	lowerSQL := strings.ToLower(sql)
+	if strings.Contains(lowerSQL, "count(*)") && strings.Contains(lowerSQL, "routes") {
+		m.lastCountSQL = sql
+		m.lastCountArgs = args
 		if m.countErr != nil {
 			return &mockCountRow{err: m.countErr}
 		}
@@ -625,6 +638,186 @@ func TestListRoutes(t *testing.T) {
 			wantStatus: http.StatusInternalServerError,
 			wantError:  "failed to list routes",
 		},
+		{
+			name:         "date range filter accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "from=2024-01-01T00:00:00Z&to=2024-02-01T00:00:00Z",
+			mock: &routeMockDB{
+				routeCount: 1,
+				routes: []db.Route{
+					{ID: 1, DongleID: "abc123", RouteName: "2024-01-15--10-00-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}},
+				},
+				segCount: 1,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  1,
+			wantCount:  1,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
+			name:         "preserved=true filter accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "preserved=true",
+			mock: &routeMockDB{
+				routeCount: 1,
+				routes: []db.Route{
+					{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+						Preserved: true},
+				},
+				segCount: 2,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  1,
+			wantCount:  1,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
+			name:         "preserved=false filter accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "preserved=false",
+			mock: &routeMockDB{
+				routeCount: 3,
+				routes: []db.Route{
+					{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}},
+				},
+				segCount: 1,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  3,
+			wantCount:  1,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
+			name:         "has_events=true filter accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "has_events=true",
+			mock: &routeMockDB{
+				routeCount: 1,
+				routes: []db.Route{
+					{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}},
+				},
+				segCount: 1,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  1,
+			wantCount:  1,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
+			name:         "combined filter and sort accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams: "from=2024-01-01T00:00:00Z&min_duration_s=60&max_distance_m=10000" +
+				"&preserved=true&has_events=false&sort=distance_desc&limit=10&offset=0",
+			mock: &routeMockDB{
+				routeCount: 1,
+				routes: []db.Route{
+					{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(5 * time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+						Preserved: true},
+				},
+				segCount: 1,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  1,
+			wantCount:  1,
+			wantLimit:  10,
+			wantOffset: 0,
+		},
+		{
+			name:         "invalid sort value rejected",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "sort=alphabetical",
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "invalid sort parameter",
+		},
+		{
+			name:         "invalid boolean rejected",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "preserved=maybe",
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "invalid preserved parameter",
+		},
+		{
+			name:         "invalid has_events boolean rejected",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "has_events=sometimes",
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "invalid has_events parameter",
+		},
+		{
+			name:         "invalid from timestamp rejected",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "from=yesterday",
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "invalid from parameter",
+		},
+		{
+			name:         "invalid to timestamp rejected",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "to=2024-01",
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "invalid to parameter",
+		},
+		{
+			name:         "invalid min_duration_s rejected",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "min_duration_s=forever",
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "invalid min_duration_s parameter",
+		},
+		{
+			name:         "invalid min_distance_m rejected",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "min_distance_m=far",
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "invalid min_distance_m parameter",
+		},
+		{
+			name:         "unknown query parameter rejected",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "sorted=date_desc",
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "unknown query parameter",
+		},
 	}
 
 	for _, tt := range tests {
@@ -682,6 +875,160 @@ func TestListRoutes(t *testing.T) {
 				t.Errorf("offset = %d, want %d", body.Offset, tt.wantOffset)
 			}
 		})
+	}
+}
+
+func TestListRoutesFilterAndSortPassthrough(t *testing.T) {
+	now := time.Now()
+
+	baseRoutes := []db.Route{
+		{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+			StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+			EndTime:   pgtype.Timestamptz{Time: now.Add(10 * time.Minute), Valid: true},
+			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}},
+	}
+
+	tests := []struct {
+		name           string
+		queryParams    string
+		wantOrderBy    string
+		wantArgPresent map[int]bool
+	}{
+		{
+			name:        "default sort uses date_desc with id tiebreaker",
+			queryParams: "",
+			wantOrderBy: "ORDER BY r.start_time DESC NULLS LAST, r.id DESC",
+		},
+		{
+			name:        "sort=date_asc",
+			queryParams: "sort=date_asc",
+			wantOrderBy: "ORDER BY r.start_time ASC NULLS FIRST, r.id DESC",
+		},
+		{
+			name:        "sort=duration_desc",
+			queryParams: "sort=duration_desc",
+			wantOrderBy: "ORDER BY t.duration_seconds DESC NULLS LAST, r.id DESC",
+		},
+		{
+			name:        "sort=distance_desc",
+			queryParams: "sort=distance_desc",
+			wantOrderBy: "ORDER BY t.distance_meters DESC NULLS LAST, r.id DESC",
+		},
+		{
+			name:        "trips table is joined for distance/duration filters",
+			queryParams: "min_distance_m=100",
+			wantOrderBy: "LEFT JOIN trips t",
+		},
+		{
+			name:        "events EXISTS subquery is used, not LEFT JOIN",
+			queryParams: "has_events=true",
+			wantOrderBy: "EXISTS (SELECT 1 FROM events",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &routeMockDB{
+				routeCount: 1,
+				routes:     baseRoutes,
+				segCount:   1,
+			}
+			queries := db.New(mock)
+			handler := NewRouteHandler(queries)
+
+			e := echo.New()
+			target := "/v1/route/abc123"
+			if tt.queryParams != "" {
+				target += "?" + tt.queryParams
+			}
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("dongle_id")
+			c.SetParamValues("abc123")
+			c.Set(middleware.ContextKeyDongleID, "abc123")
+
+			if err := handler.ListRoutes(c); err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+			}
+
+			if !strings.Contains(mock.lastListSQL, tt.wantOrderBy) {
+				t.Errorf("list SQL missing %q\nSQL was:\n%s", tt.wantOrderBy, mock.lastListSQL)
+			}
+		})
+	}
+}
+
+func TestListRoutesCountAndListFiltersMatch(t *testing.T) {
+	// With filters supplied, both the filtered count and the filtered list
+	// must be called with the same filter arg values, so the Total reported
+	// to the client is consistent with the returned page.
+	now := time.Now()
+
+	mock := &routeMockDB{
+		routeCount: 1,
+		routes: []db.Route{
+			{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+				StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+				EndTime:   pgtype.Timestamptz{Time: now.Add(10 * time.Minute), Valid: true},
+				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+				Preserved: true},
+		},
+		segCount: 1,
+	}
+
+	queries := db.New(mock)
+	handler := NewRouteHandler(queries)
+
+	e := echo.New()
+	target := "/v1/route/abc123?preserved=true&min_duration_s=30"
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id")
+	c.SetParamValues("abc123")
+	c.Set(middleware.ContextKeyDongleID, "abc123")
+
+	if err := handler.ListRoutes(c); err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+
+	// Filter args start at index 1 (dongle_id at 0). Both queries share the
+	// same first 9 positions: dongle_id, from, to, preserved, min_duration_s,
+	// max_duration_s, min_distance_m, max_distance_m, has_events.
+	if len(mock.lastCountArgs) < 9 || len(mock.lastListArgs) < 9 {
+		t.Fatalf("expected both count and list to be called with >= 9 args; got count=%d list=%d",
+			len(mock.lastCountArgs), len(mock.lastListArgs))
+	}
+	for i := 0; i < 9; i++ {
+		if fmt.Sprintf("%v", mock.lastCountArgs[i]) != fmt.Sprintf("%v", mock.lastListArgs[i]) {
+			t.Errorf("filter arg %d diverges: count=%v list=%v",
+				i, mock.lastCountArgs[i], mock.lastListArgs[i])
+		}
+	}
+
+	// The preserved filter must land as a valid pgtype.Bool with Bool=true.
+	preservedArg, ok := mock.lastCountArgs[3].(pgtype.Bool)
+	if !ok {
+		t.Fatalf("preserved arg has wrong type %T", mock.lastCountArgs[3])
+	}
+	if !preservedArg.Valid || !preservedArg.Bool {
+		t.Errorf("preserved arg = %+v, want {Bool:true Valid:true}", preservedArg)
+	}
+
+	// The min_duration_s filter must land as a valid pgtype.Int4 with Int32=30.
+	minDurArg, ok := mock.lastCountArgs[4].(pgtype.Int4)
+	if !ok {
+		t.Fatalf("min_duration_s arg has wrong type %T", mock.lastCountArgs[4])
+	}
+	if !minDurArg.Valid || minDurArg.Int32 != 30 {
+		t.Errorf("min_duration_s arg = %+v, want {Int32:30 Valid:true}", minDurArg)
 	}
 }
 

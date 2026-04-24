@@ -83,6 +83,156 @@ func (q *Queries) ListRoutesByDeviceWithCounts(ctx context.Context, arg ListRout
 	return items, nil
 }
 
+// RouteListSortKey selects the ORDER BY clause used by
+// ListRoutesByDeviceFiltered. Values are part of the public query contract
+// because the API handler forwards them from a query parameter; the
+// enumeration here is the trusted whitelist against which user input is
+// validated before this struct is constructed.
+type RouteListSortKey string
+
+const (
+	// RouteListSortDateDesc orders by start_time newest first. It is the
+	// default and matches the pre-filter behavior of the route list.
+	RouteListSortDateDesc RouteListSortKey = "date_desc"
+	// RouteListSortDateAsc orders by start_time oldest first.
+	RouteListSortDateAsc RouteListSortKey = "date_asc"
+	// RouteListSortDurationDesc orders by the aggregated trip duration,
+	// longest first. Routes without an aggregated trip row sort last.
+	RouteListSortDurationDesc RouteListSortKey = "duration_desc"
+	// RouteListSortDistanceDesc orders by the aggregated trip distance,
+	// longest first. Routes without an aggregated trip row sort last.
+	RouteListSortDistanceDesc RouteListSortKey = "distance_desc"
+)
+
+// orderByClause returns the SQL ORDER BY fragment for the given sort key,
+// always appending routes.id DESC as the deterministic tiebreaker so
+// pagination stays stable across pages (extends the IH-005 fix).
+func (k RouteListSortKey) orderByClause() string {
+	switch k {
+	case RouteListSortDateAsc:
+		return "ORDER BY r.start_time ASC NULLS FIRST, r.id DESC"
+	case RouteListSortDurationDesc:
+		return "ORDER BY t.duration_seconds DESC NULLS LAST, r.id DESC"
+	case RouteListSortDistanceDesc:
+		return "ORDER BY t.distance_meters DESC NULLS LAST, r.id DESC"
+	case RouteListSortDateDesc:
+		fallthrough
+	default:
+		return "ORDER BY r.start_time DESC NULLS LAST, r.id DESC"
+	}
+}
+
+// ListRoutesByDeviceFilteredParams is the argument bundle for
+// ListRoutesByDeviceFiltered. The filter nargs are reused verbatim by the
+// generated CountRoutesByDeviceFiltered query so the filter set is applied
+// identically to both the count and the page. Sort is a whitelisted
+// enumeration, not raw user input.
+type ListRoutesByDeviceFilteredParams struct {
+	DongleID     string
+	FromTime     pgtype.Timestamptz
+	ToTime       pgtype.Timestamptz
+	Preserved    pgtype.Bool
+	MinDurationS pgtype.Int4
+	MaxDurationS pgtype.Int4
+	MinDistanceM pgtype.Float8
+	MaxDistanceM pgtype.Float8
+	HasEvents    pgtype.Bool
+	Sort         RouteListSortKey
+	Limit        int32
+	Offset       int32
+}
+
+// listRoutesByDeviceFilteredTemplate is the SQL used for the filtered routes
+// list. The %s placeholder is replaced with a whitelisted ORDER BY clause via
+// RouteListSortKey.orderByClause; user-supplied input is never interpolated.
+//
+// The query mirrors CountRoutesByDeviceFiltered in sql/queries/routes.sql so
+// the filtered list and the filtered count always agree. Routes without an
+// aggregated trip row are included unless min/max_duration_s or
+// min/max_distance_m is set, in which case the NULL comparison excludes them.
+// has_events is implemented as an EXISTS subquery to keep the planner on
+// idx_events_route_id on large tables.
+//
+// The select list also surfaces note/starred/tags so the dashboard list
+// endpoint can show annotations without N+1 round-trips (mirrors
+// ListRoutesByDeviceWithCounts).
+const listRoutesByDeviceFilteredTemplate = `
+SELECT r.id, r.dongle_id, r.route_name, r.start_time, r.end_time, r.geometry, r.created_at, r.preserved,
+       r.note, r.starred,
+       COALESCE(tags.tags, ARRAY[]::text[]) AS tags,
+       (SELECT count(*) FROM segments s WHERE s.route_id = r.id) AS segment_count
+FROM routes r
+LEFT JOIN trips t ON t.route_id = r.id
+LEFT JOIN LATERAL (
+    SELECT ARRAY_AGG(rt.tag ORDER BY rt.tag) AS tags
+    FROM route_tags rt
+    WHERE rt.route_id = r.id
+) tags ON TRUE
+WHERE r.dongle_id = $1
+  AND ($2::timestamptz IS NULL OR r.start_time >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL OR r.start_time <  $3::timestamptz)
+  AND ($4::bool        IS NULL OR r.preserved = $4::bool)
+  AND ($5::int         IS NULL OR (t.duration_seconds IS NOT NULL AND t.duration_seconds >= $5::int))
+  AND ($6::int         IS NULL OR (t.duration_seconds IS NOT NULL AND t.duration_seconds <= $6::int))
+  AND ($7::double precision IS NULL OR (t.distance_meters IS NOT NULL AND t.distance_meters >= $7::double precision))
+  AND ($8::double precision IS NULL OR (t.distance_meters IS NOT NULL AND t.distance_meters <= $8::double precision))
+  AND ($9::bool        IS NULL
+       OR ($9::bool = TRUE  AND EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id))
+       OR ($9::bool = FALSE AND NOT EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id)))
+%s
+LIMIT $10 OFFSET $11
+`
+
+// ListRoutesByDeviceFiltered returns a paginated, filtered slice of routes
+// for a device, each annotated with its segment count, note, starred flag,
+// and tag list. The ORDER BY is chosen from a whitelist by Sort and always
+// has routes.id DESC as the tiebreaker for deterministic pagination.
+func (q *Queries) ListRoutesByDeviceFiltered(ctx context.Context, arg ListRoutesByDeviceFilteredParams) ([]RouteWithSegmentCount, error) {
+	sql := fmt.Sprintf(listRoutesByDeviceFilteredTemplate, arg.Sort.orderByClause())
+	rows, err := q.db.Query(ctx, sql,
+		arg.DongleID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.Preserved,
+		arg.MinDurationS,
+		arg.MaxDurationS,
+		arg.MinDistanceM,
+		arg.MaxDistanceM,
+		arg.HasEvents,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RouteWithSegmentCount
+	for rows.Next() {
+		var i RouteWithSegmentCount
+		if err := rows.Scan(
+			&i.ID,
+			&i.DongleID,
+			&i.RouteName,
+			&i.StartTime,
+			&i.EndTime,
+			&i.Geometry,
+			&i.CreatedAt,
+			&i.Preserved,
+			&i.Note,
+			&i.Starred,
+			&i.Tags,
+			&i.SegmentCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentRoutes = `
 SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
 FROM routes
