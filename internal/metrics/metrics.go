@@ -43,6 +43,10 @@ type Metrics struct {
 	wsConnectedDevices prometheus.Gauge
 
 	workerRunDuration *prometheus.HistogramVec
+
+	thumbnailGenerationsTotal  *prometheus.CounterVec
+	thumbnailGenerationSeconds prometheus.Histogram
+	thumbnailQueueDepth        prometheus.Gauge
 }
 
 // New creates a Metrics backed by a fresh registry. Use NewWithRegistry to
@@ -123,6 +127,27 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 			},
 			[]string{"worker"},
 		),
+
+		thumbnailGenerationsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "thumbnail_generations_total",
+				Help: "Total number of route thumbnail generation attempts, labeled by result (success|failure).",
+			},
+			[]string{"result"},
+		),
+		thumbnailGenerationSeconds: prometheus.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "thumbnail_generation_duration_seconds",
+				Help:    "Wall-clock duration of a single route thumbnail generation run.",
+				Buckets: defaultDurationBuckets,
+			},
+		),
+		thumbnailQueueDepth: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "thumbnail_queue_depth",
+				Help: "Current number of routes queued for thumbnail generation.",
+			},
+		),
 	}
 
 	reg.MustRegister(
@@ -134,6 +159,9 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 		m.rpcCallsTotal,
 		m.wsConnectedDevices,
 		m.workerRunDuration,
+		m.thumbnailGenerationsTotal,
+		m.thumbnailGenerationSeconds,
+		m.thumbnailQueueDepth,
 	)
 
 	return m
@@ -227,4 +255,23 @@ func (m *Metrics) ObserveWorkerRun(worker string, d time.Duration) {
 		return
 	}
 	m.workerRunDuration.WithLabelValues(worker).Observe(d.Seconds())
+}
+
+// ObserveThumbnailGeneration records the outcome and duration of a single
+// thumbnail generation attempt. result should be "success" or "failure".
+func (m *Metrics) ObserveThumbnailGeneration(result string, d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.thumbnailGenerationsTotal.WithLabelValues(result).Inc()
+	m.thumbnailGenerationSeconds.Observe(d.Seconds())
+}
+
+// SetThumbnailQueueDepth publishes the current depth of the thumbnail
+// generation queue.
+func (m *Metrics) SetThumbnailQueueDepth(n int) {
+	if m == nil {
+		return
+	}
+	m.thumbnailQueueDepth.Set(float64(n))
 }

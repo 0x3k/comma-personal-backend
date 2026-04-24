@@ -64,4 +64,19 @@ func startWorkers(ctx context.Context, d *deps) {
 	} else {
 		log.Printf("cleanup worker: disabled via CLEANUP_ENABLED=false")
 	}
+
+	// Thumbnail worker: extracts a single JPEG frame per route so the
+	// dashboard route list can show a preview. THUMBNAIL_ENABLED defaults
+	// to true; set to false to skip the worker entirely (useful when
+	// ffmpeg is not installed or a second replica already owns it).
+	if envBool("THUMBNAIL_ENABLED", true) {
+		thumb := worker.NewThumbnailerWithMetrics(d.queries, d.store, d.metrics)
+		if err := thumb.ProbeFFmpeg(ctx); err != nil {
+			log.Printf("thumbnail worker: ffmpeg probe failed (%v); worker will run but every job will fail until ffmpeg is installed", err)
+		}
+		thumb.Start(ctx)
+		log.Printf("thumbnail worker started")
+	} else {
+		log.Printf("thumbnail worker: disabled via THUMBNAIL_ENABLED=false")
+	}
 }
