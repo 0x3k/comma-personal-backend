@@ -21,6 +21,7 @@ import TripMap from "@/components/map/TripMap";
 import { LogViewer } from "@/components/logs/LogViewer";
 import { ShareButton } from "@/components/ShareButton";
 import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
+import { RouteAnnotations } from "@/components/routes/RouteAnnotations";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
   { key: "fcameraUploaded", label: "fcamera" },
@@ -275,6 +276,20 @@ export default function RouteDetailPage() {
               alt={`Preview of route ${route.routeName}`}
             />
           </div>
+
+          {/* Annotations: star toggle, tag chips, and collapsible note.
+              Mutations ride the session-only endpoints in
+              internal/api/route_annotations.go, so readers without a
+              session cookie (JWT-only, share-link) render in read-only
+              mode -- but the detail page itself is session-gated in
+              practice so that branch is mostly defensive. */}
+          <RouteAnnotations
+            dongleId={route.dongleId}
+            routeName={route.routeName}
+            starred={route.starred}
+            note={route.note}
+            tags={route.tags}
+          />
 
           {/* GPS track map */}
           <Card className="mb-6">
