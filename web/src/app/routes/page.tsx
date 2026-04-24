@@ -25,6 +25,7 @@ import {
   type FilterState,
 } from "@/components/routes/FilterBar";
 import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
+import { StarIcon } from "@/components/routes/RouteAnnotations";
 
 /**
  * Default dongle ID used when none is configured.
@@ -253,9 +254,17 @@ function RoutesPageInner() {
                   />
                   <CardHeader>
                     <div className="flex items-center justify-between gap-2">
-                      <h2 className="text-sm font-medium text-[var(--text-primary)] truncate">
-                        {route.routeName}
-                      </h2>
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        {route.starred && (
+                          <StarIcon
+                            filled
+                            className="h-4 w-4 shrink-0 text-warning-500"
+                          />
+                        )}
+                        <h2 className="text-sm font-medium text-[var(--text-primary)] truncate">
+                          {route.routeName}
+                        </h2>
+                      </div>
                       <Badge variant="info">
                         {route.segmentCount}{" "}
                         {route.segmentCount === 1 ? "seg" : "segs"}
@@ -285,6 +294,9 @@ function RoutesPageInner() {
                         </dd>
                       </div>
                     </dl>
+                    {route.tags.length > 0 && (
+                      <RouteCardTags tags={route.tags} />
+                    )}
                   </CardBody>
                 </Card>
               </Link>
@@ -306,6 +318,49 @@ function RoutesPageInner() {
         </>
       )}
     </PageWrapper>
+  );
+}
+
+/**
+ * Maximum number of tag chips rendered on a list card before we collapse
+ * the rest into a "+N" indicator. Three keeps the card height predictable
+ * without cutting too aggressively into common multi-tag use cases.
+ */
+const MAX_CARD_TAGS = 3;
+
+interface RouteCardTagsProps {
+  tags: string[];
+}
+
+/**
+ * RouteCardTags renders the tag strip on a route list card. Up to
+ * MAX_CARD_TAGS chips are shown verbatim; any overflow collapses into a
+ * single "+N" badge so the card height doesn't bloom on heavily-tagged
+ * routes. Empty tag arrays are filtered out by the caller -- this
+ * component assumes there's at least one tag.
+ */
+function RouteCardTags({ tags }: RouteCardTagsProps) {
+  const visible = tags.slice(0, MAX_CARD_TAGS);
+  const overflow = tags.length - visible.length;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1">
+      {visible.map((tag) => (
+        <span
+          key={tag}
+          className="inline-flex items-center rounded-full border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2 py-0.5 text-xs text-[var(--text-primary)]"
+        >
+          {tag}
+        </span>
+      ))}
+      {overflow > 0 && (
+        <span
+          className="inline-flex items-center rounded-full bg-[var(--bg-tertiary)] px-2 py-0.5 text-xs text-[var(--text-secondary)]"
+          aria-label={`${overflow} more tag${overflow === 1 ? "" : "s"}`}
+        >
+          +{overflow}
+        </span>
+      )}
+    </div>
   );
 }
 
