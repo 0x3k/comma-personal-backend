@@ -1,0 +1,22 @@
+{
+  "id": "route-annotations-api",
+  "name": "Route annotations: REST handlers (note, starred, tags)",
+  "description": "Expose the route-annotations-schema columns over HTTP so the web UI can read and write them. Reads are available over session-or-JWT (so share-link/download flows keep working), writes are session-only (device JWTs have no business editing user annotations). Matches the project's existing pattern: handler lives in internal/api/route.go (or a sibling file), auth is funneled through checkDongleAccess, errors use the {error, code} envelope.",
+  "acceptance_criteria": [
+    "PUT /v1/routes/:dongle_id/:route_name/note accepts {\"note\": string} (max 4000 chars), 400 on over-length, 204 on success; session auth only",
+    "PUT /v1/routes/:dongle_id/:route_name/starred accepts {\"starred\": bool}, 204 on success; session auth only",
+    "GET /v1/routes/:dongle_id/:route_name/tags returns {\"tags\": [string,...]}; session-or-JWT",
+    "PUT /v1/routes/:dongle_id/:route_name/tags accepts {\"tags\": [string,...]} and replaces the set atomically (uses ReplaceRouteTags). Tags are lowercased and trimmed on the server before insert; duplicates after normalization are silently deduped; returns 400 if any tag fails the 1-32 char constraint; session auth only",
+    "GET /v1/devices/:dongle_id/tags returns {\"tags\": [string,...]} listing distinct tags across all of a device's routes for the tag autocomplete in the UI; session-or-JWT",
+    "Existing GET /v1/route/:dongle_id and GET /v1/route/:dongle_id/:route_name responses now include note, starred, and tags fields on each route (via the updated ListRoutesByDeviceWithCounts query)",
+    "All five new endpoints funnel authorization through checkDongleAccess(c, dongleID) and reject mismatched dongles with 403",
+    "Handler tests in internal/api/ cover: set note (happy), note over 4000 chars returns 400, toggle starred, replace tags with duplicates (dedupe), replace tags with invalid entry (400), session-vs-JWT auth boundary, cross-device access returns 403",
+    "go test ./internal/api/... and go vet ./... pass; routes are registered in cmd/server/routes.go (not main.go)"
+  ],
+  "priority": 4,
+  "status": "complete",
+  "branch": "agent/route-annotations-api",
+  "base_branch": "main",
+  "blocked_by": ["route-annotations-schema"],
+  "notes": "Five endpoints landed: PUT note/starred/tags (session-only), GET tags and GET /v1/devices/:dongle_id/tags (session-or-JWT). All funnel through checkDongleAccess; writes ride v1RoutesSessionOnly alongside share-create and config-mutation. routeListItem/routeDetailResponse now surface note/starred/tags so GET /v1/route/:dongle_id and GET /v1/route/:dongle_id/:route_name include them. Tags normalized (lowercase + trim) and deduped server-side; 1-32 char validation enforced before db write. Handler tests cover happy paths, over-length note, dedupe, invalid tag lengths, cross-device 403, and session-only middleware boundary."
+}
