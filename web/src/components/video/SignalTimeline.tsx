@@ -218,6 +218,22 @@ export function SignalTimeline({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
+    // Canvas cannot consume CSS variables directly, so we resolve a couple
+    // of neutral inks from the current computed style. Picking them off the
+    // canvas element means we inherit whatever theme (light / dark) is
+    // active on <html> without caring which class is set.
+    const rootStyle =
+      typeof window !== "undefined" ? window.getComputedStyle(canvas) : null;
+    const inkColor = rootStyle?.getPropertyValue("color").trim() || "#ffffff";
+    const gridColor =
+      document.documentElement.classList.contains("dark")
+        ? "rgba(255,255,255,0.15)"
+        : "rgba(0,0,0,0.15)";
+    const trackBgColor =
+      document.documentElement.classList.contains("dark")
+        ? "rgba(255,255,255,0.04)"
+        : "rgba(0,0,0,0.04)";
+
     if (!signals || !series) return;
 
     // Track vertical layout: engaged band on top, then speed, then steering.
@@ -248,12 +264,12 @@ export function SignalTimeline({
     }
 
     // -- Track background (speed / steering) for visual separation.
-    ctx.fillStyle = "rgba(255,255,255,0.04)";
+    ctx.fillStyle = trackBgColor;
     ctx.fillRect(0, speedY, width, SPEED_TRACK_HEIGHT);
     ctx.fillRect(0, steeringY, width, STEERING_TRACK_HEIGHT);
 
     // -- Steering baseline (zero line) to make sign obvious.
-    ctx.strokeStyle = "rgba(255,255,255,0.15)";
+    ctx.strokeStyle = gridColor;
     ctx.lineWidth = 1;
     const steeringZeroY = steeringY + STEERING_TRACK_HEIGHT / 2;
     ctx.beginPath();
@@ -306,7 +322,7 @@ export function SignalTimeline({
             ? COLOR_ALERT
             : m.severity === "warning"
               ? COLOR_STEERING
-              : "rgba(255,255,255,0.5)";
+              : gridColor;
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, height);
@@ -320,7 +336,7 @@ export function SignalTimeline({
       Math.min(totalSec, currentTime + segmentOffsetSec),
     );
     const playheadX = xForSec(playheadSec);
-    ctx.strokeStyle = "#ffffff";
+    ctx.strokeStyle = inkColor;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(playheadX + 0.5, 0);

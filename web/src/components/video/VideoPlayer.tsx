@@ -185,6 +185,10 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     }, [initPlayer]);
 
     return (
+      // Dashcam footage is displayed on a black container in both light and
+      // dark mode because letterboxed video reads best against true black.
+      // hls.js renders the native browser <video> controls; we do not theme
+      // them -- they pick up the OS light/dark chrome automatically.
       <div
         className={[
           "relative w-full overflow-hidden rounded-lg bg-black",
