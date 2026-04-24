@@ -24,6 +24,48 @@ LIMIT $2 OFFSET $3;
 -- name: CountRoutesByDevice :one
 SELECT count(*) FROM routes WHERE dongle_id = $1;
 
+-- name: CountRoutesByDeviceFiltered :one
+-- Returns the number of routes for a device matching the same filter set as
+-- the dashboard routes list. Pass NULL for any filter arg to disable it.
+--
+-- Routes without an aggregated trip row are INCLUDED unless a duration or
+-- distance filter is set; with those filters they are excluded because there
+-- is no trip to compare against.
+--
+-- has_events:
+--   NULL  -> no filter
+--   TRUE  -> only routes with at least one row in events
+--   FALSE -> only routes with zero rows in events
+-- Uses an EXISTS subquery (not LEFT JOIN GROUP BY) so the planner can use
+-- the idx_events_route_id index.
+SELECT COUNT(*)::BIGINT
+FROM routes r
+LEFT JOIN trips t ON t.route_id = r.id
+WHERE r.dongle_id = sqlc.arg('dongle_id')
+  AND (sqlc.narg('from_time')::timestamptz IS NULL
+       OR r.start_time >= sqlc.narg('from_time')::timestamptz)
+  AND (sqlc.narg('to_time')::timestamptz IS NULL
+       OR r.start_time <  sqlc.narg('to_time')::timestamptz)
+  AND (sqlc.narg('preserved')::bool IS NULL
+       OR r.preserved = sqlc.narg('preserved')::bool)
+  AND (sqlc.narg('min_duration_s')::int IS NULL
+       OR (t.duration_seconds IS NOT NULL
+           AND t.duration_seconds >= sqlc.narg('min_duration_s')::int))
+  AND (sqlc.narg('max_duration_s')::int IS NULL
+       OR (t.duration_seconds IS NOT NULL
+           AND t.duration_seconds <= sqlc.narg('max_duration_s')::int))
+  AND (sqlc.narg('min_distance_m')::double precision IS NULL
+       OR (t.distance_meters IS NOT NULL
+           AND t.distance_meters >= sqlc.narg('min_distance_m')::double precision))
+  AND (sqlc.narg('max_distance_m')::double precision IS NULL
+       OR (t.distance_meters IS NOT NULL
+           AND t.distance_meters <= sqlc.narg('max_distance_m')::double precision))
+  AND (sqlc.narg('has_events')::bool IS NULL
+       OR (sqlc.narg('has_events')::bool = TRUE
+           AND EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id))
+       OR (sqlc.narg('has_events')::bool = FALSE
+           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id)));
+
 -- name: GetRouteByID :one
 SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
 FROM routes

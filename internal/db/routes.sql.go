@@ -22,6 +22,80 @@ func (q *Queries) CountRoutesByDevice(ctx context.Context, dongleID string) (int
 	return count, err
 }
 
+const countRoutesByDeviceFiltered = `-- name: CountRoutesByDeviceFiltered :one
+SELECT COUNT(*)::BIGINT
+FROM routes r
+LEFT JOIN trips t ON t.route_id = r.id
+WHERE r.dongle_id = $1
+  AND ($2::timestamptz IS NULL
+       OR r.start_time >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL
+       OR r.start_time <  $3::timestamptz)
+  AND ($4::bool IS NULL
+       OR r.preserved = $4::bool)
+  AND ($5::int IS NULL
+       OR (t.duration_seconds IS NOT NULL
+           AND t.duration_seconds >= $5::int))
+  AND ($6::int IS NULL
+       OR (t.duration_seconds IS NOT NULL
+           AND t.duration_seconds <= $6::int))
+  AND ($7::double precision IS NULL
+       OR (t.distance_meters IS NOT NULL
+           AND t.distance_meters >= $7::double precision))
+  AND ($8::double precision IS NULL
+       OR (t.distance_meters IS NOT NULL
+           AND t.distance_meters <= $8::double precision))
+  AND ($9::bool IS NULL
+       OR ($9::bool = TRUE
+           AND EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id))
+       OR ($9::bool = FALSE
+           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id)))
+`
+
+type CountRoutesByDeviceFilteredParams struct {
+	DongleID     string             `json:"dongleId"`
+	FromTime     pgtype.Timestamptz `json:"fromTime"`
+	ToTime       pgtype.Timestamptz `json:"toTime"`
+	Preserved    pgtype.Bool        `json:"preserved"`
+	MinDurationS pgtype.Int4        `json:"minDurationS"`
+	MaxDurationS pgtype.Int4        `json:"maxDurationS"`
+	MinDistanceM pgtype.Float8      `json:"minDistanceM"`
+	MaxDistanceM pgtype.Float8      `json:"maxDistanceM"`
+	HasEvents    pgtype.Bool        `json:"hasEvents"`
+}
+
+// Returns the number of routes for a device matching the same filter set as
+// the dashboard routes list. Pass NULL for any filter arg to disable it.
+//
+// Routes without an aggregated trip row are INCLUDED unless a duration or
+// distance filter is set; with those filters they are excluded because there
+// is no trip to compare against.
+//
+// has_events:
+//
+//	NULL  -> no filter
+//	TRUE  -> only routes with at least one row in events
+//	FALSE -> only routes with zero rows in events
+//
+// Uses an EXISTS subquery (not LEFT JOIN GROUP BY) so the planner can use
+// the idx_events_route_id index.
+func (q *Queries) CountRoutesByDeviceFiltered(ctx context.Context, arg CountRoutesByDeviceFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRoutesByDeviceFiltered,
+		arg.DongleID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.Preserved,
+		arg.MinDurationS,
+		arg.MaxDurationS,
+		arg.MinDistanceM,
+		arg.MaxDistanceM,
+		arg.HasEvents,
+	)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createRoute = `-- name: CreateRoute :one
 INSERT INTO routes (dongle_id, route_name, start_time, end_time)
 VALUES ($1, $2, $3, $4)
