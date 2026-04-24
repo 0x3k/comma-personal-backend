@@ -78,6 +78,7 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	// JWTs for consistency.
 	v1Routes := e.Group("/v1/routes", sessionOrJWT)
 	routeHandler.RegisterPreservedRoute(v1Routes)
+	routeHandler.RegisterAnnotationReadRoutes(v1Routes)
 	api.NewExportHandler(d.queries, d.store).RegisterRoutes(v1Routes)
 	api.NewSignalsHandler(d.queries, d.store).RegisterRoutes(v1Routes)
 	api.NewThumbnailHandler(d.store).RegisterRoutes(v1Routes)
@@ -91,6 +92,16 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	v1RoutesSessionOnly := e.Group("/v1/routes", sessionOnly)
 	shareHandler.RegisterCreateRoute(v1RoutesSessionOnly)
 	shareHandler.RegisterPublicRoutes(e)
+
+	// Route annotation writes (note, starred, tags) ride the session-only
+	// group because device JWTs have no business rewriting the operator's
+	// user annotations.
+	routeHandler.RegisterAnnotationMutationRoutes(v1RoutesSessionOnly)
+
+	// Device-level tag autocomplete lives under /v1/devices/:dongle_id/tags
+	// alongside the other device-scoped reads.
+	v1Devices := e.Group("/v1/devices", sessionOrJWT)
+	routeHandler.RegisterDeviceTagsRoute(v1Devices)
 
 	// Trip stats: per-device lifetime totals + recent trip list on /v1, and
 	// per-route aggregated trip detail on /v1/routes.
