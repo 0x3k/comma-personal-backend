@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
 	"comma-personal-backend/internal/db"
@@ -143,14 +144,67 @@ func (h *RouteHandler) GetRoute(c echo.Context) error {
 	})
 }
 
-// ListRoutes handles GET /v1/route/:dongle_id and returns a paginated list of
-// routes for the authenticated device. It accepts optional query parameters
-// "limit" and "offset" for pagination.
+// knownListRoutesParams is the set of query-string keys accepted by
+// ListRoutes. Any other key triggers a 400; we want typos (e.g. "sorted")
+// to fail loudly rather than silently be ignored.
+var knownListRoutesParams = map[string]struct{}{
+	"limit":          {},
+	"offset":         {},
+	"from":           {},
+	"to":             {},
+	"min_duration_s": {},
+	"max_duration_s": {},
+	"min_distance_m": {},
+	"max_distance_m": {},
+	"preserved":      {},
+	"has_events":     {},
+	"sort":           {},
+}
+
+// validSortKeys is the whitelist of route-list sort orders the handler
+// accepts. Values map 1:1 to db.RouteListSortKey constants.
+var validSortKeys = map[string]db.RouteListSortKey{
+	"date_desc":     db.RouteListSortDateDesc,
+	"date_asc":      db.RouteListSortDateAsc,
+	"duration_desc": db.RouteListSortDurationDesc,
+	"distance_desc": db.RouteListSortDistanceDesc,
+}
+
+// ListRoutes handles GET /v1/route/:dongle_id and returns a paginated list
+// of routes for the authenticated device. Filter and sort query parameters
+// are optional; an un-parameterized call returns the same shape as before
+// (date_desc, no filters, page 0).
+//
+// Supported query parameters:
+//   - from, to                    -- RFC3339 timestamps; r.start_time >= from, < to
+//   - min_duration_s, max_duration_s -- int seconds against trips.duration_seconds
+//   - min_distance_m, max_distance_m -- int meters against trips.distance_meters
+//   - preserved                   -- bool, filters by routes.preserved
+//   - has_events                  -- bool, filters by EXISTS/NOT EXISTS in events
+//   - sort                        -- one of date_desc, date_asc, duration_desc, distance_desc
+//   - limit, offset               -- pagination (unchanged from the pre-filter behavior)
+//
+// Any other query key is rejected with 400 so unknown or misspelled
+// parameters fail loudly. Routes without an aggregated trip row are
+// included in the result set unless a duration or distance filter is set,
+// in which case they are excluded (the trip columns are NULL and cannot
+// satisfy the range check).
 func (h *RouteHandler) ListRoutes(c echo.Context) error {
 	dongleID := c.Param("dongle_id")
 
 	if handled, err := checkDongleAccess(c, dongleID); handled {
 		return err
+	}
+
+	// Reject unknown query params early so typos don't silently degrade to
+	// the default behavior. The filter set here is an explicit contract.
+	for key := range c.QueryParams() {
+		if _, ok := knownListRoutesParams[key]; !ok {
+			return c.JSON(http.StatusBadRequest, errorResponse{
+				Error: fmt.Sprintf("unknown query parameter %q", key),
+				Code:  http.StatusBadRequest,
+			})
+		}
 	}
 
 	limit, err := parseIntParam(c.QueryParam("limit"), defaultLimit)
@@ -175,9 +229,90 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 		offset = 0
 	}
 
+	fromTime, err := parseTimestamptzParam(c.QueryParam("from"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "invalid from parameter (expected RFC3339 timestamp)",
+			Code:  http.StatusBadRequest,
+		})
+	}
+	toTime, err := parseTimestamptzParam(c.QueryParam("to"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "invalid to parameter (expected RFC3339 timestamp)",
+			Code:  http.StatusBadRequest,
+		})
+	}
+
+	minDurationS, err := parseInt4Param(c.QueryParam("min_duration_s"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "invalid min_duration_s parameter",
+			Code:  http.StatusBadRequest,
+		})
+	}
+	maxDurationS, err := parseInt4Param(c.QueryParam("max_duration_s"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "invalid max_duration_s parameter",
+			Code:  http.StatusBadRequest,
+		})
+	}
+	minDistanceM, err := parseFloat8Param(c.QueryParam("min_distance_m"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "invalid min_distance_m parameter",
+			Code:  http.StatusBadRequest,
+		})
+	}
+	maxDistanceM, err := parseFloat8Param(c.QueryParam("max_distance_m"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "invalid max_distance_m parameter",
+			Code:  http.StatusBadRequest,
+		})
+	}
+
+	preserved, err := parseBoolParam(c.QueryParam("preserved"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "invalid preserved parameter (expected true or false)",
+			Code:  http.StatusBadRequest,
+		})
+	}
+	hasEvents, err := parseBoolParam(c.QueryParam("has_events"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "invalid has_events parameter (expected true or false)",
+			Code:  http.StatusBadRequest,
+		})
+	}
+
+	sortKey := db.RouteListSortDateDesc
+	if raw := c.QueryParam("sort"); raw != "" {
+		v, ok := validSortKeys[raw]
+		if !ok {
+			return c.JSON(http.StatusBadRequest, errorResponse{
+				Error: "invalid sort parameter (expected date_desc, date_asc, duration_desc, or distance_desc)",
+				Code:  http.StatusBadRequest,
+			})
+		}
+		sortKey = v
+	}
+
 	ctx := c.Request().Context()
 
-	total, err := h.queries.CountRoutesByDevice(ctx, dongleID)
+	total, err := h.queries.CountRoutesByDeviceFiltered(ctx, db.CountRoutesByDeviceFilteredParams{
+		DongleID:     dongleID,
+		FromTime:     fromTime,
+		ToTime:       toTime,
+		Preserved:    preserved,
+		MinDurationS: minDurationS,
+		MaxDurationS: maxDurationS,
+		MinDistanceM: minDistanceM,
+		MaxDistanceM: maxDistanceM,
+		HasEvents:    hasEvents,
+	})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, errorResponse{
 			Error: "failed to count routes",
@@ -185,10 +320,19 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 		})
 	}
 
-	routes, err := h.queries.ListRoutesByDeviceWithCounts(ctx, db.ListRoutesByDevicePaginatedParams{
-		DongleID: dongleID,
-		Limit:    limit,
-		Offset:   offset,
+	routes, err := h.queries.ListRoutesByDeviceFiltered(ctx, db.ListRoutesByDeviceFilteredParams{
+		DongleID:     dongleID,
+		FromTime:     fromTime,
+		ToTime:       toTime,
+		Preserved:    preserved,
+		MinDurationS: minDurationS,
+		MaxDurationS: maxDurationS,
+		MinDistanceM: minDistanceM,
+		MaxDistanceM: maxDistanceM,
+		HasEvents:    hasEvents,
+		Sort:         sortKey,
+		Limit:        limit,
+		Offset:       offset,
 	})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, errorResponse{
@@ -306,4 +450,63 @@ func parseIntParam(s string, defaultVal int32) (int32, error) {
 		return 0, fmt.Errorf("failed to parse integer %q: %w", s, err)
 	}
 	return int32(v), nil
+}
+
+// parseTimestamptzParam parses an RFC3339 timestamp into a pgtype.Timestamptz.
+// An empty string yields an invalid (NULL) value so the db layer can skip the
+// filter entirely. strict: only RFC3339 is accepted; other common date-only
+// formats are rejected to keep the wire contract explicit.
+func parseTimestamptzParam(s string) (pgtype.Timestamptz, error) {
+	if s == "" {
+		return pgtype.Timestamptz{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return pgtype.Timestamptz{}, fmt.Errorf("failed to parse RFC3339 timestamp %q: %w", s, err)
+	}
+	return pgtype.Timestamptz{Time: t, Valid: true}, nil
+}
+
+// parseInt4Param parses a string as a pgtype.Int4. An empty string yields an
+// invalid (NULL) value so the db layer can skip the filter entirely.
+func parseInt4Param(s string) (pgtype.Int4, error) {
+	if s == "" {
+		return pgtype.Int4{}, nil
+	}
+	v, err := strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		return pgtype.Int4{}, fmt.Errorf("failed to parse int32 %q: %w", s, err)
+	}
+	return pgtype.Int4{Int32: int32(v), Valid: true}, nil
+}
+
+// parseFloat8Param parses a string as a pgtype.Float8. An empty string yields
+// an invalid (NULL) value so the db layer can skip the filter entirely. The
+// handler exposes meters as an integer on the wire but stores them as
+// DOUBLE PRECISION, so we accept both integer and float forms here.
+func parseFloat8Param(s string) (pgtype.Float8, error) {
+	if s == "" {
+		return pgtype.Float8{}, nil
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return pgtype.Float8{}, fmt.Errorf("failed to parse float64 %q: %w", s, err)
+	}
+	return pgtype.Float8{Float64: v, Valid: true}, nil
+}
+
+// parseBoolParam parses a string as a pgtype.Bool. An empty string yields an
+// invalid (NULL) value so the db layer can skip the filter entirely. We
+// accept only the strict Go strconv forms ("true"/"false"/"1"/"0") rather
+// than the broader echo-style "yes"/"no" spellings to keep the contract
+// obvious.
+func parseBoolParam(s string) (pgtype.Bool, error) {
+	if s == "" {
+		return pgtype.Bool{}, nil
+	}
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return pgtype.Bool{}, fmt.Errorf("failed to parse boolean %q: %w", s, err)
+	}
+	return pgtype.Bool{Bool: v, Valid: true}, nil
 }
