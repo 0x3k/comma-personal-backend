@@ -30,6 +30,15 @@ export type TriState = "" | "true" | "false";
  * URLSearchParams without being coerced to zero. Durations live in minutes
  * and distances in kilometres because that is what users type; the parent
  * page converts to the seconds/metres the API expects.
+ *
+ * starredOnly and tags layer on top of the existing filter set:
+ *   - starredOnly is a two-state checkbox ("off" means no filter, "on"
+ *     means ?starred=true). We intentionally do NOT surface ?starred=false
+ *     here because "only my un-starred routes" is a rare view; the API
+ *     still accepts it for callers that build querystrings directly.
+ *   - tags is the AND-filter: every tag in the array must be attached to
+ *     a route for it to appear. Values are stored lowercased to match the
+ *     server-side normalization.
  */
 export interface FilterState {
   from: string;
@@ -40,6 +49,8 @@ export interface FilterState {
   maxDistanceKm: string;
   preserved: TriState;
   hasEvents: TriState;
+  starredOnly: boolean;
+  tags: string[];
   sort: RouteSortKey;
 }
 
@@ -54,6 +65,8 @@ export const EMPTY_FILTERS: FilterState = {
   maxDistanceKm: "",
   preserved: "",
   hasEvents: "",
+  starredOnly: false,
+  tags: [],
   sort: DEFAULT_SORT,
 };
 
@@ -72,6 +85,8 @@ export function isDefaultFilters(f: FilterState): boolean {
     f.maxDistanceKm === "" &&
     f.preserved === "" &&
     f.hasEvents === "" &&
+    f.starredOnly === false &&
+    f.tags.length === 0 &&
     f.sort === DEFAULT_SORT
   );
 }
@@ -121,6 +136,18 @@ export function filtersFromSearchParams(params: URLSearchParams): FilterState {
     ? (sortRaw as RouteSortKey)
     : DEFAULT_SORT;
 
+  // The Starred-only checkbox is on when and only when ?starred=true is
+  // present. ?starred=false deep-links still work (the API honours them),
+  // but the UI renders them as an un-checked checkbox because the
+  // checkbox is a two-state control; the user can edit the URL by hand if
+  // they really want the inverted view.
+  const starredOnly = params.get("starred") === "true";
+
+  // Tags come in as repeated ?tag=a&tag=b entries. Lowercase + trim mirrors
+  // the server-side normalization so a pasted URL reconstructs exactly the
+  // filter the backend will apply, and duplicate/empty entries are dropped.
+  const tags = dedupeTags(params.getAll("tag"));
+
   return {
     from: isDateOnly(fromParam) ? fromParam : isoDateOnly(fromParam),
     to: isDateOnly(toParam) ? toParam : isoDateOnly(toParam),
@@ -130,8 +157,31 @@ export function filtersFromSearchParams(params: URLSearchParams): FilterState {
     maxDistanceKm: maxM === "" ? "" : roundKm(Number(maxM) / 1000),
     preserved: parseTriState(params.get("preserved")),
     hasEvents: parseTriState(params.get("has_events")),
+    starredOnly,
+    tags,
     sort,
   };
+}
+
+/**
+ * normalizeTag lowercases + trims a tag value so the UI always stores the
+ * canonical form. Mirrors the server-side normalization applied by the
+ * annotations API and by the list-filter handler.
+ */
+export function normalizeTag(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+function dedupeTags(raw: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of raw) {
+    const t = normalizeTag(r);
+    if (t === "" || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
 }
 
 function roundKm(km: number): string {
@@ -202,6 +252,12 @@ export function filtersToSearchParams(f: FilterState): URLSearchParams {
   }
   if (f.preserved !== "") sp.set("preserved", f.preserved);
   if (f.hasEvents !== "") sp.set("has_events", f.hasEvents);
+  if (f.starredOnly) sp.set("starred", "true");
+  // Tags are emitted as repeated ?tag=a&tag=b entries so the backend's
+  // c.QueryParams()["tag"] slice picks them up as multiple values.
+  for (const t of f.tags) {
+    sp.append("tag", t);
+  }
   if (f.sort !== DEFAULT_SORT) sp.set("sort", f.sort);
   return sp;
 }
@@ -225,9 +281,21 @@ interface FilterBarProps {
   filters: FilterState;
   onChange: (next: FilterState) => void;
   onClear: () => void;
+  /**
+   * Available tags for the tag picker, populated by the parent from
+   * GET /v1/devices/:dongle_id/tags. Matching is case-insensitive; the
+   * parent is expected to pre-normalize so the picker and the filter
+   * value agree on casing.
+   */
+  availableTags?: string[];
 }
 
-export function FilterBar({ filters, onChange, onClear }: FilterBarProps) {
+export function FilterBar({
+  filters,
+  onChange,
+  onClear,
+  availableTags = [],
+}: FilterBarProps) {
   const patch = (p: Partial<FilterState>) => onChange({ ...filters, ...p });
 
   const onText =
@@ -237,6 +305,20 @@ export function FilterBar({ filters, onChange, onClear }: FilterBarProps) {
   const onSelect =
     (key: keyof FilterState) => (e: ChangeEvent<HTMLSelectElement>) =>
       patch({ [key]: e.target.value } as Partial<FilterState>);
+
+  const onStarredToggle = (e: ChangeEvent<HTMLInputElement>) =>
+    patch({ starredOnly: e.target.checked });
+
+  const addTag = (raw: string) => {
+    const tag = normalizeTag(raw);
+    if (!tag) return;
+    if (filters.tags.includes(tag)) return;
+    patch({ tags: [...filters.tags, tag] });
+  };
+
+  const removeTag = (tag: string) => {
+    patch({ tags: filters.tags.filter((t) => t !== tag) });
+  };
 
   const hasAnyFilter = !isDefaultFilters(filters);
 
@@ -390,6 +472,18 @@ export function FilterBar({ filters, onChange, onClear }: FilterBarProps) {
               </select>
             </div>
             <div className="flex items-center gap-2">
+              <input
+                id="filter-starred-only"
+                type="checkbox"
+                checked={filters.starredOnly}
+                onChange={onStarredToggle}
+                className="h-3.5 w-3.5 accent-[var(--accent)]"
+              />
+              <label htmlFor="filter-starred-only" className={LABEL_CLASS}>
+                Starred only
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
               <label htmlFor="filter-sort" className={LABEL_CLASS}>
                 Sort
               </label>
@@ -406,8 +500,91 @@ export function FilterBar({ filters, onChange, onClear }: FilterBarProps) {
               </select>
             </div>
           </div>
+
+          {/* Tag multi-select */}
+          <TagPicker
+            selected={filters.tags}
+            available={availableTags}
+            onAdd={addTag}
+            onRemove={removeTag}
+          />
         </div>
       </CardBody>
     </Card>
+  );
+}
+
+interface TagPickerProps {
+  selected: string[];
+  available: string[];
+  onAdd: (tag: string) => void;
+  onRemove: (tag: string) => void;
+}
+
+/**
+ * TagPicker is the chip-picker used by FilterBar. Selected tags render as
+ * removable chips; the select drop-down offers the remaining (not-yet-
+ * selected) tags from the device's tag set. We intentionally keep this as
+ * a plain <select> rather than a popup combobox: it is keyboard-friendly
+ * by default, works without client-side state for accessibility, and
+ * matches the styling of the other filter controls.
+ *
+ * When no tags are available the picker still renders (so the Clear
+ * filters button can unstick a state where tags were set from the URL
+ * but the autocomplete list has not arrived yet).
+ */
+function TagPicker({ selected, available, onAdd, onRemove }: TagPickerProps) {
+  const selectedSet = new Set(selected.map(normalizeTag));
+  const options = available
+    .map(normalizeTag)
+    .filter((t) => t !== "" && !selectedSet.has(t));
+
+  const onSelectTag = (e: ChangeEvent<HTMLSelectElement>) => {
+    const v = e.target.value;
+    if (!v) return;
+    onAdd(v);
+    // Reset the drop-down back to its placeholder so the user can pick
+    // another tag without first selecting the placeholder again.
+    e.target.value = "";
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className={LABEL_CLASS}>Tags</span>
+
+      {selected.map((tag) => (
+        <span
+          key={tag}
+          className="inline-flex items-center gap-1 rounded-full border border-[var(--border-secondary)] bg-[var(--bg-secondary)] px-2 py-0.5 text-xs text-[var(--text-primary)]"
+        >
+          <span>{tag}</span>
+          <button
+            type="button"
+            aria-label={`Remove tag ${tag}`}
+            onClick={() => onRemove(tag)}
+            className="leading-none text-[var(--text-secondary)] hover:text-[var(--text-primary)] focus:outline-none"
+          >
+            &times;
+          </button>
+        </span>
+      ))}
+
+      <select
+        aria-label="Add tag to filter"
+        value=""
+        onChange={onSelectTag}
+        disabled={options.length === 0}
+        className={INPUT_CLASS}
+      >
+        <option value="" disabled>
+          {options.length === 0 ? "No tags available" : "Add tag"}
+        </option>
+        {options.map((t) => (
+          <option key={t} value={t}>
+            {t}
+          </option>
+        ))}
+      </select>
+    </div>
   );
 }

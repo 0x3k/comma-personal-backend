@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -178,6 +179,8 @@ var knownListRoutesParams = map[string]struct{}{
 	"max_distance_m": {},
 	"preserved":      {},
 	"has_events":     {},
+	"starred":        {},
+	"tag":            {},
 	"sort":           {},
 }
 
@@ -201,6 +204,12 @@ var validSortKeys = map[string]db.RouteListSortKey{
 //   - min_distance_m, max_distance_m -- int meters against trips.distance_meters
 //   - preserved                   -- bool, filters by routes.preserved
 //   - has_events                  -- bool, filters by EXISTS/NOT EXISTS in events
+//   - starred                     -- bool, filters by routes.starred
+//   - tag                         -- repeatable; ?tag=a&tag=b means the route
+//     must have BOTH tags (AND semantics, not
+//     OR). Values are lowercased/trimmed on the
+//     server before matching so the wire casing
+//     does not have to align with stored casing.
 //   - sort                        -- one of date_desc, date_asc, duration_desc, distance_desc
 //   - limit, offset               -- pagination (unchanged from the pre-filter behavior)
 //
@@ -209,6 +218,10 @@ var validSortKeys = map[string]db.RouteListSortKey{
 // included in the result set unless a duration or distance filter is set,
 // in which case they are excluded (the trip columns are NULL and cannot
 // satisfy the range check).
+//
+// An unknown tag (one not attached to any of this device's routes)
+// collapses the result set to empty without raising an error -- the EXISTS
+// subquery simply matches nothing.
 func (h *RouteHandler) ListRoutes(c echo.Context) error {
 	dongleID := c.Param("dongle_id")
 
@@ -307,6 +320,21 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 			Code:  http.StatusBadRequest,
 		})
 	}
+	starred, err := parseBoolParam(c.QueryParam("starred"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "invalid starred parameter (expected true or false)",
+			Code:  http.StatusBadRequest,
+		})
+	}
+
+	// Repeatable ?tag=a&tag=b means "has ALL of these tags" (AND). Values
+	// are normalized the same way SetRouteTags normalizes writes so users
+	// do not have to match the stored casing verbatim. Duplicate tags in
+	// the querystring are deduped here so the SQL never grows pointless
+	// extra EXISTS clauses for the same tag.
+	rawTags := c.QueryParams()["tag"]
+	tags := normalizeTagFilter(rawTags)
 
 	sortKey := db.RouteListSortDateDesc
 	if raw := c.QueryParam("sort"); raw != "" {
@@ -322,7 +350,7 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 
 	ctx := c.Request().Context()
 
-	total, err := h.queries.CountRoutesByDeviceFiltered(ctx, db.CountRoutesByDeviceFilteredParams{
+	total, err := h.queries.CountRoutesByDeviceFilteredCustom(ctx, db.CountRoutesByDeviceFilteredCustomParams{
 		DongleID:     dongleID,
 		FromTime:     fromTime,
 		ToTime:       toTime,
@@ -332,6 +360,8 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 		MinDistanceM: minDistanceM,
 		MaxDistanceM: maxDistanceM,
 		HasEvents:    hasEvents,
+		Starred:      starred,
+		Tags:         tags,
 	})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, errorResponse{
@@ -350,6 +380,8 @@ func (h *RouteHandler) ListRoutes(c echo.Context) error {
 		MinDistanceM: minDistanceM,
 		MaxDistanceM: maxDistanceM,
 		HasEvents:    hasEvents,
+		Starred:      starred,
+		Tags:         tags,
 		Sort:         sortKey,
 		Limit:        limit,
 		Offset:       offset,
@@ -539,4 +571,34 @@ func parseBoolParam(s string) (pgtype.Bool, error) {
 		return pgtype.Bool{}, fmt.Errorf("failed to parse boolean %q: %w", s, err)
 	}
 	return pgtype.Bool{Bool: v, Valid: true}, nil
+}
+
+// normalizeTagFilter lowercases, trims, and deduplicates tag values from the
+// repeated ?tag=a&tag=b query parameter. Empty entries (after trimming) are
+// dropped so "?tag=&tag=road-trip" collapses to just "road-trip" rather
+// than raising a validation error -- the list-list filter is forgiving by
+// design (the mutation endpoint is where strict validation lives). The
+// resulting order is stable: each tag appears in the position of its first
+// occurrence.
+func normalizeTagFilter(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		tag := strings.ToLower(strings.TrimSpace(r))
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		out = append(out, tag)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

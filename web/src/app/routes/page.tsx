@@ -5,7 +5,11 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useDebouncedValue } from "@/lib/useDebouncedValue";
-import type { RouteListItem, RouteListResponse } from "@/lib/types";
+import type {
+  DeviceTagsResponse,
+  RouteListItem,
+  RouteListResponse,
+} from "@/lib/types";
 import { PageWrapper } from "@/components/layout/PageWrapper";
 import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -75,6 +79,11 @@ function RoutesPageInner() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Tag autocomplete is populated once per mount from the device-level
+  // tags endpoint. Failure is non-fatal (the filter still works if the
+  // user already had a tag selected from the URL); we just render an
+  // empty picker.
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
 
   // The debounced copy of filters drives both the URL rewrite and the
   // fetch. Typing in a text input or dragging the date picker therefore
@@ -136,6 +145,28 @@ function RoutesPageInner() {
     void fetchRoutes(0, false);
   }, [fetchRoutes]);
 
+  // Fetch the device's known tag set for the Tags picker autocomplete.
+  // Intentionally decoupled from the routes query so typing in the tag
+  // picker does not re-fetch the autocomplete; we load once on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiFetch<DeviceTagsResponse>(
+          `/v1/devices/${DONGLE_ID}/tags`,
+        );
+        if (!cancelled) setAvailableTags(data.tags ?? []);
+      } catch {
+        // Tag autocomplete is strictly nice-to-have. Silently swallow
+        // the failure; the URL-seeded tag filters still work.
+        if (!cancelled) setAvailableTags([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleClear = useCallback(() => {
     setFilters(EMPTY_FILTERS);
   }, []);
@@ -164,6 +195,7 @@ function RoutesPageInner() {
         filters={filters}
         onChange={setFilters}
         onClear={handleClear}
+        availableTags={availableTags}
       />
 
       {loading && (
