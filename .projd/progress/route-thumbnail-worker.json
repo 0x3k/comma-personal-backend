@@ -1,0 +1,22 @@
+{
+  "id": "route-thumbnail-worker",
+  "name": "Route thumbnail worker + serving endpoint",
+  "description": "Generate a small JPEG thumbnail for each route so the routes list can show a visual preview instead of just metadata. The worker runs in the background, picks up segment 0 of a route shortly after ingestion, uses ffmpeg to extract a single frame from qcamera.ts, scales it to 320px wide, and writes it to disk next to the segment. A new HTTP endpoint streams that file to the UI. No frontend changes here; route-thumbnail-ui is the consumer.",
+  "acceptance_criteria": [
+    "New worker internal/worker/thumbnail.go follows the shape of the existing transcoder worker: goroutine pool, per-segment mutex, bounded queue, lifecycle via Start/Stop; started from cmd/server/workers.go (not main.go)",
+    "The worker scans for routes whose segment 0 has qcamera.ts but no thumbnail.jpg (by tracking either a routes.thumbnail_generated_at column or an on-disk marker; whichever fits best, pick one and document the choice in the worker's package comment)",
+    "For each such route, the worker invokes ffmpeg -ss 0 -i qcamera.ts -frames:v 1 -vf scale=320:-2 -q:v 4 thumbnail.jpg (args can be tuned); failures are logged and marked to avoid infinite retry (store a failed_at timestamp or similar so the worker skips for N minutes before retrying)",
+    "GET /v1/routes/:dongle_id/:route_name/thumbnail serves the generated JPEG with Cache-Control: public, max-age=86400 and an ETag; returns 404 if the thumbnail does not exist yet (UI falls back to a placeholder); session-or-JWT",
+    "If segment 0 is absent, the worker falls back to the lowest-numbered segment that has qcamera.ts",
+    "Prometheus metrics added: thumbnail_generations_total (counter, labels: result=success|failure), thumbnail_generation_duration_seconds (histogram), thumbnail_queue_depth (gauge)",
+    "Env var THUMBNAIL_ENABLED (default true) gates the worker; when false the worker is not started (analogous to CLEANUP_ENABLED)",
+    "Unit tests for the worker cover: happy path (mock ffmpeg returning a small JPEG), missing qcamera.ts, ffmpeg failure produces failed_at + is skipped on next tick, lowest-segment fallback",
+    "go test ./internal/worker/... and go vet ./... pass; ffmpeg presence is probed at startup and a single warning is logged if absent (worker continues to run but every job will fail gracefully)"
+  ],
+  "priority": 6,
+  "status": "complete",
+  "branch": "agent/route-thumbnail-worker",
+  "base_branch": "main",
+  "blocked_by": [],
+  "notes": "Chose on-disk markers (thumbnail.jpg + thumbnail.failed) over a DB column so no new migration or sqlc regen is needed; documented in the worker's package comment. All acceptance criteria met: worker follows Transcoder shape (Start/Stop, per-route inflight map, bounded queue), scans via a new ListRecentRoutes query, selects segment 0 or falls back to lowest segment with qcamera.ts, ffmpeg invocation with -ss 0 -frames:v 1 -vf scale=320:-2 -q:v 4, RFC3339 failure marker with 30m cooldown, Prometheus metrics registered (thumbnail_generations_total, thumbnail_generation_duration_seconds, thumbnail_queue_depth), THUMBNAIL_ENABLED env var gate, ffmpeg presence probed at startup with a single warning on failure. HTTP endpoint returns 404 when missing, serves JPEG with Cache-Control and ETag, supports If-None-Match (304). Tests pass: go test ./... and go vet ./... clean."
+}
