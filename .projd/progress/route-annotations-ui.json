@@ -1,0 +1,20 @@
+{
+  "id": "route-annotations-ui",
+  "name": "Route annotations: UI for note, starred, tags",
+  "description": "Expose route annotations in the web UI. On the route detail page, the user can edit a free-form note, toggle a star, and add/remove tags with autocomplete against the device's existing tag catalog. On the routes list, each card shows the starred state and any tags, so users can orient themselves at a glance. Existing visual language (Badge, Card, the amber/gray palette) is reused.",
+  "acceptance_criteria": [
+    "Route detail page (web/src/app/routes/[dongleId]/[routeName]/page.tsx or equivalent) renders: a star toggle button (filled = starred), a tags editor (chip list with an input for adding tags and an x on each chip to remove), and a collapsible notes textarea with an explicit Save button; all three are read-only when the user is not session-authenticated (e.g. JWT-only or share-link view)",
+    "Tag input autocompletes from GET /v1/devices/:dongle_id/tags; suggestions narrow as the user types; pressing Enter or comma commits the current token; duplicate-after-normalization tokens are silently collapsed",
+    "Save-note and toggle-star calls use the new PUT endpoints with optimistic UI that rolls back on error; a toast or inline ErrorMessage surfaces failures",
+    "Routes list page renders a small star icon on cards where starred=true and a horizontal list of up to 3 tag chips (with a +N indicator when there are more); empty annotations are invisible (no placeholder clutter)",
+    "New types in web/src/lib/types.ts: RouteListItem gains note: string, starred: boolean, tags: string[]",
+    "pnpm --dir web lint, pnpm --dir web type-check, and pnpm --dir web test pass",
+    "Manually verified in the dev server: star persists across reload, tag add/remove persists, note saves and reappears, list view reflects changes immediately"
+  ],
+  "priority": 5,
+  "status": "in_progress",
+  "branch": "agent/route-annotations-ui",
+  "base_branch": "main",
+  "blocked_by": ["route-annotations-api"],
+  "notes": ""
+}
