@@ -27,6 +27,14 @@ export interface TripMapProps {
  *
  * When no coordinates are provided, a placeholder message is shown
  * instead of the map.
+ *
+ * Dark-mode note: the OpenStreetMap tile server returns a fixed bright
+ * basemap. We intentionally leave it untouched in dark mode -- swapping to
+ * a third-party dark tile provider would introduce an extra dependency and
+ * potential cost. The polyline and surrounding chrome already follow the
+ * app's theme via CSS variables, and the tiles sit inside a themed card so
+ * the map reads as a bright inset rather than a FOIT. Revisit if a future
+ * tile provider becomes part of the stack.
  */
 export default function TripMap({ coordinates, className }: TripMapProps) {
   if (!coordinates || coordinates.length === 0) {
