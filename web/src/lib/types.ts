@@ -19,7 +19,21 @@ export interface RouteListItem {
   routeName: string;
   startTime: string | null;
   endTime: string | null;
+  /** Free-form user note, empty string when unset. */
+  note: string;
+  /** Starred / favourite flag; toggled via the annotations API. */
+  starred: boolean;
+  /** User-assigned tags, alphabetically sorted by the backend. */
+  tags: string[];
+  /** Preserved routes are exempt from retention-based cleanup. */
+  preserved: boolean;
   segmentCount: number;
+}
+
+/** Response from GET /v1/devices/:dongle_id/tags -- list of distinct tags
+ *  across a device's routes, used to populate the tag autocomplete. */
+export interface DeviceTagsResponse {
+  tags: string[];
 }
 
 /** Paginated response from GET /v1/route/:dongle_id */
