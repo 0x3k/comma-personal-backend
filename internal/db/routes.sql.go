@@ -50,6 +50,8 @@ WHERE r.dongle_id = $1
            AND EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id))
        OR ($9::bool = FALSE
            AND NOT EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id)))
+  AND ($10::bool IS NULL
+       OR r.starred = $10::bool)
 `
 
 type CountRoutesByDeviceFilteredParams struct {
@@ -62,6 +64,7 @@ type CountRoutesByDeviceFilteredParams struct {
 	MinDistanceM pgtype.Float8      `json:"minDistanceM"`
 	MaxDistanceM pgtype.Float8      `json:"maxDistanceM"`
 	HasEvents    pgtype.Bool        `json:"hasEvents"`
+	Starred      pgtype.Bool        `json:"starred"`
 }
 
 // Returns the number of routes for a device matching the same filter set as
@@ -79,6 +82,17 @@ type CountRoutesByDeviceFilteredParams struct {
 //
 // Uses an EXISTS subquery (not LEFT JOIN GROUP BY) so the planner can use
 // the idx_events_route_id index.
+//
+// starred:
+//
+//	NULL  -> no filter
+//	TRUE  -> only routes.starred = true
+//	FALSE -> only routes.starred = false
+//
+// Tag filtering (per-tag AND) is NOT expressed here: it requires a variable
+// number of EXISTS subqueries driven by user input and is applied in the
+// hand-written wrapper in internal/db/routes_custom.go, appended to this
+// WHERE clause via %s placeholders.
 func (q *Queries) CountRoutesByDeviceFiltered(ctx context.Context, arg CountRoutesByDeviceFilteredParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countRoutesByDeviceFiltered,
 		arg.DongleID,
@@ -90,6 +104,7 @@ func (q *Queries) CountRoutesByDeviceFiltered(ctx context.Context, arg CountRout
 		arg.MinDistanceM,
 		arg.MaxDistanceM,
 		arg.HasEvents,
+		arg.Starred,
 	)
 	var column_1 int64
 	err := row.Scan(&column_1)

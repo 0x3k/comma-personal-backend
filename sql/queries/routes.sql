@@ -38,6 +38,16 @@ SELECT count(*) FROM routes WHERE dongle_id = $1;
 --   FALSE -> only routes with zero rows in events
 -- Uses an EXISTS subquery (not LEFT JOIN GROUP BY) so the planner can use
 -- the idx_events_route_id index.
+--
+-- starred:
+--   NULL  -> no filter
+--   TRUE  -> only routes.starred = true
+--   FALSE -> only routes.starred = false
+--
+-- Tag filtering (per-tag AND) is NOT expressed here: it requires a variable
+-- number of EXISTS subqueries driven by user input and is applied in the
+-- hand-written wrapper in internal/db/routes_custom.go, appended to this
+-- WHERE clause via %s placeholders.
 SELECT COUNT(*)::BIGINT
 FROM routes r
 LEFT JOIN trips t ON t.route_id = r.id
@@ -64,7 +74,9 @@ WHERE r.dongle_id = sqlc.arg('dongle_id')
        OR (sqlc.narg('has_events')::bool = TRUE
            AND EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id))
        OR (sqlc.narg('has_events')::bool = FALSE
-           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id)));
+           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id)))
+  AND (sqlc.narg('starred')::bool IS NULL
+       OR r.starred = sqlc.narg('starred')::bool);
 
 -- name: GetRouteByID :one
 SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred

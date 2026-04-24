@@ -1,0 +1,19 @@
+{
+  "id": "route-list-annotations-filter",
+  "name": "Routes list: filter by starred and tag (API + UI)",
+  "description": "Layer annotation-aware filtering on top of the route-list-filters feature. Users should be able to jump to \"only my starred routes\" or \"only routes tagged road-trip\" from the same filter bar they already use for date/duration/etc. This is a small delta on both ends (a couple of query params, a star checkbox, and a tag selector) so it is bundled into a single feature that touches backend and frontend.",
+  "acceptance_criteria": [
+    "GET /v1/route/:dongle_id accepts starred=true|false and tag=<name> (repeatable: ?tag=a&tag=b means has all of these tags, documented in the handler); tag values are normalized (lowercased+trimmed) before matching.",
+    "The underlying sqlc query is extended so: starred=true filters to routes.starred=true, starred=false is equivalent to routes.starred=false, and each tag= adds an EXISTS subquery against route_tags (so multi-tag is an AND, not an OR).",
+    "Handler tests cover: starred=true, starred=false, single tag, multi-tag AND, unknown tag returns empty set (no error), combined with existing filters (e.g. starred=true&from=...).",
+    "The filter bar in web/src/app/routes/page.tsx gains a Starred-only checkbox and a Tags multi-select (chip picker populated from GET /v1/devices/:dongle_id/tags); selecting tags narrows the list, starred toggles route.starred.",
+    "URL querystring sync includes the new params; Clear filters wipes them along with the rest.",
+    "go test ./internal/api/..., go vet ./..., pnpm --dir web lint, pnpm --dir web type-check, and pnpm --dir web test pass."
+  ],
+  "priority": 8,
+  "status": "in_progress",
+  "branch": "agent/route-list-annotations-filter",
+  "base_branch": "main",
+  "blocked_by": ["route-list-filters-api", "route-list-filters-ui", "route-annotations-api"],
+  "notes": ""
+}

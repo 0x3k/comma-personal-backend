@@ -127,6 +127,13 @@ func (k RouteListSortKey) orderByClause() string {
 // generated CountRoutesByDeviceFiltered query so the filter set is applied
 // identically to both the count and the page. Sort is a whitelisted
 // enumeration, not raw user input.
+//
+// Starred narrows to routes.starred = value when set. Tags is an "all of"
+// filter: each element adds an EXISTS subquery against route_tags so the
+// result set is the intersection (AND), not the union (OR). Callers must
+// normalize (lowercase + trim) tag values before populating this slice so
+// they match the values stored by SetRouteTags; the db layer compares the
+// strings verbatim.
 type ListRoutesByDeviceFilteredParams struct {
 	DongleID     string
 	FromTime     pgtype.Timestamptz
@@ -137,14 +144,36 @@ type ListRoutesByDeviceFilteredParams struct {
 	MinDistanceM pgtype.Float8
 	MaxDistanceM pgtype.Float8
 	HasEvents    pgtype.Bool
+	Starred      pgtype.Bool
+	Tags         []string
 	Sort         RouteListSortKey
 	Limit        int32
 	Offset       int32
 }
 
+// CountRoutesByDeviceFilteredCustomParams mirrors
+// ListRoutesByDeviceFilteredParams minus the pagination/sort fields so the
+// custom count wrapper applies the same filter set (including tag AND) as
+// the list. A separate struct keeps the contract explicit.
+type CountRoutesByDeviceFilteredCustomParams struct {
+	DongleID     string
+	FromTime     pgtype.Timestamptz
+	ToTime       pgtype.Timestamptz
+	Preserved    pgtype.Bool
+	MinDurationS pgtype.Int4
+	MaxDurationS pgtype.Int4
+	MinDistanceM pgtype.Float8
+	MaxDistanceM pgtype.Float8
+	HasEvents    pgtype.Bool
+	Starred      pgtype.Bool
+	Tags         []string
+}
+
 // listRoutesByDeviceFilteredTemplate is the SQL used for the filtered routes
-// list. The %s placeholder is replaced with a whitelisted ORDER BY clause via
-// RouteListSortKey.orderByClause; user-supplied input is never interpolated.
+// list. The first %s placeholder is replaced with zero or more tag EXISTS
+// subqueries, the second with a whitelisted ORDER BY clause via
+// RouteListSortKey.orderByClause; user-supplied input is never interpolated
+// as text -- tag values ride as parameters, not as SQL.
 //
 // The query mirrors CountRoutesByDeviceFiltered in sql/queries/routes.sql so
 // the filtered list and the filtered count always agree. Routes without an
@@ -152,6 +181,12 @@ type ListRoutesByDeviceFilteredParams struct {
 // min/max_distance_m is set, in which case the NULL comparison excludes them.
 // has_events is implemented as an EXISTS subquery to keep the planner on
 // idx_events_route_id on large tables.
+//
+// Tag filtering is AND-semantics: for N requested tags we emit N distinct
+// EXISTS subqueries. A route must have every requested tag attached to
+// appear in the result. This is intentionally more expensive than a single
+// ANY($tags) check -- we want "has tag a AND has tag b", not "has any of
+// (a, b)".
 //
 // The select list also surfaces note/starred/tags so the dashboard list
 // endpoint can show annotations without N+1 round-trips (mirrors
@@ -179,17 +214,96 @@ WHERE r.dongle_id = $1
   AND ($9::bool        IS NULL
        OR ($9::bool = TRUE  AND EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id))
        OR ($9::bool = FALSE AND NOT EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id)))
+  AND ($10::bool       IS NULL OR r.starred = $10::bool)
 %s
-LIMIT $10 OFFSET $11
+%s
+LIMIT $%d OFFSET $%d
 `
+
+// countRoutesByDeviceFilteredTemplate mirrors the list template exactly,
+// minus the sort/limit/offset. Kept in lockstep so the filtered total and
+// the filtered page always reflect the same WHERE clause.
+const countRoutesByDeviceFilteredTemplate = `
+SELECT COUNT(*)::BIGINT
+FROM routes r
+LEFT JOIN trips t ON t.route_id = r.id
+WHERE r.dongle_id = $1
+  AND ($2::timestamptz IS NULL OR r.start_time >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL OR r.start_time <  $3::timestamptz)
+  AND ($4::bool        IS NULL OR r.preserved = $4::bool)
+  AND ($5::int         IS NULL OR (t.duration_seconds IS NOT NULL AND t.duration_seconds >= $5::int))
+  AND ($6::int         IS NULL OR (t.duration_seconds IS NOT NULL AND t.duration_seconds <= $6::int))
+  AND ($7::double precision IS NULL OR (t.distance_meters IS NOT NULL AND t.distance_meters >= $7::double precision))
+  AND ($8::double precision IS NULL OR (t.distance_meters IS NOT NULL AND t.distance_meters <= $8::double precision))
+  AND ($9::bool        IS NULL
+       OR ($9::bool = TRUE  AND EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id))
+       OR ($9::bool = FALSE AND NOT EXISTS (SELECT 1 FROM events e WHERE e.route_id = r.id)))
+  AND ($10::bool       IS NULL OR r.starred = $10::bool)
+%s
+`
+
+// buildTagExistsClauses emits an AND-joined sequence of EXISTS subqueries
+// for each requested tag. Parameters start at baseIdx (one past the last
+// fixed filter arg) and are returned in order for the caller to append to
+// the query args slice. An empty tags slice returns an empty string and a
+// nil args slice so the caller can unconditionally interpolate them.
+func buildTagExistsClauses(tags []string, baseIdx int) (string, []interface{}) {
+	if len(tags) == 0 {
+		return "", nil
+	}
+	args := make([]interface{}, 0, len(tags))
+	clauses := make([]string, 0, len(tags))
+	for i, tag := range tags {
+		// One EXISTS per tag so the set intersection is computed by the
+		// planner via NestedLoop/IndexScan against (route_id, tag) -- the
+		// PRIMARY KEY on route_tags covers this exactly.
+		clauses = append(clauses,
+			fmt.Sprintf("AND EXISTS (SELECT 1 FROM route_tags rt%d WHERE rt%d.route_id = r.id AND rt%d.tag = $%d)",
+				i, i, i, baseIdx+i))
+		args = append(args, tag)
+	}
+	return "  " + joinAnd(clauses) + "\n", args
+}
+
+// joinAnd joins predicate clauses with a newline+indent so the emitted SQL
+// stays readable if it shows up in a log or an EXPLAIN ANALYZE.
+func joinAnd(clauses []string) string {
+	out := ""
+	for i, c := range clauses {
+		if i > 0 {
+			out += "\n  "
+		}
+		out += c
+	}
+	return out
+}
 
 // ListRoutesByDeviceFiltered returns a paginated, filtered slice of routes
 // for a device, each annotated with its segment count, note, starred flag,
 // and tag list. The ORDER BY is chosen from a whitelist by Sort and always
 // has routes.id DESC as the tiebreaker for deterministic pagination.
+//
+// Starred narrows on routes.starred = value when set. Each entry in Tags
+// adds an EXISTS subquery against route_tags so the tag filter is "has all
+// of these tags" (AND), not "has any of these tags" (OR). Tag values are
+// compared verbatim; callers must normalize before calling.
 func (q *Queries) ListRoutesByDeviceFiltered(ctx context.Context, arg ListRoutesByDeviceFilteredParams) ([]RouteWithSegmentCount, error) {
-	sql := fmt.Sprintf(listRoutesByDeviceFilteredTemplate, arg.Sort.orderByClause())
-	rows, err := q.db.Query(ctx, sql,
+	// Fixed args occupy $1..$10 (dongle_id + 9 filters). Tag args start at
+	// $11 and run one per requested tag. Limit/Offset sit immediately after.
+	const fixedArgs = 10
+	tagClauses, tagArgs := buildTagExistsClauses(arg.Tags, fixedArgs+1)
+	limitIdx := fixedArgs + len(arg.Tags) + 1
+	offsetIdx := fixedArgs + len(arg.Tags) + 2
+
+	sql := fmt.Sprintf(listRoutesByDeviceFilteredTemplate,
+		tagClauses,
+		arg.Sort.orderByClause(),
+		limitIdx,
+		offsetIdx,
+	)
+
+	args := make([]interface{}, 0, fixedArgs+len(tagArgs)+2)
+	args = append(args,
 		arg.DongleID,
 		arg.FromTime,
 		arg.ToTime,
@@ -199,9 +313,12 @@ func (q *Queries) ListRoutesByDeviceFiltered(ctx context.Context, arg ListRoutes
 		arg.MinDistanceM,
 		arg.MaxDistanceM,
 		arg.HasEvents,
-		arg.Limit,
-		arg.Offset,
+		arg.Starred,
 	)
+	args = append(args, tagArgs...)
+	args = append(args, arg.Limit, arg.Offset)
+
+	rows, err := q.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -231,6 +348,43 @@ func (q *Queries) ListRoutesByDeviceFiltered(ctx context.Context, arg ListRoutes
 		return nil, err
 	}
 	return items, nil
+}
+
+// CountRoutesByDeviceFilteredCustom is the count companion to
+// ListRoutesByDeviceFiltered. When tag filtering is in play we cannot use
+// the sqlc-generated CountRoutesByDeviceFiltered because the tag predicate
+// is dynamic; this wrapper appends the same tag EXISTS clauses to a mirror
+// of the count SQL so the reported total always matches the filtered list.
+//
+// Callers that do not need tag AND-semantics can keep using the generated
+// CountRoutesByDeviceFiltered; callers that pass tags must use this.
+func (q *Queries) CountRoutesByDeviceFilteredCustom(ctx context.Context, arg CountRoutesByDeviceFilteredCustomParams) (int64, error) {
+	const fixedArgs = 10
+	tagClauses, tagArgs := buildTagExistsClauses(arg.Tags, fixedArgs+1)
+
+	sql := fmt.Sprintf(countRoutesByDeviceFilteredTemplate, tagClauses)
+
+	args := make([]interface{}, 0, fixedArgs+len(tagArgs))
+	args = append(args,
+		arg.DongleID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.Preserved,
+		arg.MinDurationS,
+		arg.MaxDurationS,
+		arg.MinDistanceM,
+		arg.MaxDistanceM,
+		arg.HasEvents,
+		arg.Starred,
+	)
+	args = append(args, tagArgs...)
+
+	row := q.db.QueryRow(ctx, sql, args...)
+	var count int64
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 const listRecentRoutes = `

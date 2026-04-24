@@ -842,6 +842,139 @@ func TestListRoutes(t *testing.T) {
 			wantError:    "invalid has_events parameter",
 		},
 		{
+			name:         "starred=true filter accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "starred=true",
+			mock: &routeMockDB{
+				routeCount: 1,
+				routes: []db.Route{
+					{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+						Starred:   true},
+				},
+				segCount: 1,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  1,
+			wantCount:  1,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
+			name:         "starred=false filter accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "starred=false",
+			mock: &routeMockDB{
+				routeCount: 3,
+				routes: []db.Route{
+					{ID: 2, DongleID: "abc123", RouteName: "2024-03-15--13-00-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}},
+				},
+				segCount: 1,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  3,
+			wantCount:  1,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
+			name:         "invalid starred boolean rejected",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "starred=kinda",
+			mock:         &routeMockDB{},
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "invalid starred parameter",
+		},
+		{
+			name:         "single tag filter accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "tag=road-trip",
+			mock: &routeMockDB{
+				routeCount: 2,
+				routes: []db.Route{
+					{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}},
+				},
+				tags:     []string{"road-trip"},
+				segCount: 1,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  2,
+			wantCount:  1,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
+			name:         "multiple tags AND filter accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "tag=road-trip&tag=scenic",
+			mock: &routeMockDB{
+				routeCount: 1,
+				routes: []db.Route{
+					{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}},
+				},
+				tags:     []string{"road-trip", "scenic"},
+				segCount: 1,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  1,
+			wantCount:  1,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
+			name:         "unknown tag returns empty without error",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "tag=does-not-exist",
+			mock: &routeMockDB{
+				routeCount: 0,
+				routes:     []db.Route{},
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  0,
+			wantCount:  0,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
+			name:         "starred combined with from range accepted",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			queryParams:  "starred=true&from=2024-01-01T00:00:00Z",
+			mock: &routeMockDB{
+				routeCount: 1,
+				routes: []db.Route{
+					{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+						StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+						EndTime:   pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+						Starred:   true},
+				},
+				segCount: 1,
+			},
+			wantStatus: http.StatusOK,
+			wantTotal:  1,
+			wantCount:  1,
+			wantLimit:  25,
+			wantOffset: 0,
+		},
+		{
 			name:         "invalid from timestamp rejected",
 			dongleID:     "abc123",
 			authDongleID: "abc123",
@@ -1028,6 +1161,205 @@ func TestListRoutesFilterAndSortPassthrough(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestListRoutesStarredAndTagFilterPassthrough(t *testing.T) {
+	now := time.Now()
+	baseRoutes := []db.Route{
+		{ID: 1, DongleID: "abc123", RouteName: "2024-03-15--12-30-00",
+			StartTime: pgtype.Timestamptz{Time: now, Valid: true},
+			EndTime:   pgtype.Timestamptz{Time: now.Add(10 * time.Minute), Valid: true},
+			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true}},
+	}
+
+	tests := []struct {
+		name               string
+		queryParams        string
+		wantStarredValid   bool
+		wantStarredValue   bool
+		wantTagArgs        []string
+		wantSQLContains    []string
+		wantSQLNotContains []string
+	}{
+		{
+			name:             "starred=true lands as pgtype.Bool{Bool:true,Valid:true}",
+			queryParams:      "starred=true",
+			wantStarredValid: true,
+			wantStarredValue: true,
+			wantSQLContains:  []string{"r.starred = $10::bool"},
+		},
+		{
+			name:             "starred=false lands as pgtype.Bool{Bool:false,Valid:true}",
+			queryParams:      "starred=false",
+			wantStarredValid: true,
+			wantStarredValue: false,
+			wantSQLContains:  []string{"r.starred = $10::bool"},
+		},
+		{
+			name:        "no starred param leaves Valid=false (NULL)",
+			queryParams: "",
+			// wantStarredValid zero-value = false
+		},
+		{
+			name:        "single tag emits one EXISTS subquery",
+			queryParams: "tag=road-trip",
+			wantTagArgs: []string{"road-trip"},
+			wantSQLContains: []string{
+				"EXISTS (SELECT 1 FROM route_tags rt0 WHERE rt0.route_id = r.id AND rt0.tag = $11)",
+			},
+		},
+		{
+			name:        "two tags emit two EXISTS subqueries (AND semantics)",
+			queryParams: "tag=road-trip&tag=scenic",
+			wantTagArgs: []string{"road-trip", "scenic"},
+			wantSQLContains: []string{
+				"EXISTS (SELECT 1 FROM route_tags rt0 WHERE rt0.route_id = r.id AND rt0.tag = $11)",
+				"EXISTS (SELECT 1 FROM route_tags rt1 WHERE rt1.route_id = r.id AND rt1.tag = $12)",
+			},
+		},
+		{
+			name:        "tag values normalized (lowercase + trim)",
+			queryParams: "tag=%20Road-Trip%20&tag=Scenic",
+			wantTagArgs: []string{"road-trip", "scenic"},
+		},
+		{
+			name:        "duplicate tags after normalization collapse to one",
+			queryParams: "tag=road-trip&tag=ROAD-TRIP&tag=road-trip",
+			wantTagArgs: []string{"road-trip"},
+			wantSQLContains: []string{
+				"EXISTS (SELECT 1 FROM route_tags rt0 WHERE rt0.route_id = r.id AND rt0.tag = $11)",
+			},
+			wantSQLNotContains: []string{
+				"EXISTS (SELECT 1 FROM route_tags rt1",
+			},
+		},
+		{
+			name:        "no tag param emits zero EXISTS subqueries",
+			queryParams: "",
+			wantTagArgs: nil,
+			wantSQLNotContains: []string{
+				"EXISTS (SELECT 1 FROM route_tags rt0",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &routeMockDB{
+				routeCount: 1,
+				routes:     baseRoutes,
+				segCount:   1,
+			}
+			queries := db.New(mock)
+			handler := NewRouteHandler(queries)
+
+			e := echo.New()
+			target := "/v1/route/abc123"
+			if tt.queryParams != "" {
+				target += "?" + tt.queryParams
+			}
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("dongle_id")
+			c.SetParamValues("abc123")
+			c.Set(middleware.ContextKeyDongleID, "abc123")
+
+			if err := handler.ListRoutes(c); err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+			}
+
+			// Position 9 (0-indexed) of the list args is the starred
+			// pgtype.Bool. Count args mirror the same positions.
+			if len(mock.lastListArgs) < 10 {
+				t.Fatalf("expected >= 10 list args, got %d", len(mock.lastListArgs))
+			}
+			if len(mock.lastCountArgs) < 10 {
+				t.Fatalf("expected >= 10 count args, got %d", len(mock.lastCountArgs))
+			}
+			starredArg, ok := mock.lastListArgs[9].(pgtype.Bool)
+			if !ok {
+				t.Fatalf("starred arg has wrong type %T", mock.lastListArgs[9])
+			}
+			if starredArg.Valid != tt.wantStarredValid {
+				t.Errorf("starred Valid = %v, want %v", starredArg.Valid, tt.wantStarredValid)
+			}
+			if tt.wantStarredValid && starredArg.Bool != tt.wantStarredValue {
+				t.Errorf("starred Bool = %v, want %v", starredArg.Bool, tt.wantStarredValue)
+			}
+
+			// The count and list must pass the same starred value so
+			// "3 starred routes" matches the page actually returned.
+			countStarredArg, ok := mock.lastCountArgs[9].(pgtype.Bool)
+			if !ok {
+				t.Fatalf("count starred arg has wrong type %T", mock.lastCountArgs[9])
+			}
+			if countStarredArg != starredArg {
+				t.Errorf("starred arg diverges between count and list: count=%+v list=%+v",
+					countStarredArg, starredArg)
+			}
+
+			// Tag args come after the fixed 10 filter slots and before
+			// limit/offset on the list side.
+			gotListTagArgs := []string{}
+			if len(mock.lastListArgs) > 12 {
+				// limit/offset are the last 2, so tag args are [10..len-2).
+				for i := 10; i < len(mock.lastListArgs)-2; i++ {
+					s, ok := mock.lastListArgs[i].(string)
+					if !ok {
+						t.Fatalf("tag arg %d has wrong type %T", i, mock.lastListArgs[i])
+					}
+					gotListTagArgs = append(gotListTagArgs, s)
+				}
+			}
+			if !equalStringSlices(gotListTagArgs, tt.wantTagArgs) {
+				t.Errorf("list tag args = %v, want %v (all args: %v)",
+					gotListTagArgs, tt.wantTagArgs, mock.lastListArgs)
+			}
+
+			// Count side: tag args come after the fixed 10 filter slots;
+			// there is no limit/offset on the count, so they run to the end.
+			gotCountTagArgs := []string{}
+			if len(mock.lastCountArgs) > 10 {
+				for i := 10; i < len(mock.lastCountArgs); i++ {
+					s, ok := mock.lastCountArgs[i].(string)
+					if !ok {
+						t.Fatalf("count tag arg %d has wrong type %T", i, mock.lastCountArgs[i])
+					}
+					gotCountTagArgs = append(gotCountTagArgs, s)
+				}
+			}
+			if !equalStringSlices(gotCountTagArgs, tt.wantTagArgs) {
+				t.Errorf("count tag args = %v, want %v", gotCountTagArgs, tt.wantTagArgs)
+			}
+
+			for _, want := range tt.wantSQLContains {
+				if !strings.Contains(mock.lastListSQL, want) {
+					t.Errorf("list SQL missing %q\nSQL was:\n%s", want, mock.lastListSQL)
+				}
+			}
+			for _, unwant := range tt.wantSQLNotContains {
+				if strings.Contains(mock.lastListSQL, unwant) {
+					t.Errorf("list SQL unexpectedly contains %q\nSQL was:\n%s", unwant, mock.lastListSQL)
+				}
+			}
+		})
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestListRoutesCountAndListFiltersMatch(t *testing.T) {
