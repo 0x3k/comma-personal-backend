@@ -97,8 +97,8 @@ func (r *mockRouteRow) Scan(dest ...interface{}) error {
 	if r.err != nil {
 		return r.err
 	}
-	if len(dest) < 8 {
-		return fmt.Errorf("expected 8 scan destinations, got %d", len(dest))
+	if len(dest) < 10 {
+		return fmt.Errorf("expected 10 scan destinations, got %d", len(dest))
 	}
 	*dest[0].(*int32) = r.route.ID
 	*dest[1].(*string) = r.route.DongleID
@@ -108,6 +108,8 @@ func (r *mockRouteRow) Scan(dest ...interface{}) error {
 	*dest[5].(*interface{}) = r.route.Geometry
 	*dest[6].(*pgtype.Timestamptz) = r.route.CreatedAt
 	*dest[7].(*bool) = r.route.Preserved
+	*dest[8].(*string) = r.route.Note
+	*dest[9].(*bool) = r.route.Starred
 	return nil
 }
 
@@ -157,6 +159,8 @@ func (r *mockRouteRows) Scan(dest ...interface{}) error {
 	*dest[5].(*interface{}) = route.Geometry
 	*dest[6].(*pgtype.Timestamptz) = route.CreatedAt
 	*dest[7].(*bool) = route.Preserved
+	*dest[8].(*string) = route.Note
+	*dest[9].(*bool) = route.Starred
 	return nil
 }
 
@@ -195,7 +199,10 @@ func (r *mockRouteWithCountRows) Scan(dest ...interface{}) error {
 	*dest[5].(*interface{}) = route.Geometry
 	*dest[6].(*pgtype.Timestamptz) = route.CreatedAt
 	*dest[7].(*bool) = route.Preserved
-	*dest[8].(*int64) = r.segCount
+	*dest[8].(*string) = route.Note
+	*dest[9].(*bool) = route.Starred
+	*dest[10].(*[]string) = []string{}
+	*dest[11].(*int64) = r.segCount
 	return nil
 }
 

@@ -44,6 +44,13 @@ type Route struct {
 	Geometry  interface{}        `json:"geometry"`
 	CreatedAt pgtype.Timestamptz `json:"createdAt"`
 	Preserved bool               `json:"preserved"`
+	Note      string             `json:"note"`
+	Starred   bool               `json:"starred"`
+}
+
+type RouteTag struct {
+	RouteID int32  `json:"routeId"`
+	Tag     string `json:"tag"`
 }
 
 type Segment struct {
