@@ -233,6 +233,45 @@ func (q *Queries) ListRoutesByDeviceFiltered(ctx context.Context, arg ListRoutes
 	return items, nil
 }
 
+const listRecentRoutes = `
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved
+FROM routes
+ORDER BY created_at DESC, id DESC
+LIMIT $1
+`
+
+// ListRecentRoutes returns the most-recently created routes across every
+// device, up to limit rows. Used by the thumbnail worker to scan candidate
+// routes without a hand-written filesystem walk.
+func (q *Queries) ListRecentRoutes(ctx context.Context, limit int32) ([]Route, error) {
+	rows, err := q.db.Query(ctx, listRecentRoutes, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Route
+	for rows.Next() {
+		var i Route
+		if err := rows.Scan(
+			&i.ID,
+			&i.DongleID,
+			&i.RouteName,
+			&i.StartTime,
+			&i.EndTime,
+			&i.Geometry,
+			&i.CreatedAt,
+			&i.Preserved,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // ReplaceRouteTags atomically swaps the tag set on a route: it clears every
 // existing tag and inserts the given replacements inside a single
 // transaction. Duplicate or already-normalized tags in `tags` are fine --

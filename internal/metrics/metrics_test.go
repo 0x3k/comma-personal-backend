@@ -26,6 +26,8 @@ func TestMetricsNamesAndLabelsExist(t *testing.T) {
 	m.ObserveRPCCall("getNetworkType", "success", 150*time.Millisecond)
 	m.SetConnectedDevices(2)
 	m.ObserveWorkerRun("transcoder", 800*time.Millisecond)
+	m.ObserveThumbnailGeneration("success", 200*time.Millisecond)
+	m.SetThumbnailQueueDepth(3)
 
 	families, err := m.Registry().Gather()
 	if err != nil {
@@ -51,6 +53,9 @@ func TestMetricsNamesAndLabelsExist(t *testing.T) {
 		{"rpc_calls_total", map[string]string{"method": "getNetworkType", "status": "success"}},
 		{"ws_connected_devices", nil},
 		{"worker_run_duration_seconds", map[string]string{"worker": "transcoder"}},
+		{"thumbnail_generations_total", map[string]string{"result": "success"}},
+		{"thumbnail_generation_duration_seconds", nil},
+		{"thumbnail_queue_depth", nil},
 	}
 
 	for _, tc := range cases {
