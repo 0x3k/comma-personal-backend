@@ -1,0 +1,21 @@
+{
+  "id": "route-list-filters-ui",
+  "name": "Routes page filter bar + sort + URL querystring sync",
+  "description": "Add a filter bar to the routes page (web/src/app/routes/page.tsx) that consumes the new query params from route-list-filters-api. The bar is the primary way a user narrows a many-hundreds-long route list. State syncs to the URL so filters survive reloads and can be shared by copying the URL. Fetches are debounced to avoid hammering the backend while the user drags a slider.",
+  "acceptance_criteria": [
+    "A filter bar sits above the routes list with: date range (two date inputs or a range picker), min/max duration (minutes), min/max distance (km), Preserved toggle (any / yes / no), Has events toggle (any / yes / no), sort dropdown (Newest first / Oldest first / Longest first / Furthest first), and a Clear filters button",
+    "Filter state is mirrored to the URL query string using the same param names the API expects (from, to, min_duration_s, max_duration_s, min_distance_m, max_distance_m, preserved, has_events, sort); reloading the page reconstructs the same view",
+    "apiFetch calls are debounced to 300ms while the user is typing/dragging; the existing pagination (limit/offset via the Load more button) continues to work and is reset to offset=0 whenever a filter changes",
+    "Total count in the page header updates to reflect the filtered total returned by the API",
+    "Empty-result state renders a clear message (e.g. 'No routes match these filters') with the Clear filters button",
+    "Clear filters removes all filter params from the URL and refetches with defaults",
+    "pnpm --dir web lint, pnpm --dir web type-check, and pnpm --dir web test pass",
+    "Manually verified in the dev server: filters narrow the list, URL copy-paste restores state, Clear resets everything"
+  ],
+  "priority": 2,
+  "status": "complete",
+  "branch": "agent/route-list-filters-ui",
+  "base_branch": "main",
+  "blocked_by": ["route-list-filters-api"],
+  "notes": "Added web/src/components/routes/FilterBar.tsx (presentation + filtersToSearchParams/filtersFromSearchParams serializers) and web/src/lib/useDebouncedValue.ts. Rewrote web/src/app/routes/page.tsx to hydrate FilterState from the URL, mirror debounced (300ms) state back via router.replace, reset offset on filter change, and add a Load more pager. lint + type-check + build + smoke all pass; no `test` script defined in web/package.json."
+}
