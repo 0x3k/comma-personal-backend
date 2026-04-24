@@ -12,9 +12,10 @@
     "Manually verified in the dev server: star persists across reload, tag add/remove persists, note saves and reappears, list view reflects changes immediately"
   ],
   "priority": 5,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/route-annotations-ui",
   "base_branch": "main",
   "blocked_by": ["route-annotations-api"],
-  "notes": ""
+  "pr": "https://github.com/0x3k/comma-personal-backend/pull/70",
+  "notes": "Detail page: new RouteAnnotations component (web/src/components/routes/RouteAnnotations.tsx) renders star toggle, tag chip editor with autocomplete (Enter/comma to commit, Backspace on empty input peels last chip), and a collapsible note textarea with explicit Save. Star and tag edits are optimistic; failures roll the local copy back and surface via an inline banner + Toast. Tag normalization (trim+lowercase) and the 4000/32-char length budgets mirror the server-side CHECK constraints in route-annotations-schema. List page: star icon next to route name and a chip strip (up to 3 tags, +N overflow) under the date/duration block; empty annotations render nothing. Read-only mode: RouteAnnotations accepts a readOnly prop that swaps editors for plain-text views; the route detail page is session-gated in practice (the share-link viewer lives on /share/[token] and never hits this page) so the prop is mostly defensive but documented for future callers. RouteDetailResponse in web/src/lib/types.ts gained note/starred/tags/preserved to mirror the Go routeDetailResponse; RouteListItem already had them from PR #69. Smoke: lint + type-check + go vet + gofmt all pass; pnpm --dir web build succeeds; pnpm --dir web test is a no-op (intentional: no test script in web/package.json)."
 }
