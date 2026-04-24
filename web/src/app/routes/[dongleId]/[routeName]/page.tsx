@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/Button";
 import TripMap from "@/components/map/TripMap";
 import { LogViewer } from "@/components/logs/LogViewer";
 import { ShareButton } from "@/components/ShareButton";
+import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
   { key: "fcameraUploaded", label: "fcamera" },
@@ -260,6 +261,20 @@ export default function RouteDetailPage() {
               </dl>
             </CardBody>
           </Card>
+
+          {/* Hero thumbnail. Sits above the map + video player as a
+              visual anchor for the route. The component stays visible
+              when a segment is selected (see RouteThumbnail docs) so
+              the page layout does not reshuffle when the user opens
+              the player. */}
+          <div className="mb-6 flex justify-center">
+            <RouteThumbnail
+              dongleId={route.dongleId}
+              routeName={route.routeName}
+              variant="hero"
+              alt={`Preview of route ${route.routeName}`}
+            />
+          </div>
 
           {/* GPS track map */}
           <Card className="mb-6">

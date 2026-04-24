@@ -1,0 +1,20 @@
+{
+  "id": "route-thumbnail-ui",
+  "name": "Route thumbnails in list + detail header",
+  "description": "Consume the thumbnail endpoint from route-thumbnail-worker so users see a visual preview of each route on the routes list and a hero image at the top of the detail page. The list becomes scannable at a glance; the detail page gains a clear anchor above the video player. A placeholder is shown while the thumbnail is missing or being generated.",
+  "acceptance_criteria": [
+    "Routes list cards (web/src/app/routes/page.tsx) render an <img> (or Next.js <Image>) from /v1/routes/:dongle_id/:route_name/thumbnail at the card's leading edge, with a fixed aspect ratio (16:9) and width that fits the existing card grid",
+    "A skeleton/placeholder div with the same dimensions is shown while the image is loading or returns 404; the placeholder uses the app's existing neutral palette (not a broken-image icon)",
+    "loading=lazy on <img> (or equivalent via Next.js Image) so offscreen thumbnails are not fetched until the user scrolls to them",
+    "Route detail page shows the same thumbnail as a larger hero image (max-width 640px, same 16:9 ratio) above the video player; when the video player loads, the hero can stay or hide -- pick one, document in the component, and be consistent",
+    "No layout shift: the placeholder reserves the same space as the loaded image",
+    "pnpm --dir web lint, pnpm --dir web type-check, and pnpm --dir web test pass",
+    "Manually verified in the dev server: thumbnail appears on list and detail once the worker has generated it; pre-generation state shows a clean placeholder, not a broken image"
+  ],
+  "priority": 7,
+  "status": "complete",
+  "branch": "agent/route-thumbnail-ui",
+  "base_branch": "main",
+  "blocked_by": ["route-thumbnail-worker"],
+  "notes": "RouteThumbnail component renders the /v1/routes/:dongle/:route/thumbnail endpoint with a skeleton placeholder, lazy loading, and a 16:9 aspect box that prevents layout shift. List variant mounts flush with the top of each route card; hero variant (max-width 640px) sits above the map + video player on the detail page and stays visible when a segment is selected (documented inline). Lint, type-check, and build all pass. AC #7 (manual dev-server verification) left to the operator."
+}

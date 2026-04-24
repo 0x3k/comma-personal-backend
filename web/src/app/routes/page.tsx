@@ -20,6 +20,7 @@ import {
   isDefaultFilters,
   type FilterState,
 } from "@/components/routes/FilterBar";
+import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
 
 /**
  * Default dongle ID used when none is configured.
@@ -211,7 +212,13 @@ function RoutesPageInner() {
                 href={`/routes/${route.dongleId}/${encodeURIComponent(route.routeName)}`}
                 className="block transition-transform hover:scale-[1.01] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring-focus)] rounded-lg"
               >
-                <Card className="h-full">
+                <Card className="h-full overflow-hidden">
+                  <RouteThumbnail
+                    dongleId={route.dongleId}
+                    routeName={route.routeName}
+                    variant="list"
+                    className="rounded-none"
+                  />
                   <CardHeader>
                     <div className="flex items-center justify-between gap-2">
                       <h2 className="text-sm font-medium text-[var(--text-primary)] truncate">
