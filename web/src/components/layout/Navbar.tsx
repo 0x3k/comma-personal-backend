@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { BASE_URL } from "@/lib/api";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
 
 interface NavLink {
   href: string;
@@ -88,6 +89,8 @@ function Navbar() {
               </Link>
             );
           })}
+
+          <ThemeToggle className="ml-1" />
 
           {!isLoginPage && (
             <button

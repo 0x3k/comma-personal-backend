@@ -1,0 +1,20 @@
+{
+  "id": "dark-mode-toggle",
+  "name": "Dark mode toggle in the dashboard",
+  "description": "Add a three-state (system / light / dark) theme toggle to the dashboard header and plumb Tailwind's dark: variant through the existing components so the whole UI respects it. Default is 'system' (follows prefers-color-scheme). The user's explicit choice persists in localStorage and is applied before first paint to avoid a flash of incorrect theme.",
+  "acceptance_criteria": [
+    "Tailwind config is updated to darkMode: 'class' (if not already) so dark: variants are driven by a class on <html>",
+    "A small ThemeToggle component lives in web/src/components/ui/ThemeToggle.tsx with three states (system, light, dark), renders as a single button that cycles on click with a clear label/aria-label, and is placed in the top nav/header (web/src/components/layout/...) visible on every page",
+    "Selected theme persists in localStorage under the key 'theme' ('system' | 'light' | 'dark'); on page load, an inline <script> in the <head> (in web/src/app/layout.tsx) reads localStorage + prefers-color-scheme and sets the html class before hydration so there is no flash of incorrect theme",
+    "All Card, Badge, Button, ErrorMessage, Spinner, layout, and page components render correctly in dark mode: text contrast is legible (WCAG AA), no hard-coded pure-white backgrounds leak through, map/video/chart components continue to work (Leaflet tiles, hls.js controls, canvas signal timeline). Where third-party widgets do not theme, document the compromise in a comment on that component",
+    "Changing the system theme while in 'system' mode immediately updates the UI (listen to matchMedia change)",
+    "pnpm --dir web lint, pnpm --dir web type-check, and pnpm --dir web test pass",
+    "Manually verified: no flash of incorrect theme on hard refresh, toggle cycles system -> light -> dark -> system, preference survives reload, every top-level route is readable in both modes"
+  ],
+  "priority": 9,
+  "status": "complete",
+  "branch": "agent/dark-mode-toggle",
+  "base_branch": "main",
+  "blocked_by": [],
+  "notes": "Tailwind v4 registers the dark: variant via @custom-variant (the v4 equivalent of darkMode: 'class'). Theme classes (light/dark) are set on <html> by a small pre-hydration script in app/layout.tsx and by the ThemeToggle component. Most components already used CSS variables so they adapted automatically; the SignalTimeline canvas now reads its ink color off computed style so the playhead stays visible in light mode. OpenStreetMap tiles are intentionally left bright in both modes (documented inline)."
+}

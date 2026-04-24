@@ -1,6 +1,16 @@
 @import "tailwindcss";
 
 /*
+ * Class-based dark mode. Tailwind v4 uses @custom-variant to register the
+ * `dark:` variant; this replaces the v3 `darkMode: 'class'` config option.
+ *
+ * The variant matches when either the element itself or any ancestor has the
+ * `dark` class. The theme provider in <html> sets `light`/`dark` on the root
+ * element based on the user's choice plus system preference.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
  * Design tokens for comma personal.
  * Dark-first palette suited for a dashcam review tool.
  */
@@ -65,8 +75,41 @@
   --ring-focus: var(--color-brand-300);
 }
 
+/*
+ * Dark-mode tokens. Activated when the root <html> carries the `dark` class,
+ * which is set by the ThemeToggle component and the pre-hydration script in
+ * app/layout.tsx based on the user's persisted preference plus system setting.
+ *
+ * A fallback @media block keeps dark-mode working for the brief window before
+ * the inline theme script runs (e.g. the raw server-rendered HTML shown if JS
+ * is slow or disabled): when the root element has no explicit theme class and
+ * the OS prefers dark, the same tokens apply.
+ */
+html.dark {
+  --bg-primary: var(--color-neutral-950);
+  --bg-secondary: var(--color-neutral-900);
+  --bg-tertiary: var(--color-neutral-800);
+  --bg-surface: var(--color-neutral-850);
+  --bg-nav: rgba(24, 24, 27, 0.85);
+
+  --text-primary: var(--color-neutral-100);
+  --text-secondary: var(--color-neutral-400);
+  --text-tertiary: var(--color-neutral-600);
+  --text-inverse: var(--color-neutral-900);
+
+  --border-primary: var(--color-neutral-800);
+  --border-secondary: var(--color-neutral-700);
+
+  --accent: var(--color-brand-400);
+  --accent-hover: var(--color-brand-300);
+
+  --ring-focus: var(--color-brand-700);
+
+  color-scheme: dark;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  html:not(.light):not(.dark) {
     --bg-primary: var(--color-neutral-950);
     --bg-secondary: var(--color-neutral-900);
     --bg-tertiary: var(--color-neutral-800);
@@ -85,6 +128,8 @@
     --accent-hover: var(--color-brand-300);
 
     --ring-focus: var(--color-brand-700);
+
+    color-scheme: dark;
   }
 }
 
@@ -93,10 +138,8 @@ html {
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  html {
-    color-scheme: dark;
-  }
+html.light {
+  color-scheme: light;
 }
 
 body {
