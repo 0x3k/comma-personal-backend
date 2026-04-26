@@ -1,0 +1,22 @@
+{
+  "id": "route-metadata-from-qlog",
+  "name": "Route metadata worker: populate start_time, end_time, geometry from qlog",
+  "description": "Today routes.start_time, routes.end_time, and routes.geometry are NULL for every row in the database, because internal/api/upload.go:286 calls db.CreateRoute with only DongleID + RouteName and nothing ever updates those columns afterwards. The downstream effect is that the trip aggregator runs and writes a trip row with all-NULL stats (no distance, no duration, no start/end coordinates, no addresses), the route map shows nothing, and the routes-list filter UI cannot filter by date or duration. Add a background worker that parses uploaded qlogs and writes derived metadata back to the routes table.\n\nDependency note: this feature is blocked by qlog-zstd-support (real code dependency: the worker must be able to read qlog.zst to extract GPS) AND by qcamera-hls-fallback (staggering only -- both features append a goroutine block to cmd/server/workers.go and merging them in parallel would create a 3-way conflict that is annoying to resolve without force-push, which agent.json forbids).",
+  "priority": 1,
+  "status": "in_progress",
+  "branch": "agent/route-metadata-from-qlog",
+  "base_branch": "main",
+  "blocked_by": ["qlog-zstd-support", "qcamera-hls-fallback"],
+  "acceptance_criteria": [
+    "sql/queries/routes.sql gains UpdateRouteMetadata that takes (id, start_time, end_time, geometry_wkt text) and updates only the non-null fields, so a partial extraction (e.g. GPS but no end timestamp yet) does not stomp prior data. Geometry is built from WKT via ST_GeomFromText(... , 4326) and dropped if it has fewer than 2 points",
+    "internal/cereal/signals.go (or a new sibling file) exposes a way to extract: (a) the first message timestamp -- preferred source initData/logMonoTime, fallback to the earliest carState/gpsLocation message wall time, (b) the last message timestamp from the same stream, (c) a deduplicated, time-ordered slice of (lat, lng) points sourced from gpsLocation / gpsLocationExternal / liveLocationKalman (whichever is present and has hasFix==true / posValid==true). Document the field-precedence in a top-of-file comment",
+    "internal/worker/route_metadata.go defines RouteMetadataWorker { Queries, Storage, PollInterval, FinalizedAfter, BatchLimit } following the TripAggregator shape: Run(ctx) loops, RunOnce returns error only on list failure, per-route errors are logged. Worker claims routes whose latest segment is older than FinalizedAfter and whose geometry IS NULL OR start_time IS NULL (a new sqlc query ListRoutesNeedingMetadata). It MUST run before the trip aggregator can be useful, so trip-aggregator behavior is unchanged but its inputs are now populated",
+    "For each candidate, the worker concatenates qlog files from all uploaded segments (qlog.zst preferred -- requires qlog-zstd-support) and feeds them to the extractor. If GPS samples are present, it builds a LINESTRING WKT (lng lat lng lat ...) and calls UpdateRouteMetadata. If no GPS samples are present, start_time / end_time still get written so duration can be computed",
+    "cmd/server/workers.go wires the worker behind ROUTE_METADATA_ENABLED (default true), placed before the trip aggregator startup log line so the dependency is obvious",
+    "internal/worker/route_metadata_test.go uses a real Postgres (DATABASE_URL gate, matching the existing pattern in trip_aggregator_test.go) and verifies: (1) a route with synthetic GPS points gets a non-empty geometry and a populated start/end_time, (2) a route with no GPS still gets start/end_time, (3) re-running the worker is idempotent (no duplicate UPDATEs that would break trips.computed_at)",
+    "Manual verification on the deployed backend: pick the existing route 92fc6a8b6c034662/0000004a--ce3ac77767 (currently has 12 qlog.zst segments, NULL start/end/geom). After the worker runs once, that row should have start_time, end_time, and a non-empty geometry. The trip aggregator's next pass should then fill distance / duration / lat/lng on the trip row",
+    "go test ./internal/worker/... and go test ./internal/cereal/... pass",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}
