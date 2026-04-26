@@ -103,6 +103,15 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	v1Devices := e.Group("/v1/devices", sessionOrJWT)
 	routeHandler.RegisterDeviceTagsRoute(v1Devices)
 
+	// On-demand pull of full-resolution route data (full HEVC + full rlog).
+	// POST queues an uploadFilesToUrls RPC against the device; GET returns
+	// the request row + per-segment progress derived from the segments
+	// upload flags so the polling UI does not need a second endpoint.
+	api.NewRouteDataRequestHandler(
+		d.queries,
+		api.NewHubDispatcher(d.hub, d.rpcCaller),
+	).RegisterRoutes(v1Route)
+
 	// Trip stats: per-device lifetime totals + recent trip list on /v1, and
 	// per-route aggregated trip detail on /v1/routes.
 	tripHandler := api.NewTripHandler(d.queries)

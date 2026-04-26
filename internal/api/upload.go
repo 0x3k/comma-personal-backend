@@ -95,7 +95,38 @@ func NewUploadHandlerWithMetrics(s *storage.Storage, queries *db.Queries, m *met
 
 // uploadURLResponse is the JSON response for the upload URL endpoint.
 type uploadURLResponse struct {
-	URL string `json:"url"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers"`
+}
+
+// BuildSegmentUploadURL builds the self-hosted PUT URL for a single segment
+// file given the request context (used to derive scheme + host) and the
+// segment coordinates. It is shared by GetUploadURL (the device-facing v1.4
+// endpoint) and the on-demand route data request handler so the URL shape
+// stays in lockstep across both call sites.
+//
+// The empty headers map mirrors the shape of GetUploadURL today: openpilot's
+// uploader / athenad clients accept a headers field on the upload_url
+// response and forward it verbatim on the PUT, but we have nothing to add at
+// this layer (the PUT handler reads only the URL path components).
+func BuildSegmentUploadURL(c echo.Context, dongleID, route, segment, filename string) (string, map[string]string) {
+	scheme := "http"
+	if c.Request().TLS != nil {
+		scheme = "https"
+	}
+	host := c.Request().Host
+	return BuildSegmentUploadURLAt(scheme+"://"+host, dongleID, route, segment, filename)
+}
+
+// BuildSegmentUploadURLAt is the pure-function flavour of
+// BuildSegmentUploadURL. It is used by the dispatcher worker, which has no
+// echo.Context to crib scheme + host from. baseURL is the public origin of
+// the server (e.g. "https://comma.example.com"); pass empty to fall back to
+// a path-only URL the device will resolve against its own request origin.
+func BuildSegmentUploadURLAt(baseURL, dongleID, route, segment, filename string) (string, map[string]string) {
+	uploadPath := fmt.Sprintf("/upload/%s/%s/%s/%s", dongleID, route, segment, filename)
+	uploadURL := baseURL + uploadPath
+	return uploadURL, map[string]string{}
 }
 
 // GetUploadURL handles GET /v1.4/:dongle_id/upload_url/ and returns a URL
@@ -138,16 +169,8 @@ func (h *UploadHandler) GetUploadURL(c echo.Context) error {
 		})
 	}
 
-	// Build a self-hosted upload URL pointing back at this server.
-	scheme := "http"
-	if c.Request().TLS != nil {
-		scheme = "https"
-	}
-	host := c.Request().Host
-	uploadURL := fmt.Sprintf("%s://%s/upload/%s/%s/%s/%s",
-		scheme, host, dongleID, route, segment, filename)
-
-	return c.JSON(http.StatusOK, uploadURLResponse{URL: uploadURL})
+	uploadURL, headers := BuildSegmentUploadURL(c, dongleID, route, segment, filename)
+	return c.JSON(http.StatusOK, uploadURLResponse{URL: uploadURL, Headers: headers})
 }
 
 // UploadFile handles PUT /upload/:dongle_id/* and stores the uploaded file
