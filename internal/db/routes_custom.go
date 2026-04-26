@@ -473,6 +473,12 @@ FROM routes
 WHERE dongle_id = $1 AND route_name = $2
 `
 
+const getRouteGeometryAndTimes = `
+SELECT ST_AsText(geometry), geometry_times
+FROM routes
+WHERE dongle_id = $1 AND route_name = $2
+`
+
 const listRoutesForTripAggregation = `
 SELECT r.id, r.dongle_id, r.route_name, r.start_time, r.end_time, r.geometry,
        r.created_at, r.preserved,
@@ -577,7 +583,15 @@ LEFT JOIN LATERAL (
 WHERE seg.segment_count > 0
   AND seg.latest_segment_at IS NOT NULL
   AND seg.latest_segment_at < $1
-  AND (r.start_time IS NULL OR r.geometry IS NULL)
+  AND (
+        r.start_time IS NULL
+        OR r.geometry IS NULL
+        -- Routes whose geometry was extracted before the geometry_times
+        -- column existed match here exactly once: the next worker pass
+        -- re-extracts them, writes the parallel times array, and they
+        -- stop matching. Bounded one-shot backfill, no special tooling.
+        OR (r.geometry IS NOT NULL AND r.geometry_times IS NULL)
+      )
 ORDER BY r.created_at ASC, r.id ASC
 LIMIT $2
 `
@@ -745,4 +759,31 @@ func (q *Queries) GetRouteGeometryWKT(ctx context.Context, arg GetRouteGeometryW
 		return pgtype.Text{}, err
 	}
 	return wkt, nil
+}
+
+// RouteGeometryAndTimes is the combined result of a single read returning
+// both the WKT serialization of routes.geometry and the parallel
+// geometry_times array. Times is nil when the row predates the
+// geometry_times column or the worker has not yet backfilled it -- callers
+// must treat that as "fall back to time-fraction indexing", not as an
+// error. When times is present, len(times) is intended to equal
+// ST_NumPoints(geometry); the worker's UPDATE enforces that invariant.
+type RouteGeometryAndTimes struct {
+	WKT   pgtype.Text
+	Times []int64
+}
+
+// GetRouteGeometryAndTimes returns the route's LineString WKT alongside
+// the parallel geometry_times array in a single round-trip. Used by the
+// route detail handler so the dot-on-map feature gets per-vertex times
+// without an extra DB call. Returns pgx.ErrNoRows when the route does not
+// exist; an existing row with NULL geometry yields wkt.Valid=false and
+// times=nil.
+func (q *Queries) GetRouteGeometryAndTimes(ctx context.Context, arg GetRouteGeometryWKTParams) (RouteGeometryAndTimes, error) {
+	row := q.db.QueryRow(ctx, getRouteGeometryAndTimes, arg.DongleID, arg.RouteName)
+	var out RouteGeometryAndTimes
+	if err := row.Scan(&out.WKT, &out.Times); err != nil {
+		return RouteGeometryAndTimes{}, err
+	}
+	return out, nil
 }

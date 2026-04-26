@@ -23,6 +23,26 @@ interface VideoPlayerProps {
    * it fires a few times per second while playing and once on seek.
    */
   onTimeUpdate?: (currentTime: number) => void;
+  /**
+   * Called when the underlying media element fires `ended`. Used by RoutePlayer
+   * to auto-advance to the next segment for continuous trip playback.
+   */
+  onEnded?: () => void;
+  /** Bridges the native `play` event so parents can mirror playback state. */
+  onPlay?: () => void;
+  /** Bridges the native `pause` event so parents can mirror playback state. */
+  onPause?: () => void;
+  /**
+   * Called once the HLS manifest has parsed and the media element is ready to
+   * accept seeks. RoutePlayer uses this to flush a pending cross-segment seek.
+   */
+  onReady?: () => void;
+  /** Render the native browser controls. Defaults to true. */
+  controls?: boolean;
+  /** Mute the media element. Defaults to true (matches existing behavior). */
+  muted?: boolean;
+  /** Auto-play once the manifest has parsed. Defaults to false. */
+  autoPlay?: boolean;
 }
 
 /**
@@ -33,6 +53,9 @@ interface VideoPlayerProps {
  */
 interface VideoPlayerHandle {
   seek: (seconds: number) => void;
+  play: () => void;
+  pause: () => void;
+  getCurrentTime: () => number;
 }
 
 /**
@@ -40,11 +63,29 @@ interface VideoPlayerHandle {
  * Uses hls.js when available, falls back to native HLS support (Safari).
  */
 const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
-  function VideoPlayer({ src, className = "", onTimeUpdate }, ref) {
+  function VideoPlayer(
+    {
+      src,
+      className = "",
+      onTimeUpdate,
+      onEnded,
+      onPlay,
+      onPause,
+      onReady,
+      controls = true,
+      muted = true,
+      autoPlay = false,
+    },
+    ref,
+  ) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const hlsRef = useRef<Hls | null>(null);
     const mediaRecoveryAttempted = useRef(false);
     const safariCleanupRef = useRef<(() => void) | null>(null);
+    const onReadyRef = useRef(onReady);
+    onReadyRef.current = onReady;
+    const autoPlayRef = useRef(autoPlay);
+    autoPlayRef.current = autoPlay;
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -68,6 +109,19 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
             // Ignore seek errors (e.g. readyState 0); next play will retry.
           }
         },
+        play: () => {
+          const video = videoRef.current;
+          if (!video) return;
+          void video.play().catch(() => {
+            // Ignore autoplay rejections; the user can press play manually.
+          });
+        },
+        pause: () => {
+          const video = videoRef.current;
+          if (!video) return;
+          video.pause();
+        },
+        getCurrentTime: () => videoRef.current?.currentTime ?? 0,
       }),
       [],
     );
@@ -101,6 +155,12 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           setLoading(false);
+          onReadyRef.current?.();
+          if (autoPlayRef.current) {
+            void video.play().catch(() => {
+              // Browsers may block unmuted autoplay; ignore.
+            });
+          }
         });
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -135,7 +195,13 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         // Native HLS support (Safari)
         video.src = src;
 
-        const handleLoaded = () => setLoading(false);
+        const handleLoaded = () => {
+          setLoading(false);
+          onReadyRef.current?.();
+          if (autoPlayRef.current) {
+            void video.play().catch(() => {});
+          }
+        };
         const handleError = () => {
           setError("Failed to load video stream");
           setLoading(false);
@@ -180,6 +246,31 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       };
     }, [onTimeUpdate]);
 
+    // Bridge the native `ended` event to the optional onEnded callback. Kept
+    // separate so identity changes don't reinitialise hls.js.
+    useEffect(() => {
+      const video = videoRef.current;
+      if (!video || !onEnded) return;
+      const handler = () => onEnded();
+      video.addEventListener("ended", handler);
+      return () => {
+        video.removeEventListener("ended", handler);
+      };
+    }, [onEnded]);
+
+    useEffect(() => {
+      const video = videoRef.current;
+      if (!video) return;
+      const playH = () => onPlay?.();
+      const pauseH = () => onPause?.();
+      if (onPlay) video.addEventListener("play", playH);
+      if (onPause) video.addEventListener("pause", pauseH);
+      return () => {
+        video.removeEventListener("play", playH);
+        video.removeEventListener("pause", pauseH);
+      };
+    }, [onPlay, onPause]);
+
     const handleRetry = useCallback(() => {
       initPlayer();
     }, [initPlayer]);
@@ -201,9 +292,9 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         <video
           ref={videoRef}
           className="aspect-video w-full"
-          controls
+          controls={controls}
           playsInline
-          muted
+          muted={muted}
         />
 
         {/* Loading overlay */}

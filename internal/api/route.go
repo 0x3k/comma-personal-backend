@@ -54,6 +54,13 @@ type routeDetailResponse struct {
 	// stored geometry is unparseable; the frontend uses len() to decide
 	// whether to render the map.
 	Geometry [][2]float64 `json:"geometry"`
+	// GeometryTimes is the route-relative milliseconds of each geometry
+	// vertex (parallel array, len == len(Geometry) when present). Used by
+	// the map UI to bisect by time and render an accurate "current car
+	// position" dot. Omitted from the JSON when the metadata worker has
+	// not yet backfilled the column on this row -- the frontend then
+	// falls back to time-fraction indexing.
+	GeometryTimes []int64 `json:"geometryTimes,omitempty"`
 }
 
 // routeListItem is a route summary for listing endpoints.
@@ -157,47 +164,61 @@ func (h *RouteHandler) GetRoute(c echo.Context) error {
 		endTime = &route.EndTime.Time
 	}
 
-	geometry := lookupRouteGeometry(ctx, h.queries, route.DongleID, route.RouteName)
+	geometry, geometryTimes := lookupRouteGeometry(ctx, h.queries, route.DongleID, route.RouteName)
 
 	return c.JSON(http.StatusOK, routeDetailResponse{
-		DongleID:     route.DongleID,
-		RouteName:    route.RouteName,
-		StartTime:    startTime,
-		EndTime:      endTime,
-		Preserved:    route.Preserved,
-		Note:         route.Note,
-		Starred:      route.Starred,
-		Tags:         tags,
-		SegmentCount: int64(len(segments)),
-		Segments:     segResponses,
-		Geometry:     geometry,
+		DongleID:      route.DongleID,
+		RouteName:     route.RouteName,
+		StartTime:     startTime,
+		EndTime:       endTime,
+		Preserved:     route.Preserved,
+		Note:          route.Note,
+		Starred:       route.Starred,
+		Tags:          tags,
+		SegmentCount:  int64(len(segments)),
+		Segments:      segResponses,
+		Geometry:      geometry,
+		GeometryTimes: geometryTimes,
 	})
 }
 
-// lookupRouteGeometry returns the route's GPS track as [lat, lng] pairs.
-// A missing, NULL, or unparseable geometry yields an empty slice rather
-// than an error: the trip detail view degrades gracefully to "no map"
-// instead of failing the whole request.
-func lookupRouteGeometry(ctx context.Context, queries *db.Queries, dongleID, routeName string) [][2]float64 {
-	wkt, err := queries.GetRouteGeometryWKT(ctx, db.GetRouteGeometryWKTParams{
+// lookupRouteGeometry returns the route's GPS track as [lat, lng] pairs and
+// the parallel route-relative-millisecond timestamps for each vertex. A
+// missing, NULL, or unparseable geometry yields an empty slice rather than
+// an error: the trip detail view degrades gracefully to "no map" instead
+// of failing the whole request. The times slice is nil whenever the row's
+// geometry_times column is NULL (un-backfilled route) OR the parallel-array
+// invariant doesn't hold (worker bug somewhere upstream); in either case
+// the frontend falls back to time-fraction indexing.
+func lookupRouteGeometry(ctx context.Context, queries *db.Queries, dongleID, routeName string) ([][2]float64, []int64) {
+	res, err := queries.GetRouteGeometryAndTimes(ctx, db.GetRouteGeometryWKTParams{
 		DongleID:  dongleID,
 		RouteName: routeName,
 	})
 	if err != nil {
-		return [][2]float64{}
+		return [][2]float64{}, nil
 	}
-	if !wkt.Valid || strings.TrimSpace(wkt.String) == "" {
-		return [][2]float64{}
+	if !res.WKT.Valid || strings.TrimSpace(res.WKT.String) == "" {
+		return [][2]float64{}, nil
 	}
-	points, err := parseLineStringWKT(wkt.String)
+	points, err := parseLineStringWKT(res.WKT.String)
 	if err != nil {
-		return [][2]float64{}
+		return [][2]float64{}, nil
 	}
 	out := make([][2]float64, 0, len(points))
 	for _, p := range points {
 		out = append(out, [2]float64{p.Lat, p.Lon})
 	}
-	return out
+	// Defense in depth: only surface times to the frontend when the
+	// parallel-array invariant actually holds. A length mismatch means
+	// either the worker wrote inconsistent state or the row has been
+	// edited out of band; in either case the time-fraction fallback is
+	// safer than an off-by-one bisection.
+	var times []int64
+	if len(res.Times) == len(out) && len(out) > 0 {
+		times = res.Times
+	}
+	return out, times
 }
 
 // knownListRoutesParams is the set of query-string keys accepted by

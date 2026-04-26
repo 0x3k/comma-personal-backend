@@ -114,7 +114,7 @@ func (q *Queries) CountRoutesByDeviceFiltered(ctx context.Context, arg CountRout
 const createRoute = `-- name: CreateRoute :one
 INSERT INTO routes (dongle_id, route_name, start_time, end_time)
 VALUES ($1, $2, $3, $4)
-RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 `
 
 type CreateRouteParams struct {
@@ -143,6 +143,7 @@ func (q *Queries) CreateRoute(ctx context.Context, arg CreateRouteParams) (Route
 		&i.Preserved,
 		&i.Note,
 		&i.Starred,
+		&i.GeometryTimes,
 	)
 	return i, err
 }
@@ -160,7 +161,7 @@ func (q *Queries) DeleteRoute(ctx context.Context, id int32) error {
 }
 
 const getRoute = `-- name: GetRoute :one
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 FROM routes
 WHERE dongle_id = $1 AND route_name = $2
 `
@@ -184,12 +185,13 @@ func (q *Queries) GetRoute(ctx context.Context, arg GetRouteParams) (Route, erro
 		&i.Preserved,
 		&i.Note,
 		&i.Starred,
+		&i.GeometryTimes,
 	)
 	return i, err
 }
 
 const getRouteByID = `-- name: GetRouteByID :one
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 FROM routes
 WHERE id = $1
 `
@@ -208,12 +210,13 @@ func (q *Queries) GetRouteByID(ctx context.Context, id int32) (Route, error) {
 		&i.Preserved,
 		&i.Note,
 		&i.Starred,
+		&i.GeometryTimes,
 	)
 	return i, err
 }
 
 const listPreservedRoutes = `-- name: ListPreservedRoutes :many
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 FROM routes
 WHERE preserved = true
 ORDER BY created_at DESC
@@ -239,6 +242,7 @@ func (q *Queries) ListPreservedRoutes(ctx context.Context) ([]Route, error) {
 			&i.Preserved,
 			&i.Note,
 			&i.Starred,
+			&i.GeometryTimes,
 		); err != nil {
 			return nil, err
 		}
@@ -251,7 +255,7 @@ func (q *Queries) ListPreservedRoutes(ctx context.Context) ([]Route, error) {
 }
 
 const listRoutesByDevice = `-- name: ListRoutesByDevice :many
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 FROM routes
 WHERE dongle_id = $1
 ORDER BY created_at DESC
@@ -277,6 +281,7 @@ func (q *Queries) ListRoutesByDevice(ctx context.Context, dongleID string) ([]Ro
 			&i.Preserved,
 			&i.Note,
 			&i.Starred,
+			&i.GeometryTimes,
 		); err != nil {
 			return nil, err
 		}
@@ -289,7 +294,7 @@ func (q *Queries) ListRoutesByDevice(ctx context.Context, dongleID string) ([]Ro
 }
 
 const listRoutesByDevicePaginated = `-- name: ListRoutesByDevicePaginated :many
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 FROM routes
 WHERE dongle_id = $1
 ORDER BY created_at DESC, id DESC
@@ -322,6 +327,7 @@ func (q *Queries) ListRoutesByDevicePaginated(ctx context.Context, arg ListRoute
 			&i.Preserved,
 			&i.Note,
 			&i.Starred,
+			&i.GeometryTimes,
 		); err != nil {
 			return nil, err
 		}
@@ -334,7 +340,7 @@ func (q *Queries) ListRoutesByDevicePaginated(ctx context.Context, arg ListRoute
 }
 
 const listStaleRoutes = `-- name: ListStaleRoutes :many
-SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+SELECT id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 FROM routes
 WHERE preserved = false
   AND end_time IS NOT NULL
@@ -371,6 +377,7 @@ func (q *Queries) ListStaleRoutes(ctx context.Context, arg ListStaleRoutesParams
 			&i.Preserved,
 			&i.Note,
 			&i.Starred,
+			&i.GeometryTimes,
 		); err != nil {
 			return nil, err
 		}
@@ -386,7 +393,7 @@ const setRouteNote = `-- name: SetRouteNote :one
 UPDATE routes
 SET note = $2
 WHERE id = $1
-RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 `
 
 type SetRouteNoteParams struct {
@@ -409,6 +416,7 @@ func (q *Queries) SetRouteNote(ctx context.Context, arg SetRouteNoteParams) (Rou
 		&i.Preserved,
 		&i.Note,
 		&i.Starred,
+		&i.GeometryTimes,
 	)
 	return i, err
 }
@@ -417,7 +425,7 @@ const setRoutePreserved = `-- name: SetRoutePreserved :one
 UPDATE routes
 SET preserved = $3
 WHERE dongle_id = $1 AND route_name = $2
-RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 `
 
 type SetRoutePreservedParams struct {
@@ -440,6 +448,7 @@ func (q *Queries) SetRoutePreserved(ctx context.Context, arg SetRoutePreservedPa
 		&i.Preserved,
 		&i.Note,
 		&i.Starred,
+		&i.GeometryTimes,
 	)
 	return i, err
 }
@@ -448,7 +457,7 @@ const setRouteStarred = `-- name: SetRouteStarred :one
 UPDATE routes
 SET starred = $2
 WHERE id = $1
-RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred
+RETURNING id, dongle_id, route_name, start_time, end_time, geometry, created_at, preserved, note, starred, geometry_times
 `
 
 type SetRouteStarredParams struct {
@@ -471,6 +480,7 @@ func (q *Queries) SetRouteStarred(ctx context.Context, arg SetRouteStarredParams
 		&i.Preserved,
 		&i.Note,
 		&i.Starred,
+		&i.GeometryTimes,
 	)
 	return i, err
 }
@@ -483,23 +493,54 @@ SET start_time = COALESCE($1::timestamptz, start_time),
         WHEN $3::text IS NULL THEN geometry
         WHEN ST_NumPoints(ST_GeomFromText($3::text, 4326)) < 2 THEN geometry
         ELSE ST_GeomFromText($3::text, 4326)
+    END,
+    geometry_times = CASE
+        -- No new times supplied: keep whatever is on the row.
+        WHEN $4::bigint[] IS NULL THEN geometry_times
+        -- New times supplied but the matching geometry would be invalid /
+        -- single-point: drop the times too so the parallel-array invariant
+        -- never breaks. (When geometry_wkt is NULL we still know the row's
+        -- geometry from the SET above resolves to the existing column.)
+        WHEN $3::text IS NOT NULL
+             AND ST_NumPoints(ST_GeomFromText($3::text, 4326)) < 2
+             THEN geometry_times
+        -- New times supplied alongside new geometry: enforce parallel-array
+        -- length. Mismatch (e.g. a worker bug truncated one but not the
+        -- other) drops the times rather than write a corrupt row.
+        WHEN $3::text IS NOT NULL
+             AND ST_NumPoints(ST_GeomFromText($3::text, 4326))
+                 <> COALESCE(array_length($4::bigint[], 1), 0)
+             THEN geometry_times
+        -- New times supplied without new geometry: must match the existing
+        -- geometry's vertex count, else drop.
+        WHEN $3::text IS NULL
+             AND geometry IS NOT NULL
+             AND ST_NumPoints(geometry)
+                 <> COALESCE(array_length($4::bigint[], 1), 0)
+             THEN geometry_times
+        -- Times supplied without any geometry (existing or new) is a no-op
+        -- for the column: nothing to align against.
+        WHEN $3::text IS NULL AND geometry IS NULL
+             THEN geometry_times
+        ELSE $4::bigint[]
     END
-WHERE id = $4
+WHERE id = $5
 `
 
 type UpdateRouteMetadataParams struct {
-	StartTime   pgtype.Timestamptz `json:"startTime"`
-	EndTime     pgtype.Timestamptz `json:"endTime"`
-	GeometryWkt pgtype.Text        `json:"geometryWkt"`
-	ID          int32              `json:"id"`
+	StartTime       pgtype.Timestamptz `json:"startTime"`
+	EndTime         pgtype.Timestamptz `json:"endTime"`
+	GeometryWkt     pgtype.Text        `json:"geometryWkt"`
+	GeometryTimesMs []int64            `json:"geometryTimesMs"`
+	ID              int32              `json:"id"`
 }
 
-// Writes any subset of (start_time, end_time, geometry) onto the routes row,
-// leaving the columns the caller did not supply untouched. NULL inputs mean
-// "do not change this column" -- a partial extraction (e.g. timestamps were
-// recovered but GPS samples were not) does not stomp prior data, and re-runs
-// of the metadata worker are idempotent for the columns whose source data
-// has not changed.
+// Writes any subset of (start_time, end_time, geometry, geometry_times) onto
+// the routes row, leaving the columns the caller did not supply untouched.
+// NULL inputs mean "do not change this column" -- a partial extraction (e.g.
+// timestamps were recovered but GPS samples were not) does not stomp prior
+// data, and re-runs of the metadata worker are idempotent for the columns
+// whose source data has not changed.
 //
 // Geometry is built from a WKT string via ST_GeomFromText with SRID 4326.
 // The caller is responsible for emitting WKT only when there are at least
@@ -507,12 +548,16 @@ type UpdateRouteMetadataParams struct {
 // when the parsed WKT yields a LINESTRING with ST_NumPoints >= 2 -- a
 // single-point or empty WKT is silently dropped so a malformed extraction
 // does not corrupt the routes row downstream consumers (trip aggregator,
-// map view) read from.
+// map view) read from. The same guard applies to geometry_times: we drop
+// the input if it would not match ST_NumPoints of the geometry that lands
+// on the row, so the parallel-array invariant (length(geometry_times) ==
+// ST_NumPoints(geometry)) is enforced server-side regardless of caller bugs.
 func (q *Queries) UpdateRouteMetadata(ctx context.Context, arg UpdateRouteMetadataParams) error {
 	_, err := q.db.Exec(ctx, updateRouteMetadata,
 		arg.StartTime,
 		arg.EndTime,
 		arg.GeometryWkt,
+		arg.GeometryTimesMs,
 		arg.ID,
 	)
 	return err
