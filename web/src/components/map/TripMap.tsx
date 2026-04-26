@@ -17,6 +17,27 @@ export interface TripMapProps {
   coordinates: LatLngTuple[];
   /** Optional CSS class for the outer container. */
   className?: string;
+  /**
+   * Live "current car position" along the polyline. Pass null to hide the
+   * marker. The route-detail page derives this from the playback head via
+   * positionForTime() so the dot tracks the video at ~4Hz.
+   */
+  currentPosition?: [number, number] | null;
+  /**
+   * Per-vertex route-relative milliseconds, parallel to `coordinates` (same
+   * length when both are present). Forwarded to the click-to-seek path so a
+   * click on the polyline can be translated back to a route-relative second.
+   */
+  geometryTimes?: number[] | null;
+  /** Total route duration in seconds, used by the fraction fallback when
+   *  `geometryTimes` is missing. */
+  totalDurationSec?: number;
+  /**
+   * Called when the user clicks on (or close to) the polyline. Receives a
+   * route-relative second so the caller can hand it to RoutePlayer.seekRoute.
+   * When omitted the map is read-only and the click handler is not wired.
+   */
+  onSeek?: (routeRelativeSec: number) => void;
 }
 
 /**
@@ -36,7 +57,14 @@ export interface TripMapProps {
  * the map reads as a bright inset rather than a FOIT. Revisit if a future
  * tile provider becomes part of the stack.
  */
-export default function TripMap({ coordinates, className }: TripMapProps) {
+export default function TripMap({
+  coordinates,
+  className,
+  currentPosition,
+  geometryTimes,
+  totalDurationSec,
+  onSeek,
+}: TripMapProps) {
   if (!coordinates || coordinates.length === 0) {
     return (
       <div
@@ -53,7 +81,14 @@ export default function TripMap({ coordinates, className }: TripMapProps) {
       className={`rounded-lg overflow-hidden ${className ?? ""}`}
       style={{ minHeight: "300px" }}
     >
-      <TripMapInner coordinates={coordinates} className="h-full w-full" />
+      <TripMapInner
+        coordinates={coordinates}
+        className="h-full w-full"
+        currentPosition={currentPosition ?? null}
+        geometryTimes={geometryTimes ?? null}
+        totalDurationSec={totalDurationSec ?? 0}
+        onSeek={onSeek}
+      />
     </div>
   );
 }

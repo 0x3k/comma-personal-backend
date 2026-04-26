@@ -62,6 +62,15 @@ export interface RouteDetailResponse {
   segments: Segment[];
   /** GPS track as an array of [lat, lng] coordinate pairs. May be null/empty. */
   geometry?: [number, number][] | null;
+  /**
+   * Per-vertex route-relative milliseconds, parallel to `geometry` (same length
+   * when both are present). Used by the map to bisect by time so the live
+   * "current car position" dot lingers at stops instead of jumping past them.
+   * Omitted by the backend when the route's metadata predates the column or
+   * the worker has not backfilled it yet -- callers should fall back to
+   * time-fraction indexing in that case.
+   */
+  geometryTimes?: number[] | null;
 }
 
 /** A single device configuration parameter as returned by the config API. */

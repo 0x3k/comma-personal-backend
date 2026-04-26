@@ -165,6 +165,11 @@ func (w *RouteMetadataWorker) processRoute(ctx context.Context, r db.RouteNeedin
 	}
 	if wkt := buildLineStringWKT(meta.Track); wkt != "" {
 		params.GeometryWkt = pgtype.Text{String: wkt, Valid: true}
+		// Per-vertex times are written in lockstep with the WKT so the
+		// parallel-array invariant (length(geometry_times) ==
+		// ST_NumPoints(geometry)) is preserved at every write. The SQL
+		// layer also enforces this server-side as defense in depth.
+		params.GeometryTimesMs = buildTrackTimesMs(meta.Track, meta.StartTime)
 	}
 
 	if !params.StartTime.Valid && !params.EndTime.Valid && !params.GeometryWkt.Valid {
@@ -256,4 +261,40 @@ func buildLineStringWKT(track []cereal.GpsPoint) string {
 	}
 	b.WriteByte(')')
 	return b.String()
+}
+
+// buildTrackTimesMs renders a slice of GPS points as a parallel-array of
+// route-relative milliseconds (point.Time - startTime, in ms). The output
+// length matches the WKT vertex count so the parallel-array invariant
+// (length(geometry_times) == ST_NumPoints(geometry)) holds when both are
+// fed into UpdateRouteMetadata in lockstep.
+//
+// Returns nil when the input has fewer than two points, because the WKT
+// helper drops single-point tracks too -- writing times without geometry
+// would corrupt the parallel-array invariant on the next read.
+//
+// Times are clamped to zero when point.Time precedes startTime (a stale
+// RTC at the head of a route can produce a wallTimeNanos that's a few
+// seconds ahead of the first GPS fix; treating it as -2000 ms would
+// confuse the bisection on the frontend). Points with a zero Time
+// (extractor could not derive one) are written as zero rather than
+// dropped, so the index alignment with geometry stays exact.
+func buildTrackTimesMs(track []cereal.GpsPoint, startTime time.Time) []int64 {
+	if len(track) < 2 {
+		return nil
+	}
+	out := make([]int64, len(track))
+	if startTime.IsZero() {
+		// No anchor: every offset is meaningless. Leave zeroes; the
+		// frontend will still render the dot via the fraction fallback.
+		return out
+	}
+	for i, p := range track {
+		if p.Time.IsZero() {
+			out[i] = 0
+			continue
+		}
+		out[i] = max(p.Time.Sub(startTime).Milliseconds(), 0)
+	}
+	return out
 }

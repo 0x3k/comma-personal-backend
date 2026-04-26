@@ -63,6 +63,8 @@ type Route struct {
 	Preserved bool               `json:"preserved"`
 	Note      string             `json:"note"`
 	Starred   bool               `json:"starred"`
+	// Route-relative milliseconds for each vertex of routes.geometry, parallel array (length matches ST_NumPoints(geometry)). NULL for routes whose metadata predates the column; backfilled by the route metadata worker on its next pass.
+	GeometryTimes []int64 `json:"geometryTimes"`
 }
 
 type RouteDataRequest struct {

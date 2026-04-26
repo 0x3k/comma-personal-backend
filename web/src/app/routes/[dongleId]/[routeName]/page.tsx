@@ -1,16 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { apiFetch, BASE_URL } from "@/lib/api";
 import type { LogEntry, RouteDetailResponse, Segment } from "@/lib/types";
-import {
-  MultiCameraPlayer,
-  type CameraType,
-} from "@/components/video/MultiCameraPlayer";
+import { type CameraType } from "@/components/video/MultiCameraPlayer";
 import { SignalTimeline } from "@/components/video/SignalTimeline";
-import type { VideoPlayerHandle } from "@/components/video/VideoPlayer";
+import {
+  RoutePlayer,
+  type RoutePlayerHandle,
+} from "@/components/video/RoutePlayer";
 import { PageWrapper } from "@/components/layout/PageWrapper";
 import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
@@ -18,6 +18,8 @@ import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Button } from "@/components/ui/Button";
 import TripMap from "@/components/map/TripMap";
+import { positionForTime } from "@/lib/routePosition";
+import { SEGMENT_DURATION_SEC } from "@/components/video/useRoutePlayback";
 import { LogViewer } from "@/components/logs/LogViewer";
 import { ShareButton } from "@/components/ShareButton";
 import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
@@ -90,20 +92,20 @@ export default function RouteDetailPage() {
   const [route, setRoute] = useState<RouteDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedSegment, setSelectedSegment] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<DetailTab>("segments");
   const [logs, setLogs] = useState<LogEntry[]>([]);
   // Deep-link support for /moments: when the URL carries ?t=<seconds>, we
-  // auto-select the segment that contains that offset, then use the player
-  // handle to seek into it once it mounts. `pendingSeekSec` holds the
-  // segment-relative seek target between segment selection and player mount.
-  const [pendingSeekSec, setPendingSeekSec] = useState<number | null>(null);
-  // Video player -- `playerRef` lets us imperatively seek the selected segment,
-  // while `currentTime` is the native (segment-relative) playback position
-  // mirrored from the player's timeupdate callback. `setCurrentTime` fires
-  // many times per second during playback, so downstream code is kept light.
-  const playerRef = useRef<VideoPlayerHandle | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
+  // forward the route-relative target to the player handle once it mounts.
+  const [pendingDeepLinkSec, setPendingDeepLinkSec] = useState<number | null>(
+    null,
+  );
+  // RoutePlayer publishes route-relative time via onTimeUpdate; SignalTimeline
+  // and the segment list highlight derive from this single source of truth.
+  const playerRef = useRef<RoutePlayerHandle | null>(null);
+  const [routeRelativeTime, setRouteRelativeTime] = useState(0);
+  const [currentSegmentNum, setCurrentSegmentNum] = useState<number | null>(
+    null,
+  );
 
   const fetchRoute = useCallback(async () => {
     setLoading(true);
@@ -126,12 +128,6 @@ export default function RouteDetailPage() {
     void fetchRoute();
   }, [fetchRoute]);
 
-  // Reset the playhead whenever the selected segment changes, so the signal
-  // timeline doesn't briefly render a stale position from the previous clip.
-  useEffect(() => {
-    setCurrentTime(0);
-  }, [selectedSegment]);
-
   // Populate placeholder log entries when the route loads.
   // Replace with a real API call once the backend exposes parsed log data.
   useEffect(() => {
@@ -143,55 +139,53 @@ export default function RouteDetailPage() {
     setLogs(sample);
   }, [route]);
 
-  // Read ?t=<seconds> once the route loads and pick the matching segment.
-  // Segments are 1-minute chunks by comma convention so the floor(t/60)
-  // computes the segment index. If the exact segment isn't present (e.g.
-  // partial upload), fall back to the first segment with video so the
-  // user at least lands somewhere watchable.
+  // Read ?t=<seconds> once the route loads and forward the route-relative
+  // target to the RoutePlayer handle. RoutePlayer owns segment switching, so
+  // we just hand it the absolute time and let it resolve segment + local seek.
   useEffect(() => {
     if (!route) return;
     const tRaw = searchParams.get("t");
     if (tRaw === null) return;
     const t = parseFloat(tRaw);
     if (!Number.isFinite(t) || t < 0) return;
-    const targetNum = Math.floor(t / 60);
-    const preferred = route.segments.find(
-      (s) => s.number === targetNum && getAvailableCameras(s).length > 0,
-    );
-    const fallback = route.segments.find(
-      (s) => getAvailableCameras(s).length > 0,
-    );
-    const chosen = preferred ?? fallback;
-    if (!chosen) return;
-    setSelectedSegment(chosen.number);
-    const segLocal = Math.max(0, Math.min(60, t - chosen.number * 60));
-    setPendingSeekSec(segLocal);
+    setPendingDeepLinkSec(t);
   }, [route, searchParams]);
 
-  // Best-effort seek: once the player handle is available, use its seek
-  // method. Retries briefly so hls.js has time to attach the media element.
   useEffect(() => {
-    if (pendingSeekSec === null) return;
+    if (pendingDeepLinkSec === null) return;
     let cancelled = false;
     let attempts = 0;
     const tryFlush = () => {
       if (cancelled) return;
       if (playerRef.current) {
-        playerRef.current.seek(pendingSeekSec);
-        setPendingSeekSec(null);
+        playerRef.current.seekRoute(pendingDeepLinkSec);
+        setPendingDeepLinkSec(null);
         return;
       }
       if (attempts++ < 40) {
         window.setTimeout(tryFlush, 100);
       } else {
-        setPendingSeekSec(null);
+        setPendingDeepLinkSec(null);
       }
     };
     tryFlush();
     return () => {
       cancelled = true;
     };
-  }, [pendingSeekSec, selectedSegment]);
+  }, [pendingDeepLinkSec]);
+
+  // Live "current car position" for the map dot, derived from the playback
+  // head. Recomputes at the same ~4Hz cadence as routeRelativeTime; the
+  // helper is pure so the cost is a single binary search per tick.
+  const currentMapPosition = useMemo(() => {
+    if (!route) return null;
+    return positionForTime(
+      route.geometry ?? null,
+      route.geometryTimes ?? null,
+      routeRelativeTime,
+      route.segmentCount * SEGMENT_DURATION_SEC,
+    );
+  }, [route, routeRelativeTime]);
 
   return (
     <PageWrapper>
@@ -296,78 +290,66 @@ export default function RouteDetailPage() {
           {/* GPS track map */}
           <Card className="mb-6">
             <CardHeader>
-              <h2 className="text-subheading text-[var(--text-primary)]">
-                GPS Track
-              </h2>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-subheading text-[var(--text-primary)]">
+                  GPS Track
+                </h2>
+                {(route.geometry?.length ?? 0) >= 2 && (
+                  <span className="text-caption">
+                    Click the route to seek
+                  </span>
+                )}
+              </div>
             </CardHeader>
             <CardBody>
               <TripMap
                 coordinates={route.geometry ?? []}
                 className="h-[400px] w-full"
+                currentPosition={currentMapPosition}
+                geometryTimes={route.geometryTimes ?? null}
+                totalDurationSec={route.segmentCount * SEGMENT_DURATION_SEC}
+                onSeek={(sec) => {
+                  playerRef.current?.seekRoute(sec);
+                }}
               />
             </CardBody>
           </Card>
 
-          {/* Video player for selected segment */}
-          {selectedSegment !== null && (() => {
-            const seg = route.segments.find((s) => s.number === selectedSegment);
-            if (!seg) return null;
-            const cameras = getAvailableCameras(seg);
-            if (cameras.length === 0) return null;
-            // Segments are 1-minute chunks per the comma convention, so
-            // segment N starts at N*60 seconds into the route. The timeline
-            // uses that offset to map the segment-relative playhead to a
-            // route-relative time.
-            const segmentOffsetSec = seg.number * 60;
-            return (
-              <Card className="mb-6">
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-subheading text-[var(--text-primary)]">
-                      Segment {seg.number}
-                    </h2>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setSelectedSegment(null)}
-                    >
-                      Close
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardBody>
-                  <div className="flex flex-col gap-4">
-                    <MultiCameraPlayer
-                      ref={playerRef}
-                      segmentBaseUrl={buildSegmentBaseUrl(
-                        dongleId,
-                        routeName,
-                        seg.number,
-                      )}
-                      availableCameras={cameras}
-                      onTimeUpdate={setCurrentTime}
-                    />
-                    <SignalTimeline
-                      dongleId={dongleId}
-                      routeName={routeName}
-                      currentTime={currentTime}
-                      segmentOffsetSec={segmentOffsetSec}
-                      onSeek={(routeRelativeSec) => {
-                        // Convert route-relative seek target back into the
-                        // current segment's local time. If the click lands
-                        // outside this segment we just clamp to its own
-                        // range -- a multi-segment player would route the
-                        // seek to the correct segment instead.
-                        const segLocal = routeRelativeSec - segmentOffsetSec;
-                        const clamped = Math.max(0, Math.min(segLocal, 60));
-                        playerRef.current?.seek(clamped);
-                      }}
-                    />
-                  </div>
-                </CardBody>
-              </Card>
-            );
-          })()}
+          {/* Continuous, multi-source video player + route-wide signal
+              timeline. The player auto-advances across segments and exposes
+              a seekRoute handle that the timeline + segment list use to
+              jump anywhere in the route. */}
+          {route.segments.length > 0 && (
+            <Card className="mb-6">
+              <CardHeader>
+                <h2 className="text-subheading text-[var(--text-primary)]">
+                  Trip playback
+                </h2>
+              </CardHeader>
+              <CardBody>
+                <div className="flex flex-col gap-4">
+                  <RoutePlayer
+                    ref={playerRef}
+                    segments={route.segments}
+                    buildSegmentBaseUrl={(segNum) =>
+                      buildSegmentBaseUrl(dongleId, routeName, segNum)
+                    }
+                    onTimeUpdate={setRouteRelativeTime}
+                    onCurrentSegmentChange={setCurrentSegmentNum}
+                  />
+                  <SignalTimeline
+                    dongleId={dongleId}
+                    routeName={routeName}
+                    currentTime={routeRelativeTime}
+                    segmentOffsetSec={0}
+                    onSeek={(routeRelativeSec) => {
+                      playerRef.current?.seekRoute(routeRelativeSec);
+                    }}
+                  />
+                </div>
+              </CardBody>
+            </Card>
+          )}
 
           {/* Tabs */}
           <div className="mb-4 flex gap-1 border-b border-[var(--border-primary)]">
@@ -405,14 +387,24 @@ export default function RouteDetailPage() {
                   {route.segments.map((segment) => {
                     const cameras = getAvailableCameras(segment);
                     const hasVideo = cameras.length > 0;
-                    const isSelected = selectedSegment === segment.number;
+                    const isCurrent = currentSegmentNum === segment.number;
                     return (
-                      <Card key={segment.number}>
+                      <Card
+                        key={segment.number}
+                        className={
+                          isCurrent
+                            ? "ring-2 ring-[var(--accent)]"
+                            : undefined
+                        }
+                      >
                         <CardBody className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-center gap-3">
                             <span className="text-sm font-medium text-[var(--text-primary)] tabular-nums">
                               Segment {segment.number}
                             </span>
+                            {isCurrent && (
+                              <Badge variant="success">Now playing</Badge>
+                            )}
                             <Badge variant="info">
                               {computeUploadProgress(segment)} files
                             </Badge>
@@ -430,15 +422,15 @@ export default function RouteDetailPage() {
                             </div>
                             {hasVideo && (
                               <Button
-                                variant={isSelected ? "primary" : "secondary"}
+                                variant={isCurrent ? "primary" : "secondary"}
                                 size="sm"
                                 onClick={() =>
-                                  setSelectedSegment(
-                                    isSelected ? null : segment.number,
+                                  playerRef.current?.seekRoute(
+                                    segment.number * 60,
                                   )
                                 }
                               >
-                                {isSelected ? "Playing" : "Play"}
+                                Jump to
                               </Button>
                             )}
                           </div>
