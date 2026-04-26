@@ -438,10 +438,39 @@ func TestUploadFileBootLog(t *testing.T) {
 	}
 }
 
-// TODO(WIP): TestParseBootPath references parseBootPath, which is not yet
-// implemented. Re-enable this test once parseBootPath lands in upload.go.
 func TestParseBootPath(t *testing.T) {
-	t.Skip("parseBootPath helper not yet implemented")
+	tests := []struct {
+		name    string
+		path    string
+		wantID  string
+		wantErr bool
+	}{
+		{name: "standard boot id", path: "boot/00000022--e1b4cb408a.zst", wantID: "00000022--e1b4cb408a"},
+		{name: "missing prefix", path: "00000022--e1b4cb408a.zst", wantErr: true},
+		{name: "missing .zst", path: "boot/something", wantErr: true},
+		{name: "wrong extension", path: "boot/something.bz2", wantErr: true},
+		{name: "empty id", path: "boot/.zst", wantErr: true},
+		{name: "path traversal", path: "boot/../passwd.zst", wantErr: true},
+		{name: "nested slash", path: "boot/sub/file.zst", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, err := parseBootPath(tt.path)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got id=%q", id)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != tt.wantID {
+				t.Errorf("id = %q, want %q", id, tt.wantID)
+			}
+		})
+	}
 }
 
 func TestParsePath(t *testing.T) {
