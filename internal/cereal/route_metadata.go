@@ -50,6 +50,16 @@ import (
 // large enough to suppress identical samples on a stationary vehicle.
 const gpsDedupeEpsilonDeg = 1e-6
 
+// maxInitDataDriftFromGPS is the largest plausible gap between
+// initData.wallTimeNanos and the first GPS-derived wall-clock time. When
+// this is exceeded we treat initData as a stale-RTC artifact (the device
+// booted with a cached/old clock that hadn't yet been corrected by NTP
+// or GPS) and fall back to the GPS envelope for start/end timestamps.
+// Even a marathon coast-to-coast drive fits comfortably under 24h, so a
+// gap larger than that is overwhelmingly more likely to be a clock bug
+// than a real route duration.
+const maxInitDataDriftFromGPS = 24 * time.Hour
+
 // gpsLatLonValid is a sanity range for a GPS fix. Devices occasionally
 // emit (0, 0) or NaN before they have a real fix even when hasFix is true;
 // rejecting points outside this envelope keeps the LineString anchored to
@@ -246,25 +256,50 @@ func (e *RouteMetadataExtractor) ExtractRouteMetadata(r io.Reader) (*RouteMetada
 		return nil, err
 	}
 
-	// Choose the start/end timestamps. initData wins when available; fall
-	// back to the GPS-derived envelope otherwise.
+	// Choose the start/end timestamps. initData is normally the most
+	// authoritative anchor (the device stamps it before any GPS lock,
+	// so it's strictly earlier than the first GPS sample), but it's
+	// only as good as the device's wall-clock at boot. When the RTC is
+	// stale and GPS later supplies a corrected time, initData can be
+	// hours or even weeks behind the actual route -- we detect that by
+	// comparing it against the GPS envelope and fall back to GPS when
+	// the gap is too large to be plausible. See maxInitDataDriftFromGPS.
 	switch {
-	case !initWallTime.IsZero():
-		out.StartTime = initWallTime
-		// EndTime: prefer the latest GPS-derived time when available;
-		// otherwise keep StartTime so duration computes to zero rather
-		// than NULL.
-		if !fallbackLast.IsZero() && fallbackLast.After(initWallTime) {
+	case !initWallTime.IsZero() && !fallbackFirst.IsZero():
+		if absDuration(fallbackFirst.Sub(initWallTime)) > maxInitDataDriftFromGPS {
+			// initData wall-clock is too far from GPS to trust;
+			// the GPS envelope is the truth.
+			out.StartTime = fallbackFirst
 			out.EndTime = fallbackLast
 		} else {
-			out.EndTime = initWallTime
+			out.StartTime = initWallTime
+			if fallbackLast.After(initWallTime) {
+				out.EndTime = fallbackLast
+			} else {
+				out.EndTime = initWallTime
+			}
 		}
+	case !initWallTime.IsZero():
+		// No GPS at all: initData is the only anchor we have; treat
+		// the route as zero-duration so duration_seconds rounds to 0
+		// rather than being NULL.
+		out.StartTime = initWallTime
+		out.EndTime = initWallTime
 	default:
 		out.StartTime = fallbackFirst
 		out.EndTime = fallbackLast
 	}
 
 	return out, nil
+}
+
+// absDuration returns the absolute value of d. Used for symmetric
+// drift comparisons where the sign of the gap doesn't matter.
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }
 
 // gpsTime converts a Unix-millisecond timestamp from a GPS event into a

@@ -220,6 +220,170 @@ func TestRouteMetadataExtractor_NoInitDataFallsBackToGps(t *testing.T) {
 	}
 }
 
+// TestRouteMetadataExtractor_StaleInitDataFallsBackToGps covers the
+// stale-RTC scenario: the device boots with a wall-clock that is weeks
+// behind the actual time (RTC battery dead, no NTP yet) so initData
+// stamps a March wallTimeNanos onto a route that GPS later confirms
+// happened in April. The extractor must reject the wildly off initData
+// in favour of the GPS envelope; otherwise the trip gets a 30-day
+// duration that pollutes every dashboard total downstream.
+func TestRouteMetadataExtractor_StaleInitDataFallsBackToGps(t *testing.T) {
+	var buf bytes.Buffer
+	enc := capnp.NewEncoder(&buf)
+
+	staleInit := time.Date(2026, 3, 24, 13, 46, 17, 0, time.UTC)
+	gpsStart := time.Date(2026, 4, 23, 17, 5, 30, 0, time.UTC)
+	gpsEnd := gpsStart.Add(9 * time.Minute)
+
+	type frame struct {
+		monoTimeNs uint64
+		isInitData bool
+		isGps      bool
+		gpsLat     float64
+		gpsLng     float64
+		gpsTimeMs  int64
+		gpsHasFix  bool
+		initWallNs uint64
+	}
+	frames := []frame{
+		{monoTimeNs: 0, isInitData: true, initWallNs: uint64(staleInit.UnixNano())},
+		{monoTimeNs: 1_000_000, isGps: true, gpsHasFix: true,
+			gpsLat: 37.700, gpsLng: -122.400, gpsTimeMs: gpsStart.UnixMilli()},
+		{monoTimeNs: 540_000_000_000, isGps: true, gpsHasFix: true,
+			gpsLat: 37.701, gpsLng: -122.399, gpsTimeMs: gpsEnd.UnixMilli()},
+	}
+
+	for i, fr := range frames {
+		msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
+		if err != nil {
+			t.Fatalf("frame %d: NewMessage: %v", i, err)
+		}
+		evt, err := schema.NewRootEvent(seg)
+		if err != nil {
+			t.Fatalf("frame %d: NewRootEvent: %v", i, err)
+		}
+		evt.SetLogMonoTime(fr.monoTimeNs)
+		evt.SetValid(true)
+		switch {
+		case fr.isInitData:
+			id, err := evt.NewInitData()
+			if err != nil {
+				t.Fatalf("frame %d: NewInitData: %v", i, err)
+			}
+			id.SetWallTimeNanos(fr.initWallNs)
+		case fr.isGps:
+			gps, err := evt.NewGpsLocation()
+			if err != nil {
+				t.Fatalf("frame %d: NewGpsLocation: %v", i, err)
+			}
+			gps.SetLatitude(fr.gpsLat)
+			gps.SetLongitude(fr.gpsLng)
+			gps.SetUnixTimestampMillis(fr.gpsTimeMs)
+			gps.SetHasFix(fr.gpsHasFix)
+		}
+		if err := enc.Encode(msg); err != nil {
+			t.Fatalf("frame %d: Encode: %v", i, err)
+		}
+	}
+
+	e := &RouteMetadataExtractor{}
+	meta, err := e.ExtractRouteMetadata(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("ExtractRouteMetadata: %v", err)
+	}
+
+	if !meta.StartTime.Equal(gpsStart) {
+		t.Errorf("StartTime = %v, want %v (first GPS fix, not stale initData %v)",
+			meta.StartTime, gpsStart, staleInit)
+	}
+	if !meta.EndTime.Equal(gpsEnd) {
+		t.Errorf("EndTime = %v, want %v (last GPS fix)", meta.EndTime, gpsEnd)
+	}
+	if dur := meta.EndTime.Sub(meta.StartTime); dur > time.Hour {
+		t.Errorf("derived duration = %s, want a few minutes; stale initData was not rejected", dur)
+	}
+}
+
+// TestRouteMetadataExtractor_InitDataCloseToGpsKept verifies the inverse:
+// when the initData wall-clock is only seconds or minutes off from the
+// first GPS fix (the normal NTP-recently-synced path), it remains the
+// authoritative StartTime because it captures the boot moment that
+// precedes the first GPS lock. The drift-rejection logic must not
+// regress this common case.
+func TestRouteMetadataExtractor_InitDataCloseToGpsKept(t *testing.T) {
+	var buf bytes.Buffer
+	enc := capnp.NewEncoder(&buf)
+
+	initWall := time.Date(2024, 5, 1, 10, 0, 0, 0, time.UTC)
+	// First GPS fix is 30s after init -- a realistic time-to-first-fix.
+	gpsStart := initWall.Add(30 * time.Second)
+	gpsEnd := initWall.Add(5 * time.Minute)
+
+	type frame struct {
+		monoTimeNs uint64
+		isInitData bool
+		isGps      bool
+		gpsLat     float64
+		gpsLng     float64
+		gpsTimeMs  int64
+		gpsHasFix  bool
+		initWallNs uint64
+	}
+	frames := []frame{
+		{monoTimeNs: 0, isInitData: true, initWallNs: uint64(initWall.UnixNano())},
+		{monoTimeNs: 30_000_000_000, isGps: true, gpsHasFix: true,
+			gpsLat: 37.700, gpsLng: -122.400, gpsTimeMs: gpsStart.UnixMilli()},
+		{monoTimeNs: 300_000_000_000, isGps: true, gpsHasFix: true,
+			gpsLat: 37.701, gpsLng: -122.399, gpsTimeMs: gpsEnd.UnixMilli()},
+	}
+
+	for i, fr := range frames {
+		msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
+		if err != nil {
+			t.Fatalf("frame %d: NewMessage: %v", i, err)
+		}
+		evt, err := schema.NewRootEvent(seg)
+		if err != nil {
+			t.Fatalf("frame %d: NewRootEvent: %v", i, err)
+		}
+		evt.SetLogMonoTime(fr.monoTimeNs)
+		evt.SetValid(true)
+		switch {
+		case fr.isInitData:
+			id, err := evt.NewInitData()
+			if err != nil {
+				t.Fatalf("frame %d: NewInitData: %v", i, err)
+			}
+			id.SetWallTimeNanos(fr.initWallNs)
+		case fr.isGps:
+			gps, err := evt.NewGpsLocation()
+			if err != nil {
+				t.Fatalf("frame %d: NewGpsLocation: %v", i, err)
+			}
+			gps.SetLatitude(fr.gpsLat)
+			gps.SetLongitude(fr.gpsLng)
+			gps.SetUnixTimestampMillis(fr.gpsTimeMs)
+			gps.SetHasFix(fr.gpsHasFix)
+		}
+		if err := enc.Encode(msg); err != nil {
+			t.Fatalf("frame %d: Encode: %v", i, err)
+		}
+	}
+
+	e := &RouteMetadataExtractor{}
+	meta, err := e.ExtractRouteMetadata(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("ExtractRouteMetadata: %v", err)
+	}
+
+	if !meta.StartTime.Equal(initWall) {
+		t.Errorf("StartTime = %v, want %v (initData when within drift threshold)", meta.StartTime, initWall)
+	}
+	if !meta.EndTime.Equal(gpsEnd) {
+		t.Errorf("EndTime = %v, want %v (last GPS fix)", meta.EndTime, gpsEnd)
+	}
+}
+
 // TestRouteMetadataExtractor_NoFixYieldsEmptyTrack guards the dedupe and
 // hasFix filters: if every GPS event reports hasFix=false, the track must
 // be empty even though the lat/lng values would otherwise be valid.
