@@ -1,0 +1,21 @@
+{
+  "id": "qlog-zstd-support",
+  "name": "Cereal parser + workers: support zstd-compressed qlogs",
+  "description": "Devices running current openpilot/sunnypilot upload qlogs as qlog.zst (zstd-compressed). The cereal parser explicitly rejects zstd with ErrZstdUnsupported (internal/cereal/parser.go:73), and the event detector only looks for qlog.bz2 / qlog (internal/worker/event_detector.go:221), so the file is silently ignored. As a result no signal-derived feature works against real device data: event detection, signal API, log overlay, and (downstream) the route metadata worker. Add zstd as a third supported framing alongside bz2 and raw, and teach every reader that probes for qlogs to also accept qlog.zst.",
+  "priority": 1,
+  "status": "complete",
+  "base_branch": "main",
+  "branch": "agent/qlog-zstd-support",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/cereal/parser.go Parse() detects the zstd magic (0x28 0xB5 0x2F 0xFD) and decodes it transparently, the same way bz2 framing is handled today; ErrZstdUnsupported is removed (or kept only as a fallback for genuinely undecodable streams)",
+    "Use a maintained, pure-Go (or cgo-free) zstd decoder. Recommended: github.com/klauspost/compress/zstd (already permissive-licensed, widely used). Stream-decode -- do not buffer the whole file",
+    "Every place that currently scans for qlog files also accepts qlog.zst. Audited list: internal/worker/event_detector.go (extract loop), internal/api/signals.go (qlog reader), and any other reader the signal extractor uses. Order of preference: qlog.zst, qlog.bz2, qlog (so newer devices win without breaking historical data)",
+    "internal/cereal/parser_test.go adds a fixture that round-trips a tiny zstd-compressed qlog and verifies non-empty Event extraction; the existing bz2 / raw cases keep passing",
+    "internal/worker/event_detector_test.go (or a dedicated test) verifies that a route whose only qlog file is qlog.zst still produces signals end-to-end (mock ffmpeg-style abstraction is fine; the point is to exercise the qlog.zst branch of the file picker)",
+    "Manual verification on the deployed backend: pick a route with only qlog.zst on disk, run the event detector against it, confirm rows appear in the events table (or that detection at least completes without the 'unsupported' error path being hit)",
+    "go test ./internal/cereal/... and go test ./internal/worker/... pass",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": "Implemented in PR via cereal parser zstd magic-detect branch (klauspost/compress/zstd, streaming) plus newest-first qlogPickerOrder = [qlog.zst, qlog.bz2, qlog] in worker/event_detector.go and api/signals.go. Upload allowlist (api/upload.go) and share allowlist (api/share.go) extended to qlog.zst / rlog.zst so devices can actually upload modern logs. Tests cover: cereal parser zstd round-trip + magic-only detection + SignalExtractor zstd path; worker extract end-to-end with only qlog.zst on disk + zst-over-bz2 preference + qlogPickerOrder pin; api signals handler picks up qlog.zst end-to-end + qlogFilenames order pin. Manual deployed-backend verification skipped: not reachable from sandbox; called out in PR test plan."
+}

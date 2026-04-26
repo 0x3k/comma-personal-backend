@@ -40,8 +40,10 @@ var shareMediaFiles = map[string]bool{
 	"dcamera.hevc": false,
 	"rlog":         false,
 	"rlog.bz2":     false,
+	"rlog.zst":     false,
 	"qlog":         false,
 	"qlog.bz2":     false,
+	"qlog.zst":     false,
 }
 
 // shareMediaCameraDirs whitelists the per-camera subdirectory names that

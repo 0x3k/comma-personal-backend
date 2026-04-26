@@ -34,6 +34,8 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 }
 
 // validFilenames lists the segment file types that comma devices may upload.
+// Current openpilot/sunnypilot uploads logs as .zst; older builds used .bz2;
+// the raw form is rare but still permitted for compatibility.
 var validFilenames = map[string]bool{
 	"rlog":          true,
 	"qlog":          true,
@@ -43,19 +45,24 @@ var validFilenames = map[string]bool{
 	"qcamera.ts":    true,
 	"rlog.bz2":      true,
 	"qlog.bz2":      true,
+	"rlog.zst":      true,
+	"qlog.zst":      true,
 	"fcamera.hevc~": true,
 	"ecamera.hevc~": true,
 	"dcamera.hevc~": true,
 }
 
 // filenameToFlag maps uploaded filenames to the corresponding upload flag
-// field on the segment record. Compressed variants (e.g. rlog.bz2) and
-// in-progress markers (e.g. fcamera.hevc~) map to the same base flag.
+// field on the segment record. Compressed variants (e.g. rlog.bz2,
+// rlog.zst) and in-progress markers (e.g. fcamera.hevc~) map to the same
+// base flag.
 var filenameToFlag = map[string]string{
 	"rlog":          "rlog",
 	"rlog.bz2":      "rlog",
+	"rlog.zst":      "rlog",
 	"qlog":          "qlog",
 	"qlog.bz2":      "qlog",
+	"qlog.zst":      "qlog",
 	"fcamera.hevc":  "fcamera",
 	"fcamera.hevc~": "fcamera",
 	"ecamera.hevc":  "ecamera",

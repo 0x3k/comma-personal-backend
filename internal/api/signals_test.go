@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/klauspost/compress/zstd"
 	"github.com/labstack/echo/v4"
 
 	"comma-personal-backend/internal/api/middleware"
@@ -579,5 +580,89 @@ func TestSignals_SegmentOrdering(t *testing.T) {
 func TestSignals_SegmentIntLookup(t *testing.T) {
 	if strconv.Itoa(0) != "0" {
 		t.Fatalf("unexpected")
+	}
+}
+
+// writeZstdQlog drops a zstd-compressed qlog at qlog.zst into the storage
+// path for a segment. It compresses the supplied raw cap'n proto stream
+// and writes the framed bytes; the file picker in findQlog should then
+// pick this up ahead of any qlog.bz2 / qlog the test omits.
+func writeZstdQlog(t *testing.T, store *storage.Storage, dongle, route, segment string, data []byte) string {
+	t.Helper()
+	dir := filepath.Dir(store.Path(dongle, route, segment, "qlog.zst"))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("MkdirAll %s: %v", dir, err)
+	}
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
+	}
+	compressed := enc.EncodeAll(data, nil)
+	if err := enc.Close(); err != nil {
+		t.Fatalf("zstd close: %v", err)
+	}
+	path := filepath.Join(dir, "qlog.zst")
+	if err := os.WriteFile(path, compressed, 0644); err != nil {
+		t.Fatalf("WriteFile %s: %v", path, err)
+	}
+	return path
+}
+
+// TestSignals_PrefersZstdOverBz2OverRaw verifies the qlog file picker walks
+// qlog.zst -> qlog.bz2 -> qlog and that the zstd branch parses end-to-end
+// when only qlog.zst is on disk. This is the qlog-zstd-support feature's
+// API-side regression guard.
+func TestSignals_PrefersZstdOverBz2OverRaw(t *testing.T) {
+	const dongle = "dongle-1"
+	const route = "2024-03-15--12-30-00"
+
+	store := storage.New(t.TempDir())
+	fixture := buildQlogFixture(t)
+	writeZstdQlog(t, store, dongle, route, "0", fixture)
+
+	mock := &signalsMockDB{
+		route: newSignalsMockRoute(1, dongle, route),
+		segments: []db.Segment{
+			{ID: 1, RouteID: 1, SegmentNumber: 0, QlogUploaded: true},
+		},
+	}
+	handler := NewSignalsHandler(db.New(mock), store)
+
+	rec, c := newSignalsRequest(t, dongle, route, dongle)
+	if err := handler.GetRouteSignals(c); err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body signalsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v; raw=%s", err, rec.Body.String())
+	}
+	if len(body.Times) != 2 {
+		t.Fatalf("len(times) = %d, want 2 from qlog.zst fixture; body=%s",
+			len(body.Times), rec.Body.String())
+	}
+	if body.SpeedMPS[0] != 7.5 {
+		t.Errorf("speed_mps[0] = %v, want 7.5", body.SpeedMPS[0])
+	}
+	if body.Alerts[1] != "Autopilot" {
+		t.Errorf("alerts[1] = %q, want %q", body.Alerts[1], "Autopilot")
+	}
+}
+
+// TestQlogFilenamesOrder pins down the file picker's preferred-first
+// ordering. Newer devices upload qlog.zst, so it must beat qlog.bz2 and
+// the raw qlog form to ensure modern uploads win.
+func TestQlogFilenamesOrder(t *testing.T) {
+	want := []string{"qlog.zst", "qlog.bz2", "qlog"}
+	if len(qlogFilenames) != len(want) {
+		t.Fatalf("qlogFilenames = %v, want %v", qlogFilenames, want)
+	}
+	for i, name := range want {
+		if qlogFilenames[i] != name {
+			t.Errorf("qlogFilenames[%d] = %q, want %q", i, qlogFilenames[i], name)
+		}
 	}
 }
