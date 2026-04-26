@@ -474,3 +474,46 @@ func (q *Queries) SetRouteStarred(ctx context.Context, arg SetRouteStarredParams
 	)
 	return i, err
 }
+
+const updateRouteMetadata = `-- name: UpdateRouteMetadata :exec
+UPDATE routes
+SET start_time = COALESCE($1::timestamptz, start_time),
+    end_time   = COALESCE($2::timestamptz,   end_time),
+    geometry   = CASE
+        WHEN $3::text IS NULL THEN geometry
+        WHEN ST_NumPoints(ST_GeomFromText($3::text, 4326)) < 2 THEN geometry
+        ELSE ST_GeomFromText($3::text, 4326)
+    END
+WHERE id = $4
+`
+
+type UpdateRouteMetadataParams struct {
+	StartTime   pgtype.Timestamptz `json:"startTime"`
+	EndTime     pgtype.Timestamptz `json:"endTime"`
+	GeometryWkt pgtype.Text        `json:"geometryWkt"`
+	ID          int32              `json:"id"`
+}
+
+// Writes any subset of (start_time, end_time, geometry) onto the routes row,
+// leaving the columns the caller did not supply untouched. NULL inputs mean
+// "do not change this column" -- a partial extraction (e.g. timestamps were
+// recovered but GPS samples were not) does not stomp prior data, and re-runs
+// of the metadata worker are idempotent for the columns whose source data
+// has not changed.
+//
+// Geometry is built from a WKT string via ST_GeomFromText with SRID 4326.
+// The caller is responsible for emitting WKT only when there are at least
+// two points; this query trusts the input. The geometry column is set only
+// when the parsed WKT yields a LINESTRING with ST_NumPoints >= 2 -- a
+// single-point or empty WKT is silently dropped so a malformed extraction
+// does not corrupt the routes row downstream consumers (trip aggregator,
+// map view) read from.
+func (q *Queries) UpdateRouteMetadata(ctx context.Context, arg UpdateRouteMetadataParams) error {
+	_, err := q.db.Exec(ctx, updateRouteMetadata,
+		arg.StartTime,
+		arg.EndTime,
+		arg.GeometryWkt,
+		arg.ID,
+	)
+	return err
+}
