@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -215,6 +216,130 @@ func TestTranscodeFile_ContextCancelled(t *testing.T) {
 	}
 }
 
+func TestPackageQcamera_Success(t *testing.T) {
+	tmp := t.TempDir()
+	ffmpeg := writeFakeFFmpeg(t, tmp, "success")
+
+	store := storage.New(tmp)
+	tr := New(store, 1)
+	tr.SetFFmpegPath(ffmpeg)
+
+	inputPath := filepath.Join(tmp, "qcamera.ts")
+	if err := os.WriteFile(inputPath, []byte("fake mpegts"), 0644); err != nil {
+		t.Fatalf("failed to write input: %v", err)
+	}
+
+	outputDir := filepath.Join(tmp, "qcamera_output")
+	if err := tr.PackageQcamera(context.Background(), inputPath, outputDir); err != nil {
+		t.Fatalf("PackageQcamera() returned error: %v", err)
+	}
+
+	indexPath := filepath.Join(outputDir, "index.m3u8")
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		t.Errorf("expected index.m3u8 to exist at %s", indexPath)
+	}
+}
+
+func TestPackageQcamera_FFmpegFails(t *testing.T) {
+	tmp := t.TempDir()
+	ffmpeg := writeFakeFFmpeg(t, tmp, "fail")
+
+	store := storage.New(tmp)
+	tr := New(store, 1)
+	tr.SetFFmpegPath(ffmpeg)
+
+	inputPath := filepath.Join(tmp, "qcamera.ts")
+	if err := os.WriteFile(inputPath, []byte("fake mpegts"), 0644); err != nil {
+		t.Fatalf("failed to write input: %v", err)
+	}
+
+	outputDir := filepath.Join(tmp, "qcamera_output")
+	err := tr.PackageQcamera(context.Background(), inputPath, outputDir)
+	if err == nil {
+		t.Fatal("PackageQcamera() expected error when ffmpeg fails, got nil")
+	}
+}
+
+func TestProcessSegment_PackagesQcamera(t *testing.T) {
+	tmp := t.TempDir()
+	ffmpeg := writeFakeFFmpeg(t, tmp, "success")
+
+	store := storage.New(tmp)
+	tr := New(store, 1)
+	tr.SetFFmpegPath(ffmpeg)
+
+	dongle := "abc123"
+	route := "2024-01-15--12-30-00"
+	segment := "0"
+	// qcamera.ts only -- no HEVC files in this segment, mirroring the
+	// common case on real deployments where openpilot/sunnypilot only
+	// upload the low-res preview by default.
+	setupTestSegment(t, tmp, dongle, route, segment, []string{"qcamera.ts"})
+
+	if err := tr.ProcessSegment(context.Background(), dongle, route, segment); err != nil {
+		t.Fatalf("ProcessSegment() returned error: %v", err)
+	}
+
+	indexPath := filepath.Join(tmp, dongle, route, segment, "qcamera", "index.m3u8")
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		t.Errorf("expected qcamera HLS output at %s", indexPath)
+	}
+}
+
+func TestProcessSegment_PackagesQcameraAlongsideHEVC(t *testing.T) {
+	tmp := t.TempDir()
+	ffmpeg := writeFakeFFmpeg(t, tmp, "success")
+
+	store := storage.New(tmp)
+	tr := New(store, 1)
+	tr.SetFFmpegPath(ffmpeg)
+
+	dongle := "abc123"
+	route := "2024-01-15--12-30-00"
+	segment := "0"
+	setupTestSegment(t, tmp, dongle, route, segment, []string{"fcamera.hevc", "qcamera.ts"})
+
+	if err := tr.ProcessSegment(context.Background(), dongle, route, segment); err != nil {
+		t.Fatalf("ProcessSegment() returned error: %v", err)
+	}
+
+	for _, base := range []string{"fcamera", "qcamera"} {
+		indexPath := filepath.Join(tmp, dongle, route, segment, base, "index.m3u8")
+		if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+			t.Errorf("expected HLS output for %s at %s", base, indexPath)
+		}
+	}
+}
+
+func TestProcessSegment_SkipsAlreadyPackagedQcamera(t *testing.T) {
+	tmp := t.TempDir()
+	// Use fail mode -- if ProcessSegment tries to package, it errors.
+	ffmpeg := writeFakeFFmpeg(t, tmp, "fail")
+
+	store := storage.New(tmp)
+	tr := New(store, 1)
+	tr.SetFFmpegPath(ffmpeg)
+
+	dongle := "abc123"
+	route := "2024-01-15--12-30-00"
+	segment := "0"
+	setupTestSegment(t, tmp, dongle, route, segment, []string{"qcamera.ts"})
+
+	// Pre-create qcamera HLS output.
+	hlsDir := filepath.Join(tmp, dongle, route, segment, "qcamera")
+	if err := os.MkdirAll(hlsDir, 0755); err != nil {
+		t.Fatalf("failed to create HLS dir: %v", err)
+	}
+	indexPath := filepath.Join(hlsDir, "index.m3u8")
+	if err := os.WriteFile(indexPath, []byte("#EXTM3U\n"), 0644); err != nil {
+		t.Fatalf("failed to write index: %v", err)
+	}
+
+	if err := tr.ProcessSegment(context.Background(), dongle, route, segment); err != nil {
+		t.Fatalf("ProcessSegment() should skip already-packaged qcamera, got: %v", err)
+	}
+}
+
 func TestProcessSegment_TranscodesAllCameras(t *testing.T) {
 	tmp := t.TempDir()
 	ffmpeg := writeFakeFFmpeg(t, tmp, "success")
@@ -320,13 +445,28 @@ func TestNew_MinConcurrency(t *testing.T) {
 func TestEnqueue_FullChannel(t *testing.T) {
 	store := storage.New(t.TempDir())
 	tr := New(store, 1)
+	// Enqueue distinct segments because the worker now deduplicates
+	// in-flight jobs on (dongle, route, segment); enqueuing the same
+	// triple twice would short-circuit and not actually fill the queue.
 	for i := 0; i < 100; i++ {
-		if !tr.Enqueue("d", "r", "s") {
+		seg := strconv.Itoa(i)
+		if !tr.Enqueue("d", "r", seg) {
 			t.Fatalf("Enqueue failed at i=%d, expected success", i)
 		}
 	}
-	if tr.Enqueue("d", "r", "s") {
+	if tr.Enqueue("d", "r", "100") {
 		t.Error("Enqueue should return false when job channel is full")
+	}
+}
+
+func TestEnqueue_DeduplicatesInflight(t *testing.T) {
+	store := storage.New(t.TempDir())
+	tr := New(store, 1)
+	if !tr.Enqueue("d", "r", "s") {
+		t.Fatal("first Enqueue should succeed")
+	}
+	if tr.Enqueue("d", "r", "s") {
+		t.Error("Enqueue of an already in-flight segment should return false")
 	}
 }
 

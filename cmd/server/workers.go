@@ -79,4 +79,24 @@ func startWorkers(ctx context.Context, d *deps) {
 	} else {
 		log.Printf("thumbnail worker: disabled via THUMBNAIL_ENABLED=false")
 	}
+
+	// Transcoder worker: rewraps qcamera.ts (and re-encodes HEVC where
+	// available) into HLS playlists the web UI can play. The scanner
+	// only watches qcamera.ts because HEVC files are not uploaded by
+	// default; HEVC re-encoding still runs on demand via Enqueue when
+	// an operator triggers it. TRANSCODER_ENABLED defaults to true;
+	// TRANSCODER_CONCURRENCY defaults to 1 because qcamera packaging
+	// is cheap and a parallel HEVC re-encode would compete with it.
+	if envBool("TRANSCODER_ENABLED", true) {
+		concurrency := envInt("TRANSCODER_CONCURRENCY", 1)
+		tr := worker.NewWithDeps(d.queries, d.store, concurrency, d.metrics)
+		if err := tr.ProbeFFmpeg(ctx); err != nil {
+			log.Printf("transcoder worker: ffmpeg probe failed (%v); worker will run but every job will fail until ffmpeg is installed", err)
+		}
+		tr.Start(ctx)
+		log.Printf("transcoder worker started (concurrency=%d, scan_interval=%s)",
+			concurrency, worker.DefaultTranscoderScanInterval)
+	} else {
+		log.Printf("transcoder worker: disabled via TRANSCODER_ENABLED=false")
+	}
 }

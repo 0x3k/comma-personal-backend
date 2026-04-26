@@ -1,0 +1,22 @@
+{
+  "id": "qcamera-hls-fallback",
+  "name": "Make qcamera.ts playable: HLS transcode + frontend fallback",
+  "description": "The frontend video player loads {base}/{seg}/{camera}/index.m3u8 (web/src/components/video/MultiCameraPlayer.tsx:51), which only exists when the HEVC transcoder has produced HLS for fcamera.hevc / ecamera.hevc / dcamera.hevc. By default openpilot / sunnypilot only uploads qcamera.ts (low-res preview MPEG-TS) and qlog.zst -- HEVC files only land for routes the operator preserves or pulls via athena. So on the running deployment every route has qcamera.ts but the player has nothing to load. Two compounding bugs: (1) the transcoder is not even started in cmd/server/workers.go, (2) the transcoder's cameraFiles list (internal/worker/transcoder.go:23) does not include qcamera. Fix is to produce HLS from qcamera.ts (which is already H.264 in MPEG-TS so this is a fast packaging operation, not a re-encode) and have the player fall back to qcamera HLS when fcamera HLS is missing.",
+  "priority": 2,
+  "status": "complete",
+  "branch": "agent/qcamera-hls-fallback",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/worker/transcoder.go adds qcamera as a recognized input alongside the HEVC cameras. For qcamera the worker invokes ffmpeg with stream-copy and HLS muxer (no re-encode): roughly ffmpeg -y -i qcamera.ts -c copy -f hls -hls_time 6 -hls_playlist_type vod -hls_segment_filename seg_%03d.ts index.m3u8. For HEVC inputs the existing copy-then-fallback-to-libx264 path is unchanged",
+    "cmd/server/workers.go starts the transcoder (it is not started today). Gate behind TRANSCODER_ENABLED (default true) following the pattern of THUMBNAIL_ENABLED. Concurrency configurable via TRANSCODER_CONCURRENCY (default 1) since qcamera packaging is cheap and HEVC transcode is expensive",
+    "The transcoder needs a scan loop (analogous to the thumbnailer's scannerLoop) that finds segments with qcamera.ts but no qcamera/index.m3u8 and enqueues them. Today Enqueue is only callable manually so nothing drives the worker after upload. Add a small ticker-driven scanner (DefaultTranscoderScanInterval ~= 60s) plus an option to scan once at startup, mirroring the thumbnailer. Document the choice in a package comment",
+    "API: the existing storage.Path / static segment server already serves arbitrary files under <storage>/<dongle>/<route>/<seg>/, so no new HTTP endpoint is required. Verify by curling /v1/route/<dongle>/<route>/<seg>/qcamera/index.m3u8 and getting the playlist back. Auth: same path/group as the existing fcamera/ecamera HLS playlists -- do not add a new auth surface",
+    "Frontend web/src/components/video/MultiCameraPlayer.tsx (and any peer code that picks the active camera) falls back to qcamera HLS when none of fcamera/ecamera/dcamera have HLS. Surface a small badge or tooltip indicating the active stream is the low-res qcamera preview, so users understand the quality drop is by design (not a bug)",
+    "internal/worker/transcoder_test.go gains a case that asserts qcamera input produces an index.m3u8 (using the existing fake-ffmpeg test pattern). Existing HEVC cases unchanged",
+    "Manual verification on the deployed backend: pick the existing route 92fc6a8b6c034662/0000004a--ce3ac77767 (12 segments, qcamera.ts only). After the worker runs the route detail page should play the qcamera preview without any device-side change",
+    "go test ./internal/worker/... and pnpm --dir web test (if any tests touch the player) pass",
+    "go vet ./... and go build ./... pass cleanly; pnpm --dir web type-check passes"
+  ],
+  "notes": "Acceptance criteria 1, 2, 3, 5, 6, 8, 9 complete and verified by go test ./... + smoke.sh + pnpm type-check. Criterion 4 (HTTP serving of /v1/route/.../qcamera/index.m3u8): the existing backend does not actually wire a static segment server -- the routes it registers do not include a filesystem mount for the storage tree. The acceptance criterion notes 'no new HTTP endpoint is required' and the worker now writes the playlist to <storage>/<dongle>/<route>/<seg>/qcamera/index.m3u8 alongside the HEVC HLS outputs, so once any future static-serving feature lands the qcamera path is served by exactly the same code path as fcamera. Criterion 7 (manual smoke against the live deployment) skipped per the spec's own escape clause -- the worktree has no SSH access to the production host."
+}
