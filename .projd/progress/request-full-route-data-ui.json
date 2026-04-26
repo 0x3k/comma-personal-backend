@@ -3,7 +3,8 @@
   "name": "On-demand full-route data: route detail UI button + progress",
   "description": "Surface the request_full_data endpoint as a button on the route detail page so users can pull full-res video and full logs for a specific drive without opening a terminal. The button kicks off the request, the page polls the status endpoint, and once the device finishes uploading, the existing transcoder / event-detector pipelines pick up the new files automatically (no special-case glue here -- just expose the trigger and the progress).",
   "priority": 3,
-  "status": "pending",
+  "status": "complete",
+  "branch": "agent/request-full-route-data-ui",
   "base_branch": "main",
   "blocked_by": ["request-full-route-data-api"],
   "acceptance_criteria": [
