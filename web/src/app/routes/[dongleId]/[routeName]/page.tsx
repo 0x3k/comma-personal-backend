@@ -22,6 +22,7 @@ import { LogViewer } from "@/components/logs/LogViewer";
 import { ShareButton } from "@/components/ShareButton";
 import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
 import { RouteAnnotations } from "@/components/routes/RouteAnnotations";
+import { FullDataRequestControl } from "@/components/routes/FullDataRequestControl";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
   { key: "fcameraUploaded", label: "fcamera" },
@@ -235,10 +236,17 @@ export default function RouteDetailPage() {
                 <h1 className="text-subheading text-[var(--text-primary)]">
                   {route.routeName}
                 </h1>
-                <ShareButton
-                  dongleId={route.dongleId}
-                  routeName={route.routeName}
-                />
+                <div className="flex flex-wrap items-start gap-2">
+                  <FullDataRequestControl
+                    dongleId={route.dongleId}
+                    routeName={route.routeName}
+                    onComplete={fetchRoute}
+                  />
+                  <ShareButton
+                    dongleId={route.dongleId}
+                    routeName={route.routeName}
+                  />
+                </div>
               </div>
             </CardHeader>
             <CardBody>

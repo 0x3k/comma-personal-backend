@@ -1,3 +1,9 @@
+import type {
+  RouteDataRequestKind,
+  RouteDataRequestPostResponse,
+  RouteDataRequestStatusResponse,
+} from "@/lib/types";
+
 const BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
@@ -93,6 +99,45 @@ export async function apiFetch<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+/**
+ * Trigger a full-resolution data pull for the given route. The backend
+ * (internal/api/route_data_request.go) returns 201 when the device was
+ * online and the dispatch went out, 202 when the device is offline so
+ * the dispatcher worker will retry, and 200 when an existing non-failed
+ * request inside the idempotency window is reused. apiFetch flattens
+ * all three success codes to the parsed body, so callers only need to
+ * inspect `response.request.status` to decide what to render.
+ */
+export function requestFullRouteData(
+  dongleId: string,
+  routeName: string,
+  kind: RouteDataRequestKind,
+): Promise<RouteDataRequestPostResponse> {
+  return apiFetch<RouteDataRequestPostResponse>(
+    `/v1/route/${encodeURIComponent(dongleId)}/${encodeURIComponent(routeName)}/request_full_data`,
+    {
+      method: "POST",
+      body: { kind },
+    },
+  );
+}
+
+/**
+ * Poll the status of an in-flight (or completed) route data request.
+ * The backend re-derives progress from per-segment upload flags on
+ * every call, so the UI can poll this endpoint without worrying about
+ * stale progress columns.
+ */
+export function getFullRouteDataRequest(
+  dongleId: string,
+  routeName: string,
+  requestId: number,
+): Promise<RouteDataRequestStatusResponse> {
+  return apiFetch<RouteDataRequestStatusResponse>(
+    `/v1/route/${encodeURIComponent(dongleId)}/${encodeURIComponent(routeName)}/request_full_data/${requestId}`,
+  );
 }
 
 export { BASE_URL, ApiUnauthorizedError };

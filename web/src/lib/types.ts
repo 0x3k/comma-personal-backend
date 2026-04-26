@@ -247,3 +247,76 @@ export interface CrashDetail {
   occurred_at: string | null;
   received_at: string | null;
 }
+
+/**
+ * Kinds accepted by POST /v1/route/:dongle_id/:route_name/request_full_data.
+ * Mirrors the constants in internal/api/route_data_request.go.
+ */
+export type RouteDataRequestKind = "full_video" | "full_logs" | "all";
+
+/**
+ * Server-side status of a route data request row. Matches the CHECK
+ * constraint in sql/migrations/010_route_data_requests.up.sql and the
+ * constants in internal/api/route_data_request.go.
+ */
+export type RouteDataRequestStatus =
+  | "pending"
+  | "dispatched"
+  | "partial"
+  | "complete"
+  | "failed";
+
+/**
+ * A single route_data_requests row as returned by the JSON API. The
+ * Go handler in internal/api/route_data_request.go (rowToResponse)
+ * flattens pgtype.* nullables into either a JSON value or null, so
+ * each nullable column becomes `T | null` here.
+ */
+export interface RouteDataRequest {
+  id: number;
+  routeId: number;
+  requestedBy: string | null;
+  requestedAt: string | null;
+  kind: RouteDataRequestKind;
+  status: RouteDataRequestStatus;
+  dispatchedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+  filesRequested: number;
+}
+
+/** Aggregate progress block returned by the GET endpoint. */
+export interface RouteDataRequestProgress {
+  filesRequested: number;
+  filesUploaded: number;
+  percent: number;
+}
+
+/** Per-segment upload state included in the GET endpoint response. */
+export interface RouteDataRequestSegment {
+  segmentNumber: number;
+  fcameraUploaded: boolean;
+  ecameraUploaded: boolean;
+  dcameraUploaded: boolean;
+  rlogUploaded: boolean;
+}
+
+/**
+ * GET /v1/route/:dongle_id/:route_name/request_full_data/:request_id
+ * response. Includes aggregate progress + per-segment upload state.
+ */
+export interface RouteDataRequestStatusResponse {
+  request: RouteDataRequest;
+  progress: RouteDataRequestProgress;
+  segments: RouteDataRequestSegment[];
+}
+
+/**
+ * POST /v1/route/:dongle_id/:route_name/request_full_data response.
+ * Returns the persisted (or reused, when inside the idempotency window)
+ * row; progress + segments are intentionally omitted so the UI uses the
+ * GET endpoint for polling.
+ */
+export interface RouteDataRequestPostResponse {
+  request: RouteDataRequest;
+}
