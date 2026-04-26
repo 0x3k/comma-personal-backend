@@ -61,9 +61,9 @@ export default function TripMapInner({
           <Polyline
             positions={coordinates}
             pathOptions={{
-              color: "var(--accent, #10b981)",
+              color: "#4c1d95",
               weight: 4,
-              opacity: 0.85,
+              opacity: 0.9,
             }}
           />
           <FitBounds coordinates={coordinates} />

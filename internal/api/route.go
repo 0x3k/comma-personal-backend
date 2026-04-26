@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -48,6 +49,11 @@ type routeDetailResponse struct {
 	Tags         []string          `json:"tags"`
 	SegmentCount int64             `json:"segmentCount"`
 	Segments     []segmentResponse `json:"segments"`
+	// Geometry is the route's GPS track as [lat, lng] pairs. Empty (not null)
+	// when the route metadata worker has not yet produced a track or the
+	// stored geometry is unparseable; the frontend uses len() to decide
+	// whether to render the map.
+	Geometry [][2]float64 `json:"geometry"`
 }
 
 // routeListItem is a route summary for listing endpoints.
@@ -151,6 +157,8 @@ func (h *RouteHandler) GetRoute(c echo.Context) error {
 		endTime = &route.EndTime.Time
 	}
 
+	geometry := lookupRouteGeometry(ctx, h.queries, route.DongleID, route.RouteName)
+
 	return c.JSON(http.StatusOK, routeDetailResponse{
 		DongleID:     route.DongleID,
 		RouteName:    route.RouteName,
@@ -162,7 +170,34 @@ func (h *RouteHandler) GetRoute(c echo.Context) error {
 		Tags:         tags,
 		SegmentCount: int64(len(segments)),
 		Segments:     segResponses,
+		Geometry:     geometry,
 	})
+}
+
+// lookupRouteGeometry returns the route's GPS track as [lat, lng] pairs.
+// A missing, NULL, or unparseable geometry yields an empty slice rather
+// than an error: the trip detail view degrades gracefully to "no map"
+// instead of failing the whole request.
+func lookupRouteGeometry(ctx context.Context, queries *db.Queries, dongleID, routeName string) [][2]float64 {
+	wkt, err := queries.GetRouteGeometryWKT(ctx, db.GetRouteGeometryWKTParams{
+		DongleID:  dongleID,
+		RouteName: routeName,
+	})
+	if err != nil {
+		return [][2]float64{}
+	}
+	if !wkt.Valid || strings.TrimSpace(wkt.String) == "" {
+		return [][2]float64{}
+	}
+	points, err := parseLineStringWKT(wkt.String)
+	if err != nil {
+		return [][2]float64{}
+	}
+	out := make([][2]float64, 0, len(points))
+	for _, p := range points {
+		out = append(out, [2]float64{p.Lat, p.Lon})
+	}
+	return out
 }
 
 // knownListRoutesParams is the set of query-string keys accepted by

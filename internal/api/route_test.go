@@ -33,6 +33,8 @@ type routeMockDB struct {
 	segCount    int64
 	tags        []string
 	tagsErr     error
+	geometryWKT pgtype.Text
+	geometryErr error
 
 	// lastListSQL, lastListArgs, lastCountSQL, and lastCountArgs capture the
 	// most recent filtered-list and filtered-count invocations so tests can
@@ -121,6 +123,12 @@ func (m *routeMockDB) QueryRow(_ context.Context, sql string, args ...interface{
 		}
 		return &mockRouteRow{route: m.route}
 	}
+	if strings.Contains(sql, "ST_AsText") {
+		if m.geometryErr != nil {
+			return &mockGeometryRow{err: m.geometryErr}
+		}
+		return &mockGeometryRow{wkt: m.geometryWKT}
+	}
 	if strings.Contains(sql, "FROM routes") {
 		if m.routeErr != nil {
 			return &mockRouteRow{err: m.routeErr}
@@ -170,6 +178,21 @@ func (r *mockCountRow) Scan(dest ...interface{}) error {
 		return r.err
 	}
 	*dest[0].(*int64) = r.count
+	return nil
+}
+
+// mockGeometryRow implements pgx.Row for the GetRouteGeometryWKT query,
+// which scans a single pgtype.Text holding the LineString WKT.
+type mockGeometryRow struct {
+	wkt pgtype.Text
+	err error
+}
+
+func (r *mockGeometryRow) Scan(dest ...interface{}) error {
+	if r.err != nil {
+		return r.err
+	}
+	*dest[0].(*pgtype.Text) = r.wkt
 	return nil
 }
 
@@ -364,6 +387,7 @@ func TestGetRoute(t *testing.T) {
 		mock         *routeMockDB
 		wantStatus   int
 		wantError    string
+		wantGeometry [][2]float64
 	}{
 		{
 			name:         "successful route retrieval",
@@ -378,7 +402,37 @@ func TestGetRoute(t *testing.T) {
 				},
 				segCount: 2,
 			},
+			wantStatus:   http.StatusOK,
+			wantGeometry: [][2]float64{},
+		},
+		{
+			name:         "route with geometry",
+			dongleID:     "abc123",
+			routeName:    "2024-03-15--12-30-00",
+			authDongleID: "abc123",
+			mock: &routeMockDB{
+				route:       newTestRoute(1, "abc123", "2024-03-15--12-30-00"),
+				segments:    []db.Segment{newTestSegment(1, 1, 0)},
+				segCount:    1,
+				geometryWKT: pgtype.Text{String: "LINESTRING(-122.4 37.7, -122.41 37.71)", Valid: true},
+			},
 			wantStatus: http.StatusOK,
+			// PostGIS stores (lon lat); the API exposes [lat, lng] pairs.
+			wantGeometry: [][2]float64{{37.7, -122.4}, {37.71, -122.41}},
+		},
+		{
+			name:         "route with unparseable geometry degrades to empty",
+			dongleID:     "abc123",
+			routeName:    "2024-03-15--12-30-00",
+			authDongleID: "abc123",
+			mock: &routeMockDB{
+				route:       newTestRoute(1, "abc123", "2024-03-15--12-30-00"),
+				segments:    []db.Segment{newTestSegment(1, 1, 0)},
+				segCount:    1,
+				geometryWKT: pgtype.Text{String: "POINT(1 2)", Valid: true},
+			},
+			wantStatus:   http.StatusOK,
+			wantGeometry: [][2]float64{},
 		},
 		{
 			name:         "route not found",
@@ -487,6 +541,15 @@ func TestGetRoute(t *testing.T) {
 			}
 			if len(body.Segments) != len(tt.mock.segments) {
 				t.Errorf("len(segments) = %d, want %d", len(body.Segments), len(tt.mock.segments))
+			}
+			if len(body.Geometry) != len(tt.wantGeometry) {
+				t.Errorf("len(geometry) = %d, want %d", len(body.Geometry), len(tt.wantGeometry))
+			} else {
+				for i, want := range tt.wantGeometry {
+					if body.Geometry[i] != want {
+						t.Errorf("geometry[%d] = %v, want %v", i, body.Geometry[i], want)
+					}
+				}
 			}
 		})
 	}
