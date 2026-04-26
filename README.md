@@ -105,6 +105,7 @@ cp .env.example .env
 | `STORAGE_PATH` | no | `./data` | Directory for uploaded video/log files |
 | `PORT` | no | `8080` | API server listen port |
 | `ALLOWED_SERIALS` | no | -- | Comma-separated allowlist of device serials permitted to register (all allowed if unset). The dongle ID is assigned server-side, so restriction is by hardware serial. |
+| `CORS_ALLOWED_ORIGINS` | no | -- | Comma-separated list of origins permitted by the CORS middleware. Required when the frontend is served from a different origin than the API (e.g. the docker prod stack puts the frontend on `:80` and the API on `:7070`). Cannot be `*` -- the API uses cookie-based session auth so credentialed CORS needs explicit origins. Leave unset for same-origin-only deployments. |
 | `SESSION_SECRET` | no | -- | Required to enable the web UI login. Used as the HMAC key for signed session cookies. If unset, UI auth is disabled (a warning is logged) -- device auth still works. |
 | `ADMIN_USERNAME` | no | -- | When both ADMIN_USERNAME and ADMIN_PASSWORD are set, the server bootstraps (or updates) this user row in `ui_users` on startup so you can log into the dashboard with env-configured credentials. |
 | `ADMIN_PASSWORD` | no | -- | Plaintext admin password; stored hashed with bcrypt (cost 12). See ADMIN_USERNAME. |
@@ -138,9 +139,39 @@ export ATHENA_HOST="wss://your-server.example.com"
 
 See [docs/DEVICE-SETUP.md](docs/DEVICE-SETUP.md) for the full walkthrough -- authentication flow, upload mechanics, WebSocket path rewriting, and troubleshooting.
 
+## Docker quickstart
+
+For a containerized stack -- Postgres + PostGIS, the Go backend, and the Next.js frontend all together -- with no local Go/Node toolchain required beyond Docker:
+
+```bash
+cp .env.example .env
+# Edit .env if you want to override ports or set SESSION_SECRET / admin creds.
+make prod-up
+```
+
+Service URLs with the default `.env`:
+
+| Service | URL | Container port |
+|---------|-----|----------------|
+| Frontend | http://localhost | `:3000` |
+| Backend  | http://localhost:7070 | `:8080` |
+| Postgres | `localhost:5432` | `:5432` |
+
+Overridable via `.env`: `BACKEND_PORT`, `FRONTEND_PORT`, `NEXT_PUBLIC_API_URL`, `CORS_ALLOWED_ORIGINS`, plus every backend env var from the table above.
+
+Two cross-cutting things to know about the Docker stack:
+
+- **`NEXT_PUBLIC_API_URL` is baked into the frontend image at build time** (Next.js requirement). If you change `BACKEND_PORT`, you also need to update `NEXT_PUBLIC_API_URL` to the matching browser-reachable URL and rebuild: `make prod-build && make prod-up`. The variable must be reachable from the user's **browser**, not from inside the frontend container.
+- **CORS is required** because the frontend (`:80`) and backend (`:7070`) are on different origins. The compose file defaults `CORS_ALLOWED_ORIGINS` to `http://localhost`; override in `.env` if your frontend lives elsewhere. `*` is rejected because the API uses cookie-based session auth.
+- **Avoid host port `7000` on macOS.** macOS's AirPlay Receiver binds `*:7000` and silently intercepts all traffic on that port before Docker sees it (you'll get `Server: AirTunes/...` responses). The default `BACKEND_PORT` is `7070` for this reason; if you change it, steer clear of `5000` and `7000`.
+
+Other targets: `make prod-down` (stop), `make prod-build` (rebuild images), `make prod-logs` (tail all services).
+
+On Apple Silicon, the stack uses [`imresamu/postgis`](https://hub.docker.com/r/imresamu/postgis) (multi-arch) instead of the official `postgis/postgis` (amd64-only), so Postgres runs natively without Rosetta emulation.
+
 ## Production deployment
 
-The local dev setup above is fine for testing. For an always-on server that receives uploads from your car, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) -- covers TLS with Caddy/nginx, systemd services, storage planning, and database backups.
+The local dev setup and the Docker quickstart above are fine for testing or a single-machine deployment behind your home network. For an always-on server that receives uploads from your car over the public internet, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) -- covers TLS with Caddy/nginx, systemd services, storage planning, and database backups.
 
 ## API
 

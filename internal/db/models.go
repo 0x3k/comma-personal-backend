@@ -8,12 +8,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Crash struct {
+	ID          int32              `json:"id"`
+	EventID     string             `json:"eventId"`
+	DongleID    pgtype.Text        `json:"dongleId"`
+	Level       string             `json:"level"`
+	Message     string             `json:"message"`
+	Fingerprint []byte             `json:"fingerprint"`
+	Tags        []byte             `json:"tags"`
+	Exception   []byte             `json:"exception"`
+	Breadcrumbs []byte             `json:"breadcrumbs"`
+	RawEvent    []byte             `json:"rawEvent"`
+	OccurredAt  pgtype.Timestamptz `json:"occurredAt"`
+	ReceivedAt  pgtype.Timestamptz `json:"receivedAt"`
+}
+
 type Device struct {
-	DongleID  string             `json:"dongleId"`
-	Serial    pgtype.Text        `json:"serial"`
-	PublicKey pgtype.Text        `json:"publicKey"`
-	CreatedAt pgtype.Timestamptz `json:"createdAt"`
-	UpdatedAt pgtype.Timestamptz `json:"updatedAt"`
+	DongleID           string             `json:"dongleId"`
+	Serial             pgtype.Text        `json:"serial"`
+	PublicKey          pgtype.Text        `json:"publicKey"`
+	CreatedAt          pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt          pgtype.Timestamptz `json:"updatedAt"`
+	SunnylinkDongleID  pgtype.Text        `json:"sunnylinkDongleId"`
+	SunnylinkPublicKey pgtype.Text        `json:"sunnylinkPublicKey"`
 }
 
 type DeviceParam struct {

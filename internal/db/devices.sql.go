@@ -14,7 +14,8 @@ import (
 const createDevice = `-- name: CreateDevice :one
 INSERT INTO devices (dongle_id, serial, public_key)
 VALUES ($1, $2, $3)
-RETURNING dongle_id, serial, public_key, created_at, updated_at
+RETURNING dongle_id, serial, public_key, created_at, updated_at,
+          sunnylink_dongle_id, sunnylink_public_key
 `
 
 type CreateDeviceParams struct {
@@ -32,12 +33,15 @@ func (q *Queries) CreateDevice(ctx context.Context, arg CreateDeviceParams) (Dev
 		&i.PublicKey,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SunnylinkDongleID,
+		&i.SunnylinkPublicKey,
 	)
 	return i, err
 }
 
 const getDevice = `-- name: GetDevice :one
-SELECT dongle_id, serial, public_key, created_at, updated_at
+SELECT dongle_id, serial, public_key, created_at, updated_at,
+       sunnylink_dongle_id, sunnylink_public_key
 FROM devices
 WHERE dongle_id = $1
 `
@@ -51,12 +55,15 @@ func (q *Queries) GetDevice(ctx context.Context, dongleID string) (Device, error
 		&i.PublicKey,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SunnylinkDongleID,
+		&i.SunnylinkPublicKey,
 	)
 	return i, err
 }
 
 const getDeviceByPublicKey = `-- name: GetDeviceByPublicKey :one
-SELECT dongle_id, serial, public_key, created_at, updated_at
+SELECT dongle_id, serial, public_key, created_at, updated_at,
+       sunnylink_dongle_id, sunnylink_public_key
 FROM devices
 WHERE public_key = $1
 LIMIT 1
@@ -71,12 +78,38 @@ func (q *Queries) GetDeviceByPublicKey(ctx context.Context, publicKey pgtype.Tex
 		&i.PublicKey,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SunnylinkDongleID,
+		&i.SunnylinkPublicKey,
+	)
+	return i, err
+}
+
+const getDeviceBySunnylinkDongleID = `-- name: GetDeviceBySunnylinkDongleID :one
+SELECT dongle_id, serial, public_key, created_at, updated_at,
+       sunnylink_dongle_id, sunnylink_public_key
+FROM devices
+WHERE sunnylink_dongle_id = $1
+LIMIT 1
+`
+
+func (q *Queries) GetDeviceBySunnylinkDongleID(ctx context.Context, sunnylinkDongleID pgtype.Text) (Device, error) {
+	row := q.db.QueryRow(ctx, getDeviceBySunnylinkDongleID, sunnylinkDongleID)
+	var i Device
+	err := row.Scan(
+		&i.DongleID,
+		&i.Serial,
+		&i.PublicKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SunnylinkDongleID,
+		&i.SunnylinkPublicKey,
 	)
 	return i, err
 }
 
 const listDevices = `-- name: ListDevices :many
-SELECT dongle_id, serial, public_key, created_at, updated_at
+SELECT dongle_id, serial, public_key, created_at, updated_at,
+       sunnylink_dongle_id, sunnylink_public_key
 FROM devices
 ORDER BY created_at DESC
 `
@@ -96,6 +129,8 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 			&i.PublicKey,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SunnylinkDongleID,
+			&i.SunnylinkPublicKey,
 		); err != nil {
 			return nil, err
 		}
@@ -107,11 +142,46 @@ func (q *Queries) ListDevices(ctx context.Context) ([]Device, error) {
 	return items, nil
 }
 
+const setSunnylinkRegistration = `-- name: SetSunnylinkRegistration :one
+UPDATE devices
+SET sunnylink_dongle_id  = $2,
+    sunnylink_public_key = $3,
+    updated_at           = now()
+WHERE dongle_id = $1
+RETURNING dongle_id, serial, public_key, created_at, updated_at,
+          sunnylink_dongle_id, sunnylink_public_key
+`
+
+type SetSunnylinkRegistrationParams struct {
+	DongleID           string      `json:"dongleId"`
+	SunnylinkDongleID  pgtype.Text `json:"sunnylinkDongleId"`
+	SunnylinkPublicKey pgtype.Text `json:"sunnylinkPublicKey"`
+}
+
+// Links a sunnylink identity onto an existing devices row keyed by the comma
+// dongle_id. Used by the pilotauth handler when a request carries the extra
+// comma_dongle_id form field (sunnylink registration variant).
+func (q *Queries) SetSunnylinkRegistration(ctx context.Context, arg SetSunnylinkRegistrationParams) (Device, error) {
+	row := q.db.QueryRow(ctx, setSunnylinkRegistration, arg.DongleID, arg.SunnylinkDongleID, arg.SunnylinkPublicKey)
+	var i Device
+	err := row.Scan(
+		&i.DongleID,
+		&i.Serial,
+		&i.PublicKey,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SunnylinkDongleID,
+		&i.SunnylinkPublicKey,
+	)
+	return i, err
+}
+
 const upsertDevice = `-- name: UpsertDevice :one
 INSERT INTO devices (dongle_id, serial, public_key)
 VALUES ($1, $2, $3)
 ON CONFLICT (dongle_id) DO UPDATE SET serial = $2, public_key = $3, updated_at = now()
-RETURNING dongle_id, serial, public_key, created_at, updated_at
+RETURNING dongle_id, serial, public_key, created_at, updated_at,
+          sunnylink_dongle_id, sunnylink_public_key
 `
 
 type UpsertDeviceParams struct {
@@ -129,6 +199,8 @@ func (q *Queries) UpsertDevice(ctx context.Context, arg UpsertDeviceParams) (Dev
 		&i.PublicKey,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SunnylinkDongleID,
+		&i.SunnylinkPublicKey,
 	)
 	return i, err
 }

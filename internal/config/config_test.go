@@ -13,6 +13,7 @@ var configEnvVars = []string{
 	"STORAGE_PATH",
 	"PORT",
 	"ALLOWED_SERIALS",
+	"CORS_ALLOWED_ORIGINS",
 	"SESSION_SECRET",
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
@@ -166,6 +167,79 @@ func TestLoad_AllowedSerials(t *testing.T) {
 			for i, want := range tt.wantSerials {
 				if cfg.AllowedSerials[i] != want {
 					t.Errorf("AllowedSerials[%d] = %q, want %q", i, cfg.AllowedSerials[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestLoad_AllowedOrigins(t *testing.T) {
+	tests := []struct {
+		name        string
+		envVal      string
+		wantOrigins []string
+		wantErr     bool
+	}{
+		{
+			name:        "single origin",
+			envVal:      "http://localhost",
+			wantOrigins: []string{"http://localhost"},
+		},
+		{
+			name:        "multiple origins",
+			envVal:      "http://localhost,http://localhost:3000,https://app.example.com",
+			wantOrigins: []string{"http://localhost", "http://localhost:3000", "https://app.example.com"},
+		},
+		{
+			name:        "whitespace trimmed",
+			envVal:      " http://localhost , https://app.example.com ",
+			wantOrigins: []string{"http://localhost", "https://app.example.com"},
+		},
+		{
+			name:        "empty value",
+			envVal:      "",
+			wantOrigins: nil,
+		},
+		{
+			name:    "wildcard rejected",
+			envVal:  "*",
+			wantErr: true,
+		},
+		{
+			name:    "wildcard mixed with explicit origins rejected",
+			envVal:  "http://localhost,*",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
+
+			if tt.envVal != "" {
+				t.Setenv("CORS_ALLOWED_ORIGINS", tt.envVal)
+			}
+
+			cfg, err := Load()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() = nil error, want error for CORS_ALLOWED_ORIGINS=%q", tt.envVal)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Load() returned unexpected error: %v", err)
+			}
+
+			if len(cfg.AllowedOrigins) != len(tt.wantOrigins) {
+				t.Fatalf("AllowedOrigins has %d entries, want %d: got %v",
+					len(cfg.AllowedOrigins), len(tt.wantOrigins), cfg.AllowedOrigins)
+			}
+			for i, want := range tt.wantOrigins {
+				if cfg.AllowedOrigins[i] != want {
+					t.Errorf("AllowedOrigins[%d] = %q, want %q", i, cfg.AllowedOrigins[i], want)
 				}
 			}
 		})

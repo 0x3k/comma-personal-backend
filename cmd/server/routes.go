@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	echomw "github.com/labstack/echo/v4/middleware"
@@ -19,10 +20,36 @@ import (
 // the bootstrap minimal and lets parallel feature branches add handlers
 // without always colliding on main.go.
 func setupRoutes(e *echo.Echo, d *deps) {
-	// Global middleware. Order matters: rate-limiter -> body-limit ->
-	// metrics, so metrics observe post-admission traffic only.
+	// Global middleware. Order matters:
+	//   CORS -> rate-limiter -> body-limit -> metrics
+	// CORS runs first so OPTIONS preflights short-circuit (204) before the
+	// rate limiter counts them and before metrics observe them. Metrics
+	// observe post-admission traffic only.
+	if len(d.cfg.AllowedOrigins) > 0 {
+		e.Use(echomw.CORSWithConfig(echomw.CORSConfig{
+			AllowOrigins: d.cfg.AllowedOrigins,
+			AllowMethods: []string{
+				http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPatch,
+				http.MethodPost, http.MethodDelete, http.MethodOptions,
+			},
+			AllowHeaders: []string{
+				echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept,
+				echo.HeaderAuthorization,
+			},
+			AllowCredentials: true,
+		}))
+	}
 	e.Use(echomw.RateLimiter(echomw.NewRateLimiterMemoryStore(20)))
-	e.Use(echomw.BodyLimit("1M"))
+	// Global 1M body limit for the API surface. /upload/* sets its own
+	// (larger) limit later; without this skipper, the global limit fires
+	// first, closes the connection mid-stream, and the device sees a TLS
+	// EOF instead of a 413.
+	e.Use(echomw.BodyLimitWithConfig(echomw.BodyLimitConfig{
+		Skipper: func(c echo.Context) bool {
+			return strings.HasPrefix(c.Request().URL.Path, "/upload/")
+		},
+		Limit: "1M",
+	}))
 	e.Use(metrics.EchoMiddleware(d.metrics))
 
 	// Prometheus scrape endpoint. Intentionally unauthenticated per the
@@ -175,6 +202,54 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	// web UI) or a device JWT, so it rides the shared read group.
 	api.NewSnapshotHandler(d.hub, d.rpcCaller).RegisterRoutes(v1ConfigRead)
 
+	// Sunnylink params: operator-facing REST surface that proxies the
+	// sunnylink-only WS RPC methods (toggleLogUpload, getParams, saveParams).
+	// Reads ride the shared read group; writes are session-only because a
+	// compromised device should not be able to flip its own log-upload
+	// toggle from the server side.
+	sunnylinkParamsHandler := api.NewSunnylinkParamsHandler(d.queries, d.hub, d.rpcCaller)
+	sunnylinkParamsHandler.RegisterReadRoutes(v1ConfigRead)
+	if d.cfg.UIAuthEnabled() {
+		sunnylinkParamsHandler.RegisterMutationRoutes(v1ConfigWrite)
+	}
+
+	// Sunnylink device-facing endpoints that the device polls every few
+	// seconds: roles (sponsor tier) and users (pairing). Bearer JWT auth
+	// happens inside the handler against the sunnylink_public_key column,
+	// so these are mounted on the bare Echo instance with no group middleware.
+	api.NewSunnylinkStateHandler(d.queries).RegisterRoutes(e)
+
+	// Sunnylink resume-queue ack: device hits this immediately after
+	// reconnecting its WS so we acknowledge it can drain its uploads.
+	// Public, no auth (device passes a JWT but we don't depend on it).
+	api.NewSunnylinkResumeHandler().RegisterRoutes(e)
+
+	// Device pairing landing page. The QR on the device's pairing dialog
+	// points here; operators scan it on their phone and see a confirmation
+	// page. Pairing itself is implicit -- see deviceResponse.IsPaired.
+	api.NewPairingHandler(d.queries).RegisterRoutes(e)
+
+	// Sentry envelope relay. Devices repoint their existing
+	// sentry_sdk.init(...) DSN at this backend by configuring the DSN
+	// hostname; the SDK posts envelopes to /api/<project_id>/envelope/.
+	// Authless by design (matches the Sentry relay protocol).
+	api.NewSentryRelay(d.queries).RegisterRoutes(e)
+
+	// Crash dashboard reads. Mounted on the shared read group so the
+	// operator dashboard (session cookie) and ad-hoc CLI callers (device
+	// JWT) both work.
+	api.NewCrashesHandler(d.queries).RegisterRoutes(v1ConfigRead)
+
 	// WebSocket for device communication.
-	ws.NewHandler(d.hub, d.queries, nil, d.rpcCaller).RegisterRoutes(e)
+	//
+	// The handlers map dispatches JSON-RPC requests the device pushes
+	// unprompted. forwardLogs and storeStats are the two notifications
+	// athenad/sunnylinkd send every ~10 seconds for log + telemetry uploads;
+	// without server-side handlers the device retries forever and disk fills
+	// up on the device side.
+	wsHandlers := map[string]ws.MethodHandler{
+		"forwardLogs": ws.MakeForwardLogsHandler(d.store, nil),
+		"storeStats":  ws.MakeStoreStatsHandler(d.store, nil),
+	}
+	ws.NewHandler(d.hub, d.queries, wsHandlers, d.rpcCaller).RegisterRoutes(e)
 }

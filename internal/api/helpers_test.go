@@ -86,13 +86,24 @@ func (r *mockRow) Scan(dest ...interface{}) error {
 		return fmt.Errorf("no device")
 	}
 	if len(dest) < 5 {
-		return fmt.Errorf("expected 5 scan destinations, got %d", len(dest))
+		return fmt.Errorf("expected 5+ scan destinations, got %d", len(dest))
 	}
 	*dest[0].(*string) = r.device.DongleID
 	*dest[1].(*pgtype.Text) = r.device.Serial
 	*dest[2].(*pgtype.Text) = r.device.PublicKey
 	*dest[3].(*pgtype.Timestamptz) = r.device.CreatedAt
 	*dest[4].(*pgtype.Timestamptz) = r.device.UpdatedAt
+	// Sunnylink columns are nullable; not every test cares about them, but the
+	// regenerated sqlc Device select returns them so we must accept the extra
+	// scan slots without surprising the caller.
+	if len(dest) >= 7 {
+		if p, ok := dest[5].(*pgtype.Text); ok {
+			*p = r.device.SunnylinkDongleID
+		}
+		if p, ok := dest[6].(*pgtype.Text); ok {
+			*p = r.device.SunnylinkPublicKey
+		}
+	}
 	return nil
 }
 

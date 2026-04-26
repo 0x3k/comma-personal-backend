@@ -59,7 +59,10 @@ func (s *Storage) Usage(ctx context.Context, forceRefresh bool) (*UsageReport, e
 	if !forceRefresh && cache.report != nil && time.Since(cache.computedAt) < cache.ttl {
 		// Return a copy so callers cannot mutate cached state.
 		cp := *cache.report
-		cp.Devices = append([]DeviceUsage(nil), cache.report.Devices...)
+		// Seed the copy with a non-nil empty slice so JSON marshaling emits
+		// `[]` instead of `null` when there are no devices yet (consumers
+		// like the web Settings page call .length on the result).
+		cp.Devices = append([]DeviceUsage{}, cache.report.Devices...)
 		return &cp, nil
 	}
 
@@ -72,7 +75,7 @@ func (s *Storage) Usage(ctx context.Context, forceRefresh bool) (*UsageReport, e
 	cache.computedAt = report.ComputedAt
 	// Return a copy to keep the cached report immutable from callers.
 	cp := *report
-	cp.Devices = append([]DeviceUsage(nil), report.Devices...)
+	cp.Devices = append([]DeviceUsage{}, report.Devices...)
 	return &cp, nil
 }
 
