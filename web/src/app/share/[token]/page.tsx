@@ -47,6 +47,10 @@ function getAvailableCameras(segment: ShareSegment): CameraType[] {
   if (segment.fcameraUploaded) cameras.push("fcamera");
   if (segment.ecameraUploaded) cameras.push("ecamera");
   if (segment.dcameraUploaded) cameras.push("dcamera");
+  // qcamera is the low-res preview that openpilot/sunnypilot upload by
+  // default; the player uses it as a fallback when none of the HEVC
+  // streams are available.
+  if (segment.qcameraUploaded) cameras.push("qcamera");
   return cameras;
 }
 
