@@ -124,7 +124,7 @@ func startWorkers(ctx context.Context, d *deps) {
 				if err != nil {
 					return nil, err
 				}
-				return api.BuildUploadItemsAt(baseURL, row.DongleID, row.RouteName, segments, wanted), nil
+				return api.BuildUploadItemsAt(baseURL, d.sessionSecret, row.DongleID, row.RouteName, segments, wanted), nil
 			},
 		}
 		w := worker.NewRouteDataRequestDispatcher(d.queries, dispatcher)

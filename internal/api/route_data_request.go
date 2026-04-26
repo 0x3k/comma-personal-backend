@@ -130,18 +130,23 @@ func (d *hubDispatcher) Dispatch(_ context.Context, dongleID string, items []ws.
 // RouteDataRequestHandler holds the dependencies for the on-demand route
 // data request endpoints.
 type RouteDataRequestHandler struct {
-	queries    RouteDataRequestQueries
-	dispatcher DeviceUploadDispatcher
-	now        func() time.Time
+	queries      RouteDataRequestQueries
+	dispatcher   DeviceUploadDispatcher
+	uploadSecret []byte
+	now          func() time.Time
 }
 
 // NewRouteDataRequestHandler builds a handler from the live deps. Pass the
-// hub-backed dispatcher in production; tests may inject a fake.
-func NewRouteDataRequestHandler(queries RouteDataRequestQueries, dispatcher DeviceUploadDispatcher) *RouteDataRequestHandler {
+// hub-backed dispatcher in production; tests may inject a fake. uploadSecret
+// is the HMAC key used to sign the upload URLs the device receives via
+// athena RPC; pass nil/empty to fall back to unsigned URLs (the upload
+// endpoint will then reject the device's anonymous PUT with 401).
+func NewRouteDataRequestHandler(queries RouteDataRequestQueries, dispatcher DeviceUploadDispatcher, uploadSecret []byte) *RouteDataRequestHandler {
 	return &RouteDataRequestHandler{
-		queries:    queries,
-		dispatcher: dispatcher,
-		now:        time.Now,
+		queries:      queries,
+		dispatcher:   dispatcher,
+		uploadSecret: uploadSecret,
+		now:          time.Now,
 	}
 }
 
@@ -272,7 +277,7 @@ func (h *RouteDataRequestHandler) RequestFullData(c echo.Context) error {
 		})
 	}
 
-	items := buildUploadItems(c, dongleID, routeName, segments, wanted)
+	items := h.buildUploadItems(c, dongleID, routeName, segments, wanted)
 
 	requestedBy := requesterFromContext(c)
 
@@ -471,19 +476,19 @@ func segmentHasFile(seg db.Segment, filename string) bool {
 // expects for an uploadFilesToUrls RPC. fn is "<route_name>--<seg>/<filename>"
 // so the device joins it with its log_root (Paths.log_root() in athenad.py)
 // to find the on-disk file.
-func buildUploadItems(c echo.Context, dongleID, routeName string, segments []db.Segment, wanted []string) []ws.UploadFileToUrlParams {
-	scheme := "http"
-	if c.Request().TLS != nil {
-		scheme = "https"
-	}
-	baseURL := scheme + "://" + c.Request().Host
-	return BuildUploadItemsAt(baseURL, dongleID, routeName, segments, wanted)
+func (h *RouteDataRequestHandler) buildUploadItems(c echo.Context, dongleID, routeName string, segments []db.Segment, wanted []string) []ws.UploadFileToUrlParams {
+	baseURL := schemeFromRequest(c.Request()) + "://" + c.Request().Host
+	return BuildUploadItemsAt(baseURL, h.uploadSecret, dongleID, routeName, segments, wanted)
 }
 
 // BuildUploadItemsAt is the pure-function flavour of buildUploadItems used by
 // the dispatcher worker, which has no echo.Context to crib scheme + host
-// from. See BuildSegmentUploadURLAt for the baseURL contract.
-func BuildUploadItemsAt(baseURL, dongleID, routeName string, segments []db.Segment, wanted []string) []ws.UploadFileToUrlParams {
+// from. See BuildSegmentUploadURLAt for the baseURL contract. uploadSecret
+// is the HMAC key used to sign upload URLs; pass nil/empty to fall back to
+// unsigned URLs (only useful when the upload route accepts unauthenticated
+// PUTs, which is not the default).
+func BuildUploadItemsAt(baseURL string, uploadSecret []byte, dongleID, routeName string, segments []db.Segment, wanted []string) []ws.UploadFileToUrlParams {
+	exp := time.Now().Add(UploadSignatureTTL)
 	items := make([]ws.UploadFileToUrlParams, 0, len(segments)*len(wanted))
 	for _, seg := range segments {
 		segStr := strconv.Itoa(int(seg.SegmentNumber))
@@ -491,7 +496,20 @@ func BuildUploadItemsAt(baseURL, dongleID, routeName string, segments []db.Segme
 			if segmentHasFile(seg, filename) {
 				continue
 			}
-			url, headers := BuildSegmentUploadURLAt(baseURL, dongleID, routeName, segStr, filename)
+			var (
+				url     string
+				headers map[string]string
+			)
+			if len(uploadSecret) > 0 {
+				signed, h, err := BuildSignedSegmentUploadURLAt(uploadSecret, baseURL, dongleID, routeName, segStr, filename, exp)
+				if err != nil {
+					url, headers = BuildSegmentUploadURLAt(baseURL, dongleID, routeName, segStr, filename)
+				} else {
+					url, headers = signed, h
+				}
+			} else {
+				url, headers = BuildSegmentUploadURLAt(baseURL, dongleID, routeName, segStr, filename)
+			}
 			items = append(items, ws.UploadFileToUrlParams{
 				URL:     url,
 				Headers: headers,

@@ -185,17 +185,22 @@ func CallUploadFileToUrl(caller *RPCCaller, client *Client, url string, headers 
 	return nil
 }
 
-// UploadFilesToUrlsParams is the batch variant of UploadFileToUrlParams; each
-// entry specifies a file (fn), destination URL, and headers. This mirrors
-// openpilot's athenad uploadFilesToUrls RPC.
-type UploadFilesToUrlsParams []UploadFileToUrlParams
+// UploadFilesToUrlsParams matches openpilot athenad's uploadFilesToUrls
+// signature: a single keyword argument files_data carrying the batch.
+// Sending the items array directly as JSON-RPC params would dispatch by
+// position, and athenad's first positional parameter is files_data --
+// the device would receive items[0] (a single file dict) instead of the
+// list, and reject the call as Invalid params.
+type UploadFilesToUrlsParams struct {
+	FilesData []UploadFileToUrlParams `json:"files_data"`
+}
 
 // CallUploadFilesToUrls instructs the device to enqueue multiple file uploads
 // in a single RPC round-trip. It returns the device's response map, which
 // typically contains "enqueued" (count), "items" (enqueued item descriptors),
 // and optionally "failed" (list of file names that were rejected).
 func CallUploadFilesToUrls(caller *RPCCaller, client *Client, items []UploadFileToUrlParams) (map[string]interface{}, error) {
-	params := UploadFilesToUrlsParams(items)
+	params := UploadFilesToUrlsParams{FilesData: items}
 
 	resp, err := caller.Call(client, "uploadFilesToUrls", params)
 	if err != nil {
@@ -596,13 +601,13 @@ func handleUploadFileToUrl(_ string, params json.RawMessage) (interface{}, *RPCE
 // A real device would enqueue each file on its uploader; this handler echoes
 // the request shape and reports enqueued == len(items) with no failures.
 func handleUploadFilesToUrls(_ string, params json.RawMessage) (interface{}, *RPCError) {
-	var items UploadFilesToUrlsParams
-	if err := json.Unmarshal(params, &items); err != nil {
+	var p UploadFilesToUrlsParams
+	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, NewRPCError(CodeInvalidParams, fmt.Sprintf("invalid params: %v", err))
 	}
 
-	echoed := make([]map[string]interface{}, 0, len(items))
-	for _, it := range items {
+	echoed := make([]map[string]interface{}, 0, len(p.FilesData))
+	for _, it := range p.FilesData {
 		echoed = append(echoed, map[string]interface{}{
 			"fn":      it.Path,
 			"url":     it.URL,
@@ -611,7 +616,7 @@ func handleUploadFilesToUrls(_ string, params json.RawMessage) (interface{}, *RP
 	}
 
 	return map[string]interface{}{
-		"enqueued": len(items),
+		"enqueued": len(p.FilesData),
 		"items":    echoed,
 		"failed":   []string{},
 	}, nil

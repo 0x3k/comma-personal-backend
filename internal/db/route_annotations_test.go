@@ -50,6 +50,8 @@ func setupAnnotationsDB(t *testing.T) (*pgxpool.Pool, func(), bool) {
 func resetAnnotationsSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	stmts := []string{
+		`DROP TABLE IF EXISTS crashes CASCADE`,
+		`DROP TABLE IF EXISTS route_data_requests CASCADE`,
 		`DROP TABLE IF EXISTS events CASCADE`,
 		`DROP TABLE IF EXISTS trips CASCADE`,
 		`DROP TABLE IF EXISTS segments CASCADE`,

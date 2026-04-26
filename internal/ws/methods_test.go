@@ -446,7 +446,7 @@ func TestCallUploadFilesToUrls_ThreeItems(t *testing.T) {
 			return
 		}
 		resp := &RPCResponse{JSONRPC: jsonRPCVersion, ID: req.ID}
-		if len(p) != 3 || p[0].Path != "/data/a" || p[2].URL != "https://example.com/c" {
+		if len(p.FilesData) != 3 || p.FilesData[0].Path != "/data/a" || p.FilesData[2].URL != "https://example.com/c" {
 			resp.Error = NewRPCError(CodeInvalidParams, "unexpected params")
 			caller.HandleResponse(resp)
 			return
@@ -502,7 +502,7 @@ func TestCallUploadFilesToUrls_RPCError(t *testing.T) {
 }
 
 func TestHandleUploadFilesToUrls_Valid(t *testing.T) {
-	params := json.RawMessage(`[{"url":"https://example.com/a","headers":{"X-A":"1"},"fn":"/data/a"},{"url":"https://example.com/b","headers":{"X-B":"2"},"fn":"/data/b"}]`)
+	params := json.RawMessage(`{"files_data":[{"url":"https://example.com/a","headers":{"X-A":"1"},"fn":"/data/a"},{"url":"https://example.com/b","headers":{"X-B":"2"},"fn":"/data/b"}]}`)
 
 	result, rpcErr := handleUploadFilesToUrls("test-dongle", params)
 	if rpcErr != nil {
@@ -529,7 +529,7 @@ func TestHandleUploadFilesToUrls_Valid(t *testing.T) {
 }
 
 func TestHandleUploadFilesToUrls_Empty(t *testing.T) {
-	params := json.RawMessage(`[]`)
+	params := json.RawMessage(`{"files_data":[]}`)
 
 	result, rpcErr := handleUploadFilesToUrls("test-dongle", params)
 	if rpcErr != nil {

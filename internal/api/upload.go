@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -150,6 +151,24 @@ func BuildSegmentUploadURLAt(baseURL, dongleID, route, segment, filename string)
 	uploadPath := fmt.Sprintf("/upload/%s/%s/%s/%s", dongleID, route, segment, filename)
 	uploadURL := baseURL + uploadPath
 	return uploadURL, map[string]string{}
+}
+
+// BuildSignedSegmentUploadURLAt is BuildSegmentUploadURLAt plus an HMAC
+// signature on the URL path so the device's anonymous PUT is still bound to
+// this backend. Used by the on-demand "Get full quality" path: the request
+// arrives at the device via athena RPC and the device cannot present a JWT
+// (the backend doesn't have its private key), so the URL itself carries the
+// authorisation. uploadSecret must be non-empty; pass through to
+// BuildSegmentUploadURLAt for legacy unsigned URLs.
+func BuildSignedSegmentUploadURLAt(uploadSecret []byte, baseURL, dongleID, route, segment, filename string, exp time.Time) (string, map[string]string, error) {
+	uploadURL, headers := BuildSegmentUploadURLAt(baseURL, dongleID, route, segment, filename)
+	uploadPath := fmt.Sprintf("/upload/%s/%s/%s/%s", dongleID, route, segment, filename)
+	sig := SignUploadPath(uploadSecret, uploadPath, exp)
+	signedURL, err := AppendUploadSignature(uploadURL, exp, sig)
+	if err != nil {
+		return "", nil, err
+	}
+	return signedURL, headers, nil
 }
 
 // GetUploadURL handles GET /v1.4/:dongle_id/upload_url/ and returns a URL

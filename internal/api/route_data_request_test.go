@@ -284,7 +284,7 @@ func TestRequestFullData_HappyPathDispatchesItems(t *testing.T) {
 	q, routeID := seedHappyPath(t, dongle, routeName, 3)
 
 	dispatcher := &fakeDispatcher{online: true}
-	h := NewRouteDataRequestHandler(q, dispatcher)
+	h := NewRouteDataRequestHandler(q, dispatcher, nil)
 
 	e := echo.New()
 	c, rec := newPostContext(t, e, dongle, routeName, `{"kind":"all"}`)
@@ -341,7 +341,7 @@ func TestRequestFullData_FullLogsKindOnlyRequestsRlog(t *testing.T) {
 	q, _ := seedHappyPath(t, dongle, routeName, 2)
 
 	dispatcher := &fakeDispatcher{online: true}
-	h := NewRouteDataRequestHandler(q, dispatcher)
+	h := NewRouteDataRequestHandler(q, dispatcher, nil)
 
 	e := echo.New()
 	c, rec := newPostContext(t, e, dongle, routeName, `{"kind":"full_logs"}`)
@@ -374,7 +374,7 @@ func TestRequestFullData_SkipsAlreadyUploadedFiles(t *testing.T) {
 	q.seedSegments(routeID, segs)
 
 	dispatcher := &fakeDispatcher{online: true}
-	h := NewRouteDataRequestHandler(q, dispatcher)
+	h := NewRouteDataRequestHandler(q, dispatcher, nil)
 
 	e := echo.New()
 	c, _ := newPostContext(t, e, dongle, routeName, `{"kind":"full_video"}`)
@@ -396,7 +396,7 @@ func TestRequestFullData_DeviceOfflineLeavesRowPending(t *testing.T) {
 	q, _ := seedHappyPath(t, dongle, routeName, 1)
 
 	dispatcher := &fakeDispatcher{online: false}
-	h := NewRouteDataRequestHandler(q, dispatcher)
+	h := NewRouteDataRequestHandler(q, dispatcher, nil)
 
 	e := echo.New()
 	c, rec := newPostContext(t, e, dongle, routeName, `{"kind":"all"}`)
@@ -427,7 +427,7 @@ func TestRequestFullData_RPCFailureMarksFailed(t *testing.T) {
 	q, _ := seedHappyPath(t, dongle, routeName, 1)
 
 	dispatcher := &fakeDispatcher{online: true, err: errors.New("rpc boom")}
-	h := NewRouteDataRequestHandler(q, dispatcher)
+	h := NewRouteDataRequestHandler(q, dispatcher, nil)
 
 	e := echo.New()
 	c, rec := newPostContext(t, e, dongle, routeName, `{"kind":"all"}`)
@@ -465,7 +465,7 @@ func TestRequestFullData_IdempotentWithinWindow(t *testing.T) {
 	})
 
 	dispatcher := &fakeDispatcher{online: true}
-	h := NewRouteDataRequestHandler(q, dispatcher)
+	h := NewRouteDataRequestHandler(q, dispatcher, nil)
 
 	e := echo.New()
 	c, rec := newPostContext(t, e, dongle, routeName, `{"kind":"all"}`)
@@ -501,7 +501,7 @@ func TestRequestFullData_FailedRequestDoesNotShortCircuit(t *testing.T) {
 	})
 
 	dispatcher := &fakeDispatcher{online: true}
-	h := NewRouteDataRequestHandler(q, dispatcher)
+	h := NewRouteDataRequestHandler(q, dispatcher, nil)
 
 	e := echo.New()
 	c, rec := newPostContext(t, e, dongle, routeName, `{"kind":"all"}`)
@@ -523,7 +523,7 @@ func TestRequestFullData_BadKindRejected(t *testing.T) {
 	const routeName = "2024-03-15--12-30-00"
 	q, _ := seedHappyPath(t, dongle, routeName, 1)
 
-	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true})
+	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true}, nil)
 
 	e := echo.New()
 	c, rec := newPostContext(t, e, dongle, routeName, `{"kind":"junk"}`)
@@ -541,7 +541,7 @@ func TestRequestFullData_DongleAccessEnforced(t *testing.T) {
 	const dongle = "abc123"
 	const routeName = "2024-03-15--12-30-00"
 	q, _ := seedHappyPath(t, dongle, routeName, 1)
-	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true})
+	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true}, nil)
 
 	e := echo.New()
 	c, rec := newPostContext(t, e, dongle, routeName, `{"kind":"all"}`)
@@ -580,7 +580,7 @@ func TestGetFullDataRequest_AutoCompletesWhenFullyUploaded(t *testing.T) {
 	// The seeded row got id=1.
 	const reqID int32 = 1
 
-	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true})
+	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true}, nil)
 
 	e := echo.New()
 	c, rec := newGetContext(t, e, dongle, routeName, reqID)
@@ -638,7 +638,7 @@ func TestGetFullDataRequest_PartialProgressReportsPercent(t *testing.T) {
 	})
 	const reqID int32 = 1
 
-	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true})
+	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true}, nil)
 	e := echo.New()
 	c, rec := newGetContext(t, e, dongle, routeName, reqID)
 	withDeviceJWTAuth(c, dongle)
@@ -675,7 +675,7 @@ func TestGetFullDataRequest_MismatchedRoute404(t *testing.T) {
 	// 404 -- we want the row id to belong to a different route.
 	q.seedRoute(db.Route{ID: 99, DongleID: dongle, RouteName: "other-route"})
 
-	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true})
+	h := NewRouteDataRequestHandler(q, &fakeDispatcher{online: true}, nil)
 	e := echo.New()
 	c, rec := newGetContext(t, e, dongle, "other-route", 1)
 	withDeviceJWTAuth(c, dongle)

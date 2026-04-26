@@ -492,6 +492,12 @@ WHERE seg.segment_count > 0
         t.id IS NULL
         OR t.computed_at IS NULL
         OR t.computed_at < seg.latest_segment_at
+        -- Route metadata worker filled start/end/geometry on the routes row
+        -- AFTER an earlier aggregator pass wrote a NULL trip. Without these
+        -- two clauses, the trip stays NULL forever because no new segment
+        -- ever arrives to bump latest_segment_at past computed_at.
+        OR (t.distance_meters  IS NULL AND r.geometry   IS NOT NULL)
+        OR (t.duration_seconds IS NULL AND r.start_time IS NOT NULL AND r.end_time IS NOT NULL)
       )
 ORDER BY r.created_at ASC, r.id ASC
 LIMIT $2

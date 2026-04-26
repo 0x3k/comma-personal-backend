@@ -61,6 +61,9 @@ func resetSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	// Order matters only for ergonomics; CASCADE drops dependents anyway.
 	stmts := []string{
+		`DROP TABLE IF EXISTS crashes CASCADE`,
+		`DROP TABLE IF EXISTS route_data_requests CASCADE`,
+		`DROP TABLE IF EXISTS route_tags CASCADE`,
 		`DROP TABLE IF EXISTS events CASCADE`,
 		`DROP TABLE IF EXISTS trips CASCADE`,
 		`DROP TABLE IF EXISTS segments CASCADE`,
@@ -401,6 +404,85 @@ func TestTripAggregator_SkipsRoutesWithRecentSegments(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no rows") {
 		t.Fatalf("unexpected error fetching absent trip: %v", err)
+	}
+}
+
+// TestTripAggregator_BackfillsAfterMetadataArrives covers the race where a
+// trip row was written with NULL stats (because the route had no start_time
+// or geometry yet) and the route metadata worker only later filled those
+// columns in. The aggregator must re-pick the route on its next pass even
+// though no new segment has arrived to bump latest_segment_at past
+// computed_at; otherwise the trip stays NULL forever and the dashboard
+// shows zero distance / duration despite the geometry being present.
+func TestTripAggregator_BackfillsAfterMetadataArrives(t *testing.T) {
+	pool, cleanup, skip := setupTestDB(t)
+	if skip {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	defer cleanup()
+
+	ctx := context.Background()
+	dongle := "aggr-backfill-1"
+	route := "2024-05-05--10-00-00"
+
+	// Pass 1: route exists with a finalized segment but no start/end/geometry
+	// (simulating "metadata worker hasn't run yet"). Aggregator writes a
+	// trip row with all stats NULL.
+	routeID := seedRouteAndSegment(t, pool, dongle, route, "", time.Time{}, time.Time{}, 1*time.Hour)
+	// seedRouteAndSegment writes start/end even when zero; clear them so we
+	// reflect the real "no metadata yet" state.
+	if _, err := pool.Exec(ctx, `UPDATE routes SET start_time = NULL, end_time = NULL WHERE id = $1`, routeID); err != nil {
+		t.Fatalf("clear metadata: %v", err)
+	}
+
+	a := newAggregatorForTest(pool)
+	if err := a.RunOnce(ctx); err != nil {
+		t.Fatalf("first RunOnce: %v", err)
+	}
+	first, err := a.Queries.GetTripByRouteID(ctx, routeID)
+	if err != nil {
+		t.Fatalf("first GetTripByRouteID: %v", err)
+	}
+	if first.DistanceMeters.Valid || first.DurationSeconds.Valid {
+		t.Fatalf("setup invariant: expected NULL stats on first pass, got distance=%+v duration=%+v",
+			first.DistanceMeters, first.DurationSeconds)
+	}
+
+	// Pass 2: simulate the route metadata worker filling in start/end and
+	// geometry on the routes row. No new segment is added, so the OLD
+	// "computed_at < latest_segment_at" eligibility check would NOT pick
+	// the route up again -- the regression this test guards against.
+	wkt := "LINESTRING(-122.40 37.70, -122.39 37.70)"
+	start := time.Now().Add(-10 * time.Minute)
+	end := start.Add(5 * time.Minute)
+	if _, err := pool.Exec(ctx, `
+		UPDATE routes
+		SET start_time = $1,
+		    end_time   = $2,
+		    geometry   = ST_GeomFromText($3, 4326)
+		WHERE id = $4
+	`, start, end, wkt, routeID); err != nil {
+		t.Fatalf("backfill metadata: %v", err)
+	}
+
+	if err := a.RunOnce(ctx); err != nil {
+		t.Fatalf("second RunOnce: %v", err)
+	}
+	second, err := a.Queries.GetTripByRouteID(ctx, routeID)
+	if err != nil {
+		t.Fatalf("second GetTripByRouteID: %v", err)
+	}
+
+	if !second.DurationSeconds.Valid || second.DurationSeconds.Int32 != int32((5*time.Minute).Seconds()) {
+		t.Errorf("duration_seconds = %+v, want %d after metadata backfill",
+			second.DurationSeconds, int32((5 * time.Minute).Seconds()))
+	}
+	if !second.DistanceMeters.Valid || second.DistanceMeters.Float64 <= 0 {
+		t.Errorf("distance_meters = %+v, want valid positive value after metadata backfill",
+			second.DistanceMeters)
+	}
+	if second.ID != first.ID {
+		t.Errorf("trips.id changed across re-aggregation: first=%d second=%d", first.ID, second.ID)
 	}
 }
 
