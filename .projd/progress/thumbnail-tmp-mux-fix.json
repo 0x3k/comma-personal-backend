@@ -1,0 +1,19 @@
+{
+  "id": "thumbnail-tmp-mux-fix",
+  "name": "Fix thumbnail worker ffmpeg muxer error on .tmp output",
+  "description": "Every route on the running deployment has a thumbnail.failed marker because the thumbnail worker writes to thumbnail.jpg.tmp and ffmpeg cannot infer an output format from the .tmp extension. Backend logs show: \"Unable to choose an output format for '/data/.../thumbnail.jpg.tmp'; use a standard extension for the filename or specify the format manually.\" The worker then writes the failure marker and skips the route for 30 minutes. The fix is to tell ffmpeg the output muxer explicitly so the .tmp atomic-rename pattern keeps working.",
+  "priority": 2,
+  "status": "in_progress",
+  "branch": "agent/thumbnail-tmp-mux-fix",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "internal/worker/thumbnail.go defaultFFmpegRunner adds an explicit output-format flag (-f mjpeg) before the output path so ffmpeg does not try to infer the muxer from the .tmp extension; alternative acceptable: pass -f image2 with -update 1 -- pick whichever produces a single JPEG and document the choice in a one-line comment",
+    "Worker behavior is unchanged on success: thumbnail.jpg ends up next to qcamera.ts via temp-file + rename; thumbnail.failed is removed on success",
+    "internal/worker/thumbnail_test.go gets a regression test that fails the old behavior: stub the ffmpegRunner with a closure that asserts -f mjpeg (or the chosen flag) is present in the args, OR add an end-to-end test that invokes the real ffmpeg binary against a tiny qcamera.ts fixture and confirms thumbnail.jpg is produced (the existing test suite already does end-to-end ffmpeg in some places -- match the existing pattern)",
+    "Once deployed, manual verification: delete data/<dongle>/<route>/0/thumbnail.failed for one route, wait one scan interval, confirm thumbnail.jpg is produced and the route list card shows the preview",
+    "go test ./internal/worker/... passes",
+    "go vet ./... and go build ./... pass cleanly"
+  ],
+  "notes": ""
+}

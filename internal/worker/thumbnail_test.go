@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -341,6 +343,69 @@ func TestThumbnailer_ScanOnceSkipsExisting(t *testing.T) {
 	store := storage.New(tmp)
 	th := NewThumbnailer(nil, store)
 	th.scanOnce(context.Background())
+}
+
+// TestDefaultFFmpegRunner_PassesExplicitMuxerFlag is a regression test for
+// the .tmp-extension muxer-inference bug: when the worker writes to
+// "thumbnail.jpg.tmp", ffmpeg cannot infer the output format from the
+// extension and fails with "Unable to choose an output format". The fix is
+// an explicit `-f mjpeg` flag before the output path. This test stubs
+// ffmpeg with a shell script that records its argv, then asserts the flag
+// is present and that the runner succeeds against a .tmp output path.
+func TestDefaultFFmpegRunner_PassesExplicitMuxerFlag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script ffmpeg stub is unix-only")
+	}
+	tmp := t.TempDir()
+
+	// Fake ffmpeg: write its argv to a log file, then touch the output path
+	// (last positional argument) so the renaming step in generate() works
+	// when this script is wired in via SetFFmpegPath.
+	argLog := filepath.Join(tmp, "ffmpeg-args.log")
+	scriptPath := filepath.Join(tmp, "ffmpeg")
+	script := "#!/usr/bin/env bash\n" +
+		"printf '%s\\n' \"$@\" > " + argLog + "\n" +
+		"out=\"${@: -1}\"\n" +
+		"printf 'fake jpeg' > \"$out\"\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake ffmpeg: %v", err)
+	}
+
+	inputPath := filepath.Join(tmp, "qcamera.ts")
+	if err := os.WriteFile(inputPath, []byte("fake ts"), 0644); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	// Use the same .tmp suffix the worker uses, so the test fails for the
+	// same reason production failed before the fix.
+	outputPath := filepath.Join(tmp, "thumbnail.jpg.tmp")
+
+	if err := defaultFFmpegRunner(context.Background(), scriptPath, inputPath, outputPath, 320); err != nil {
+		t.Fatalf("defaultFFmpegRunner returned error: %v", err)
+	}
+
+	logged, err := os.ReadFile(argLog)
+	if err != nil {
+		t.Fatalf("read arg log: %v", err)
+	}
+	args := strings.Split(strings.TrimRight(string(logged), "\n"), "\n")
+
+	// -f mjpeg must appear as adjacent args.
+	foundMuxer := false
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "-f" && args[i+1] == "mjpeg" {
+			foundMuxer = true
+			break
+		}
+	}
+	if !foundMuxer {
+		t.Errorf("expected `-f mjpeg` in ffmpeg args, got: %v", args)
+	}
+
+	// The output path must be the last positional arg (after the muxer
+	// flag) so ffmpeg parses `-f mjpeg` as applying to the output.
+	if len(args) == 0 || args[len(args)-1] != outputPath {
+		t.Errorf("expected output path %q to be last arg, got: %v", outputPath, args)
+	}
 }
 
 func TestThumbnailer_InCooldownBadMarker(t *testing.T) {
