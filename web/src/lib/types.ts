@@ -208,3 +208,42 @@ export interface MomentsListResponse {
   limit: number;
   offset: number;
 }
+
+/**
+ * A crash record persisted by the Sentry envelope relay
+ * (POST /api/:project_id/envelope/). Tags and exception are decoded JSONB
+ * so the dashboard can drill into them without a second fetch.
+ */
+export interface CrashListItem {
+  id: number;
+  event_id: string;
+  dongle_id?: string;
+  level: string;
+  message: string;
+  tags: unknown;
+  exception: unknown;
+  occurred_at: string | null;
+  received_at: string | null;
+}
+
+/** Paginated response from GET /v1/crashes. */
+export interface CrashListResponse {
+  crashes: CrashListItem[];
+  total: number;
+}
+
+/** Full detail for one crash (GET /v1/crashes/:id). */
+export interface CrashDetail {
+  id: number;
+  event_id: string;
+  dongle_id?: string;
+  level: string;
+  message: string;
+  fingerprint: unknown;
+  tags: unknown;
+  exception: unknown;
+  breadcrumbs: unknown;
+  raw_event: unknown;
+  occurred_at: string | null;
+  received_at: string | null;
+}

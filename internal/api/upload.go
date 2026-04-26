@@ -99,6 +99,23 @@ type uploadURLResponse struct {
 	Headers map[string]string `json:"headers"`
 }
 
+// schemeFromRequest derives the public-facing scheme for an incoming request.
+// X-Forwarded-Proto wins over the on-the-wire TLS check so that requests
+// arriving via a TLS-terminating reverse proxy (e.g. `tailscale serve`) still
+// produce https:// URLs for the device to PUT back to.
+func schemeFromRequest(r *http.Request) string {
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		if i := strings.Index(proto, ","); i >= 0 {
+			proto = proto[:i]
+		}
+		return strings.TrimSpace(proto)
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
 // BuildSegmentUploadURL builds the self-hosted PUT URL for a single segment
 // file given the request context (used to derive scheme + host) and the
 // segment coordinates. It is shared by GetUploadURL (the device-facing v1.4
@@ -110,12 +127,18 @@ type uploadURLResponse struct {
 // response and forward it verbatim on the PUT, but we have nothing to add at
 // this layer (the PUT handler reads only the URL path components).
 func BuildSegmentUploadURL(c echo.Context, dongleID, route, segment, filename string) (string, map[string]string) {
-	scheme := "http"
-	if c.Request().TLS != nil {
-		scheme = "https"
-	}
+	scheme := schemeFromRequest(c.Request())
 	host := c.Request().Host
 	return BuildSegmentUploadURLAt(scheme+"://"+host, dongleID, route, segment, filename)
+}
+
+// BuildBootUploadURL builds the self-hosted PUT URL for a boot log. Boot logs
+// have no route or segment; they live at /upload/<dongle_id>/boot/<id>.zst.
+func BuildBootUploadURL(c echo.Context, dongleID, bootID string) (string, map[string]string) {
+	scheme := schemeFromRequest(c.Request())
+	host := c.Request().Host
+	uploadPath := fmt.Sprintf("/upload/%s/boot/%s.zst", dongleID, bootID)
+	return scheme + "://" + host + uploadPath, map[string]string{}
 }
 
 // BuildSegmentUploadURLAt is the pure-function flavour of
@@ -150,26 +173,51 @@ func (h *UploadHandler) GetUploadURL(c echo.Context) error {
 		})
 	}
 
-	// Parse path: expected format is "route_name/segment/filename" or
-	// "route_name--segment/filename" (segment embedded in route name).
-	// The comma device sends paths like "2024-03-15--12-30-00--0/fcamera.hevc"
-	// where the segment number is appended to the route timestamp.
-	route, segment, filename, err := parsePath(path)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, errorResponse{
-			Error: err.Error(),
-			Code:  http.StatusBadRequest,
-		})
+	var (
+		uploadURL string
+		headers   map[string]string
+	)
+
+	if strings.HasPrefix(path, "boot/") {
+		bootID, err := parseBootPath(path)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, errorResponse{
+				Error: err.Error(),
+				Code:  http.StatusBadRequest,
+			})
+		}
+		uploadURL, headers = BuildBootUploadURL(c, dongleID, bootID)
+	} else {
+		// Parse path: expected format is "route_name/segment/filename" or
+		// "route_name--segment/filename" (segment embedded in route name).
+		// The comma device sends paths like "2024-03-15--12-30-00--0/fcamera.hevc"
+		// where the segment number is appended to the route timestamp.
+		route, segment, filename, err := parsePath(path)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, errorResponse{
+				Error: err.Error(),
+				Code:  http.StatusBadRequest,
+			})
+		}
+
+		if !validFilenames[filename] {
+			return c.JSON(http.StatusBadRequest, errorResponse{
+				Error: fmt.Sprintf("unsupported file type: %s", filename),
+				Code:  http.StatusBadRequest,
+			})
+		}
+
+		uploadURL, headers = BuildSegmentUploadURL(c, dongleID, route, segment, filename)
 	}
 
-	if !validFilenames[filename] {
-		return c.JSON(http.StatusBadRequest, errorResponse{
-			Error: fmt.Sprintf("unsupported file type: %s", filename),
-			Code:  http.StatusBadRequest,
-		})
+	// Echo the request's Authorization header so the device's PUT carries the
+	// same JWT the upload_url request did. The reverse proxy may strip
+	// credentials between hops; surfacing them in the response keeps the
+	// upload's auth context aligned with the URL's.
+	if auth := c.Request().Header.Get("Authorization"); auth != "" {
+		headers["Authorization"] = auth
 	}
 
-	uploadURL, headers := BuildSegmentUploadURL(c, dongleID, route, segment, filename)
 	return c.JSON(http.StatusOK, uploadURLResponse{URL: uploadURL, Headers: headers})
 }
 
@@ -195,6 +243,29 @@ func (h *UploadHandler) UploadFile(c echo.Context) error {
 		})
 	}
 
+	body := c.Request().Body
+	defer body.Close()
+	counter := &countingReader{r: body}
+
+	if strings.HasPrefix(filePath, "boot/") {
+		bootID, err := parseBootPath(filePath)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, errorResponse{
+				Error: err.Error(),
+				Code:  http.StatusBadRequest,
+			})
+		}
+		if err := h.storage.WriteBootLog(dongleID, bootID, counter); err != nil {
+			h.metrics.AddUploadBytes(dongleID, counter.n)
+			return c.JSON(http.StatusInternalServerError, errorResponse{
+				Error: "failed to store boot log",
+				Code:  http.StatusInternalServerError,
+			})
+		}
+		h.metrics.AddUploadBytes(dongleID, counter.n)
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	}
+
 	route, segment, filename, err := parseUploadPath(filePath)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errorResponse{
@@ -210,12 +281,8 @@ func (h *UploadHandler) UploadFile(c echo.Context) error {
 		})
 	}
 
-	body := c.Request().Body
-	defer body.Close()
-
 	// Count bytes through the body reader so the metric reflects what was
 	// actually received (Content-Length can be missing for chunked uploads).
-	counter := &countingReader{r: body}
 	if err := h.storage.Store(dongleID, route, segment, filename, counter); err != nil {
 		h.metrics.AddUploadBytes(dongleID, counter.n)
 		return c.JSON(http.StatusInternalServerError, errorResponse{
@@ -356,6 +423,31 @@ func parsePath(path string) (route, segment, filename string, err error) {
 	}
 
 	return route, segment, filename, nil
+}
+
+// parseBootPath parses a boot-log path of the form "boot/<id>.zst" and
+// returns the bare id. Boot logs are device-side files under
+// /data/media/0/realdata/boot/ that the uploader PUTs verbatim, so the path
+// has a fixed shape and any deviation (missing prefix, non-.zst extension,
+// nested separator, or traversal segment) is rejected up-front to keep the
+// device from steering uploads outside <basePath>/<dongleID>/boot/.
+func parseBootPath(path string) (string, error) {
+	const prefix = "boot/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", fmt.Errorf("invalid boot id: missing %q prefix", prefix)
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	if !strings.HasSuffix(rest, ".zst") {
+		return "", fmt.Errorf("boot log must end in .zst")
+	}
+	id := strings.TrimSuffix(rest, ".zst")
+	if id == "" {
+		return "", fmt.Errorf("invalid boot id: empty id")
+	}
+	if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") {
+		return "", fmt.Errorf("invalid boot id: %q", id)
+	}
+	return id, nil
 }
 
 // parseUploadPath parses the path from the upload URL (after /upload/:dongle_id/).

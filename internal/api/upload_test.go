@@ -86,6 +86,46 @@ func TestGetUploadURL(t *testing.T) {
 			wantURL:      "/upload/abc123/2024-03-15--12-30-00/0/rlog.bz2",
 		},
 		{
+			name:         "valid rlog.zst upload URL",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			path:         "2024-03-15--12-30-00--0/rlog.zst",
+			wantStatus:   http.StatusOK,
+			wantURL:      "/upload/abc123/2024-03-15--12-30-00/0/rlog.zst",
+		},
+		{
+			name:         "valid qlog.zst upload URL",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			path:         "2024-03-15--12-30-00--0/qlog.zst",
+			wantStatus:   http.StatusOK,
+			wantURL:      "/upload/abc123/2024-03-15--12-30-00/0/qlog.zst",
+		},
+		{
+			name:         "valid boot log upload URL",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			path:         "boot/00000022--e1b4cb408a.zst",
+			wantStatus:   http.StatusOK,
+			wantURL:      "/upload/abc123/boot/00000022--e1b4cb408a.zst",
+		},
+		{
+			name:         "boot path without .zst returns 400",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			path:         "boot/something.txt",
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "boot log must end in .zst",
+		},
+		{
+			name:         "boot path traversal returns 400",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			path:         "boot/../etc/passwd.zst",
+			wantStatus:   http.StatusBadRequest,
+			wantError:    "invalid boot id",
+		},
+		{
 			name:         "dongle_id mismatch returns 403",
 			dongleID:     "abc123",
 			authDongleID: "other999",
@@ -195,6 +235,15 @@ func TestUploadFile(t *testing.T) {
 			wantStored:   true,
 		},
 		{
+			name:         "successful rlog.zst upload",
+			dongleID:     "abc123",
+			authDongleID: "abc123",
+			filePath:     "2024-03-15--12-30-00/5/rlog.zst",
+			body:         "fake compressed log data",
+			wantStatus:   http.StatusOK,
+			wantStored:   true,
+		},
+		{
 			name:         "dongle_id mismatch returns 403",
 			dongleID:     "abc123",
 			authDongleID: "other999",
@@ -270,6 +319,155 @@ func TestUploadFile(t *testing.T) {
 				if string(data) != tt.body {
 					t.Errorf("stored data = %q, want %q", string(data), tt.body)
 				}
+			}
+		})
+	}
+}
+
+func TestGetUploadURLHonorsForwardedProto(t *testing.T) {
+	// Behind a TLS-terminating reverse proxy (e.g. `tailscale serve`), the
+	// upstream request is plain HTTP. The returned URL must be https:// so
+	// the device's PUT lands back on the proxy, not on whatever happens to
+	// be on port 80 of the same host.
+	store := storage.New(t.TempDir())
+	handler := NewUploadHandler(store, nil)
+
+	cases := []string{"2024-03-15--12-30-00--0/qlog.zst", "boot/00000022--e1b4cb408a.zst"}
+	for _, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "/v1.4/abc123/upload_url/?path="+p, nil)
+			req.Header.Set("X-Forwarded-Proto", "https")
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("dongle_id")
+			c.SetParamValues("abc123")
+			c.Set(middleware.ContextKeyDongleID, "abc123")
+
+			if err := handler.GetUploadURL(c); err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+			var body uploadURLResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if !strings.HasPrefix(body.URL, "https://") {
+				t.Errorf("URL = %q, want https:// prefix", body.URL)
+			}
+		})
+	}
+}
+
+func TestGetUploadURLEchoesAuthorizationHeader(t *testing.T) {
+	store := storage.New(t.TempDir())
+	handler := NewUploadHandler(store, nil)
+
+	const jwt = "JWT eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.testtoken"
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"segment path", "2024-03-15--12-30-00--0/qlog.zst"},
+		{"boot path", "boot/00000022--e1b4cb408a.zst"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "/v1.4/abc123/upload_url/?path="+tt.path, nil)
+			req.Header.Set("Authorization", jwt)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("dongle_id")
+			c.SetParamValues("abc123")
+			c.Set(middleware.ContextKeyDongleID, "abc123")
+
+			if err := handler.GetUploadURL(c); err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+			}
+
+			var body uploadURLResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+			if body.URL == "" {
+				t.Errorf("missing url")
+			}
+			if got := body.Headers["Authorization"]; got != jwt {
+				t.Errorf("Authorization header = %q, want %q", got, jwt)
+			}
+		})
+	}
+}
+
+func TestUploadFileBootLog(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := storage.New(tmpDir)
+	handler := NewUploadHandler(store, nil)
+
+	const dongleID = "abc123"
+	const bootID = "00000022--e1b4cb408a"
+	filePath := "boot/" + bootID + ".zst"
+	body := "fake boot log payload"
+
+	e := echo.New()
+	target := "/upload/" + dongleID + "/" + filePath
+	req := httptest.NewRequest(http.MethodPut, target, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id", "*")
+	c.SetParamValues(dongleID, filePath)
+	c.Set(middleware.ContextKeyDongleID, dongleID)
+
+	if err := handler.UploadFile(c); err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+
+	storedPath := filepath.Join(tmpDir, dongleID, "boot", bootID+".zst")
+	got, err := os.ReadFile(storedPath)
+	if err != nil {
+		t.Fatalf("expected file at %s but got error: %v", storedPath, err)
+	}
+	if string(got) != body {
+		t.Errorf("stored data = %q, want %q", string(got), body)
+	}
+}
+
+func TestParseBootPath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantID  string
+		wantErr bool
+	}{
+		{name: "standard boot id", path: "boot/00000022--e1b4cb408a.zst", wantID: "00000022--e1b4cb408a"},
+		{name: "missing prefix", path: "00000022--e1b4cb408a.zst", wantErr: true},
+		{name: "missing .zst", path: "boot/something", wantErr: true},
+		{name: "wrong extension", path: "boot/something.bz2", wantErr: true},
+		{name: "empty id", path: "boot/.zst", wantErr: true},
+		{name: "path traversal", path: "boot/../passwd.zst", wantErr: true},
+		{name: "nested slash", path: "boot/sub/file.zst", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, err := parseBootPath(tt.path)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got id=%q", id)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if id != tt.wantID {
+				t.Errorf("id = %q, want %q", id, tt.wantID)
 			}
 		})
 	}
@@ -426,8 +624,10 @@ func TestBuildUploadParams(t *testing.T) {
 	}{
 		{name: "rlog sets rlog flag", filename: "rlog", wantFlag: "rlog"},
 		{name: "rlog.bz2 sets rlog flag", filename: "rlog.bz2", wantFlag: "rlog"},
+		{name: "rlog.zst sets rlog flag", filename: "rlog.zst", wantFlag: "rlog"},
 		{name: "qlog sets qlog flag", filename: "qlog", wantFlag: "qlog"},
 		{name: "qlog.bz2 sets qlog flag", filename: "qlog.bz2", wantFlag: "qlog"},
+		{name: "qlog.zst sets qlog flag", filename: "qlog.zst", wantFlag: "qlog"},
 		{name: "fcamera.hevc sets fcamera flag", filename: "fcamera.hevc", wantFlag: "fcamera"},
 		{name: "fcamera.hevc~ sets fcamera flag", filename: "fcamera.hevc~", wantFlag: "fcamera"},
 		{name: "ecamera.hevc sets ecamera flag", filename: "ecamera.hevc", wantFlag: "ecamera"},

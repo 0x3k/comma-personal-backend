@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -9,9 +10,11 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
 	"comma-personal-backend/internal/api/middleware"
+	"comma-personal-backend/internal/db"
 )
 
 // wsErrorResponse is the JSON error envelope for pre-upgrade HTTP responses.
@@ -28,12 +31,25 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// Handler provides the Echo handler for WebSocket connections.
+// SunnylinkDeviceLookup is the subset of db.Queries needed to resolve a
+// sunnylink connection: the WS handler reads the JWT's identity claim, looks
+// up the device row by its sunnylink_dongle_id, and verifies the token
+// against the stored sunnylink_public_key. Kept separate from
+// middleware.DeviceLookup so tests can stub each one independently.
+type SunnylinkDeviceLookup interface {
+	GetDeviceBySunnylinkDongleID(ctx context.Context, sunnylinkDongleID pgtype.Text) (db.Device, error)
+}
+
+// Handler provides the Echo handler for WebSocket connections. It serves
+// both the comma athena path (/ws/v2/:dongle_id, /ws/:dongle_id) and the
+// sunnylink path (/ws/sunnylink), distinguished by which auth and lookup
+// path runs at upgrade time.
 type Handler struct {
-	hub       *Hub
-	lookup    middleware.DeviceLookup
-	handlers  map[string]MethodHandler
-	rpcCaller *RPCCaller
+	hub             *Hub
+	lookup          middleware.DeviceLookup
+	sunnylinkLookup SunnylinkDeviceLookup
+	handlers        map[string]MethodHandler
+	rpcCaller       *RPCCaller
 }
 
 // NewHandler creates a WebSocket handler.
@@ -42,16 +58,26 @@ type Handler struct {
 // method dispatch. The rpcCaller, if non-nil, is passed to each Client so
 // that RPC responses from the device are routed back to pending
 // RPCCaller.Call invocations.
+//
+// If lookup also implements SunnylinkDeviceLookup (the production
+// *db.Queries does), the sunnylink WS path is registered. Tests that don't
+// care about the sunnylink path can pass a lookup that doesn't satisfy the
+// extended interface; the route will still be registered but every connect
+// will fail at lookup time with "sunnylink not configured".
 func NewHandler(hub *Hub, lookup middleware.DeviceLookup, handlers map[string]MethodHandler, rpcCaller *RPCCaller) *Handler {
 	if handlers == nil {
 		handlers = make(map[string]MethodHandler)
 	}
-	return &Handler{
+	h := &Handler{
 		hub:       hub,
 		lookup:    lookup,
 		handlers:  handlers,
 		rpcCaller: rpcCaller,
 	}
+	if sl, ok := lookup.(SunnylinkDeviceLookup); ok {
+		h.sunnylinkLookup = sl
+	}
+	return h
 }
 
 // HandleWebSocket is the Echo handler for GET /ws/:dongle_id.
@@ -169,10 +195,99 @@ func extractAuthHeaderToken(c echo.Context) string {
 	return strings.TrimSpace(parts[1])
 }
 
-// RegisterRoutes wires up the WebSocket route on the given Echo instance.
-// Both paths are registered: /ws/v2/:dongle_id is the path openpilot's
-// athenad connects to, and /ws/:dongle_id is kept for direct use.
+// RegisterRoutes wires up the WebSocket routes on the given Echo instance.
+//
+// Athena (comma): /ws/v2/:dongle_id (the path openpilot's athenad connects
+// to) and /ws/:dongle_id (kept for direct use).
+//
+// Sunnylink: /ws/sunnylink (no path component for the dongle_id, since
+// sunnylinkd connects to SUNNYLINK_ATHENA_HOST verbatim and identifies the
+// device via the Bearer JWT's `identity` claim only). Operators point
+// SUNNYLINK_ATHENA_HOST at e.g. "wss://my-backend/ws/sunnylink".
 func (h *Handler) RegisterRoutes(e *echo.Echo) {
 	e.GET("/ws/v2/:dongle_id", h.HandleWebSocket)
 	e.GET("/ws/:dongle_id", h.HandleWebSocket)
+	e.GET("/ws/sunnylink", h.HandleSunnylinkWebSocket)
+}
+
+// HandleSunnylinkWebSocket is the Echo handler for GET /ws/sunnylink.
+// It mirrors HandleWebSocket but identifies the device via the
+// sunnylink_dongle_id encoded in the Bearer JWT's `identity` claim, and
+// verifies the signature against devices.sunnylink_public_key.
+//
+// The accepted Client.DongleID is the *sunnylink* dongle_id, which keeps
+// it disjoint from the comma athena hub entry for the same physical device.
+// Storage paths and operator UIs that key on comma_dongle_id therefore see
+// sunnylink-pushed payloads as a separate stream -- intentional, since the
+// device sends a parallel forwardLogs from sunnylinkd.
+func (h *Handler) HandleSunnylinkWebSocket(c echo.Context) error {
+	if h.sunnylinkLookup == nil {
+		return c.JSON(http.StatusServiceUnavailable, wsErrorResponse{
+			Error: "sunnylink not configured",
+			Code:  http.StatusServiceUnavailable,
+		})
+	}
+
+	tokenStr := extractAuthHeaderToken(c)
+	if tokenStr == "" {
+		tokenStr = readCookieToken(c)
+	}
+	if tokenStr == "" {
+		tokenStr = c.QueryParam("token")
+	}
+	if tokenStr == "" {
+		return c.JSON(http.StatusUnauthorized, wsErrorResponse{
+			Error: "missing authorization token",
+			Code:  http.StatusUnauthorized,
+		})
+	}
+
+	sunnylinkID, err := middleware.ParseIdentity(tokenStr)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, wsErrorResponse{
+			Error: err.Error(),
+			Code:  http.StatusUnauthorized,
+		})
+	}
+
+	device, err := h.sunnylinkLookup.GetDeviceBySunnylinkDongleID(
+		c.Request().Context(),
+		pgtype.Text{String: sunnylinkID, Valid: true},
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.JSON(http.StatusUnauthorized, wsErrorResponse{
+				Error: "sunnylink device not registered",
+				Code:  http.StatusUnauthorized,
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, wsErrorResponse{
+			Error: "failed to look up sunnylink device",
+			Code:  http.StatusInternalServerError,
+		})
+	}
+	if !device.SunnylinkPublicKey.Valid || device.SunnylinkPublicKey.String == "" {
+		return c.JSON(http.StatusUnauthorized, wsErrorResponse{
+			Error: "sunnylink device has no registered public key",
+			Code:  http.StatusUnauthorized,
+		})
+	}
+
+	if err := middleware.VerifySignedToken(tokenStr, device.SunnylinkPublicKey.String); err != nil {
+		return c.JSON(http.StatusUnauthorized, wsErrorResponse{
+			Error: fmt.Sprintf("failed to validate token: %s", err.Error()),
+			Code:  http.StatusUnauthorized,
+		})
+	}
+
+	conn, err := upgrader.Upgrade(c.Response(), c.Request(), nil)
+	if err != nil {
+		log.Printf("ws/sunnylink: failed to upgrade connection: %v", err)
+		return nil
+	}
+
+	client := NewClient(sunnylinkID, conn, h.hub, h.handlers, h.rpcCaller)
+	h.hub.Register(client)
+	client.Run()
+	return nil
 }

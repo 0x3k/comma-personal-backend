@@ -1,0 +1,22 @@
+{
+  "id": "request-full-route-data-ui",
+  "name": "On-demand full-route data: route detail UI button + progress",
+  "description": "Surface the request_full_data endpoint as a button on the route detail page so users can pull full-res video and full logs for a specific drive without opening a terminal. The button kicks off the request, the page polls the status endpoint, and once the device finishes uploading, the existing transcoder / event-detector pipelines pick up the new files automatically (no special-case glue here -- just expose the trigger and the progress).",
+  "priority": 3,
+  "status": "pending",
+  "base_branch": "main",
+  "blocked_by": ["request-full-route-data-api"],
+  "acceptance_criteria": [
+    "web/src/lib/api.ts (or wherever the route API client lives) gains requestFullRouteData(dongleId, routeName, kind) and getFullRouteDataRequest(dongleId, routeName, requestId) typed wrappers around the new endpoints",
+    "web/src/app/routes/[dongleId]/[routeName]/page.tsx adds a 'Get full quality' control near the existing route metadata. The control offers three options -- 'Full video', 'Full logs', 'Everything' -- and shows the current state of the latest non-failed request inline (e.g. 'Uploading 14 / 36 files', 'Complete', 'Device offline -- queued')",
+    "Progress polling: when an in-flight request exists, the page polls GET .../request_full_data/:request_id every 5s while the tab is visible (use document.visibilityState; pause polling when hidden) and stops once status=complete or failed",
+    "After completion the page re-fetches the route detail so the upload flags + thumbnail + video player reflect the new files without a manual reload",
+    "Disabled / loading states: the button is disabled while a non-failed request for the same kind is in-flight; failed requests show the error inline with a 'Try again' that POSTs a fresh request (the API's idempotency window does NOT apply once status=failed)",
+    "Accessibility: button has a clear aria-label (e.g. 'Request full-resolution data for this drive'), the progress text is announced via aria-live=polite, and keyboard navigation reaches every option in the menu",
+    "Telemetry-light, intentionally: no analytics events for this feature -- it's an admin/operator tool, not a product surface. Skip any analytics wiring even if the codebase has helpers",
+    "Tests: web/src/app/routes/[dongleId]/[routeName]/page.test.tsx covers the disabled-while-in-flight, success-then-refetch, and failure-then-retry flows using msw or whatever mock pattern the existing tests use. If the page does not yet have tests, add a focused unit test for the new component instead of forcing a full page test",
+    "Manual verification: on the deployed UI, open route 92fc6a8b6c034662/0000004a--ce3ac77767, click 'Everything', see the row appear and progress increment as the device uploads (this depends on the device being online; if not, the UI should clearly say 'Device offline -- will dispatch on reconnect')",
+    "pnpm --dir web type-check, pnpm --dir web lint, and pnpm --dir web test pass"
+  ],
+  "notes": ""
+}

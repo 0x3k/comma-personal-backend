@@ -14,6 +14,15 @@ type Config struct {
 	Port           string
 	AllowedSerials []string
 
+	// AllowedOrigins is the list of origins permitted by the CORS middleware,
+	// loaded from CORS_ALLOWED_ORIGINS (comma-separated). When empty, the CORS
+	// middleware is not registered and the API only accepts same-origin
+	// browser requests. Required when the frontend is served from a different
+	// origin than the API (e.g. the docker prod stack: frontend on :80,
+	// backend on :7070). Cannot be `*` because the API uses cookie-based
+	// session auth and credentialed CORS requests require a specific origin.
+	AllowedOrigins []string
+
 	// Web UI authentication. Separate from the device-facing JWT auth that
 	// protects /v1/* endpoints used by openpilot. SessionSecret gates whether
 	// UI auth is enabled at all: if empty, login endpoints are disabled and a
@@ -48,6 +57,18 @@ func Load() (*Config, error) {
 			s = strings.TrimSpace(s)
 			if s != "" {
 				cfg.AllowedSerials = append(cfg.AllowedSerials, s)
+			}
+		}
+	}
+
+	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {
+		for _, s := range strings.Split(v, ",") {
+			s = strings.TrimSpace(s)
+			if s == "*" {
+				return nil, fmt.Errorf("failed to load config: CORS_ALLOWED_ORIGINS cannot contain '*' because the API uses cookie-based auth; list explicit origins instead")
+			}
+			if s != "" {
+				cfg.AllowedOrigins = append(cfg.AllowedOrigins, s)
 			}
 		}
 	}

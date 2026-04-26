@@ -25,12 +25,19 @@ func NewDeviceHandler(queries *db.Queries) *DeviceHandler {
 }
 
 // deviceResponse is the JSON body returned for a device info request.
+//
+// IsPaired and PrimeType match the fields openpilot's PrimeState.fetch
+// reads (selfdrive/ui/lib/prime_state.py). On a single-tenant personal
+// backend every registered device is implicitly paired and granted the
+// highest prime tier (PURPLE = 5), so all gated UI features unlock.
 type deviceResponse struct {
 	DongleID  string    `json:"dongle_id"`
 	Serial    string    `json:"serial"`
 	PublicKey string    `json:"public_key"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	IsPaired  bool      `json:"is_paired"`
+	PrimeType int       `json:"prime_type"`
 }
 
 // deviceListItem is the JSON representation used by the dashboard device
@@ -80,6 +87,8 @@ func (h *DeviceHandler) GetDevice(c echo.Context) error {
 		PublicKey: device.PublicKey.String,
 		CreatedAt: device.CreatedAt.Time,
 		UpdatedAt: device.UpdatedAt.Time,
+		IsPaired:  true,
+		PrimeType: 5, // PURPLE: highest tier so every prime-gated feature unlocks
 	})
 }
 
