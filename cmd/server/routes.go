@@ -21,10 +21,31 @@ import (
 // without always colliding on main.go.
 func setupRoutes(e *echo.Echo, d *deps) {
 	// Global middleware. Order matters:
-	//   CORS -> rate-limiter -> body-limit -> metrics
-	// CORS runs first so OPTIONS preflights short-circuit (204) before the
-	// rate limiter counts them and before metrics observe them. Metrics
-	// observe post-admission traffic only.
+	//   logger -> CORS -> rate-limiter -> body-limit -> metrics
+	// Logger runs first so every request is visible in the access log,
+	// including ones rejected by the rate limiter (429) or body limit
+	// (413). CORS runs next so OPTIONS preflights short-circuit (204)
+	// before the rate limiter counts them and before metrics observe
+	// them. Metrics observe post-admission traffic only.
+	e.Use(echomw.RequestLoggerWithConfig(echomw.RequestLoggerConfig{
+		LogStatus:   true,
+		LogMethod:   true,
+		LogURI:      true,
+		LogRemoteIP: true,
+		LogLatency:  true,
+		LogError:    true,
+		HandleError: true,
+		LogValuesFunc: func(c echo.Context, v echomw.RequestLoggerValues) error {
+			if v.Error != nil {
+				log.Printf("%s %s %d %s remote=%s err=%v",
+					v.Method, v.URI, v.Status, v.Latency, v.RemoteIP, v.Error)
+			} else {
+				log.Printf("%s %s %d %s remote=%s",
+					v.Method, v.URI, v.Status, v.Latency, v.RemoteIP)
+			}
+			return nil
+		},
+	}))
 	if len(d.cfg.AllowedOrigins) > 0 {
 		e.Use(echomw.CORSWithConfig(echomw.CORSConfig{
 			AllowOrigins: d.cfg.AllowedOrigins,
