@@ -6,7 +6,7 @@ import { apiFetch } from "@/lib/api";
 import type { DeviceStats, Trip } from "@/lib/types";
 import {
   formatDistance,
-  formatDurationHM,
+  formatDuration,
   formatEngagementPct,
   formatTotalDuration,
 } from "@/lib/format";
@@ -118,7 +118,7 @@ function RecentDriveRow({ trip }: { trip: Trip }) {
           )}
         </div>
         <div className="text-sm tabular-nums text-[var(--text-primary)] sm:text-right">
-          {formatDurationHM(trip.duration_seconds)}
+          {formatDuration(trip.duration_seconds)}
         </div>
         <div className="text-sm tabular-nums text-[var(--text-primary)] sm:text-right">
           {formatDistance(trip.distance_meters)}

@@ -11,6 +11,7 @@ import {
 import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { Spinner } from "@/components/ui/Spinner";
 import TripMap from "@/components/map/TripMap";
+import { formatDurationBetween } from "@/lib/format";
 
 /**
  * Public read-only viewer for a shared route. The token in the URL is the
@@ -29,17 +30,6 @@ function formatDateTime(iso: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function formatDuration(start: string | null, end: string | null): string {
-  if (!start || !end) return "--";
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms <= 0) return "--";
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds}s`;
-  return `${minutes}m ${seconds}s`;
 }
 
 function getAvailableCameras(segment: ShareSegment): CameraType[] {
@@ -158,7 +148,7 @@ export default function SharePage() {
                 </div>
                 <div>
                   <dt className="text-[var(--text-secondary)]">Duration</dt>
-                  <dd>{formatDuration(route.startTime, route.endTime)}</dd>
+                  <dd>{formatDurationBetween(route.startTime, route.endTime)}</dd>
                 </div>
                 <div>
                   <dt className="text-[var(--text-secondary)]">Segments</dt>

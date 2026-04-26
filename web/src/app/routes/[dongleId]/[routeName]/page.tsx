@@ -23,6 +23,7 @@ import { ShareButton } from "@/components/ShareButton";
 import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
 import { RouteAnnotations } from "@/components/routes/RouteAnnotations";
 import { FullDataRequestControl } from "@/components/routes/FullDataRequestControl";
+import { formatDurationBetween } from "@/lib/format";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
   { key: "fcameraUploaded", label: "fcamera" },
@@ -44,17 +45,6 @@ function formatDate(iso: string | null): string {
     minute: "2-digit",
     second: "2-digit",
   });
-}
-
-function formatDuration(start: string | null, end: string | null): string {
-  if (!start || !end) return "--";
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms <= 0) return "--";
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds}s`;
-  return `${minutes}m ${seconds}s`;
 }
 
 function uploadBadgeVariant(uploaded: boolean): BadgeVariant {
@@ -265,7 +255,7 @@ export default function RouteDetailPage() {
                 </div>
                 <div>
                   <dt className="text-[var(--text-secondary)]">Duration</dt>
-                  <dd>{formatDuration(route.startTime, route.endTime)}</dd>
+                  <dd>{formatDurationBetween(route.startTime, route.endTime)}</dd>
                 </div>
                 <div>
                   <dt className="text-[var(--text-secondary)]">Segments</dt>

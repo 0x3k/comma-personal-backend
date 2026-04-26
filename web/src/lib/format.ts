@@ -67,25 +67,51 @@ export function formatDistance(
 }
 
 /**
- * Render a duration in seconds as a compact HH:MM string.
+ * Render a duration in seconds as a compact human-readable string.
  *
- * Used for individual drive durations on the dashboard. Anything under an hour
- * still includes a leading "0:" so the column stays visually aligned.
+ * The unit cascade adapts to magnitude so a short drive doesn't read as
+ * "0:11" (mistakable for 11 seconds) and a multi-hour route doesn't bloat
+ * into noise like "73m 24s". Sub-minute values keep their seconds, sub-hour
+ * values keep their seconds when nonzero, and hour-scale values drop seconds
+ * entirely because that precision is rarely useful at that range.
  *
- * @example formatDurationHM(0)      // "0:00"
- * @example formatDurationHM(59)     // "0:00"
- * @example formatDurationHM(60)     // "0:01"
- * @example formatDurationHM(3600)   // "1:00"
- * @example formatDurationHM(3725)   // "1:02"
+ * @example formatDuration(0)      // "0s"
+ * @example formatDuration(24)     // "24s"
+ * @example formatDuration(60)     // "1m"
+ * @example formatDuration(90)     // "1m 30s"
+ * @example formatDuration(684)    // "11m 24s"
+ * @example formatDuration(3600)   // "1h"
+ * @example formatDuration(5400)   // "1h 30m"
  */
-export function formatDurationHM(seconds: number | null | undefined): string {
+export function formatDuration(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) {
     return "--";
   }
-  const safe = Math.max(0, Math.floor(seconds));
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  return `${hours}:${minutes.toString().padStart(2, "0")}`;
+  const total = Math.max(0, Math.floor(seconds));
+  if (total < 60) return `${total}s`;
+  if (total < 3600) {
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return s === 0 ? `${m}m` : `${m}m ${s}s`;
+  }
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+}
+
+/**
+ * Convenience wrapper around formatDuration for callers that hold ISO date
+ * strings rather than a precomputed seconds delta. Returns "--" when either
+ * end of the range is missing or the range is non-positive.
+ */
+export function formatDurationBetween(
+  start: string | null | undefined,
+  end: string | null | undefined,
+): string {
+  if (!start || !end) return "--";
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (!Number.isFinite(ms) || ms <= 0) return "--";
+  return formatDuration(Math.floor(ms / 1000));
 }
 
 /**

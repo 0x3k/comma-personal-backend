@@ -26,6 +26,7 @@ import {
 } from "@/components/routes/FilterBar";
 import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
 import { StarIcon } from "@/components/routes/RouteAnnotations";
+import { formatDurationBetween } from "@/lib/format";
 
 /**
  * Default dongle ID used when none is configured.
@@ -50,17 +51,6 @@ function formatDate(iso: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-function formatDuration(start: string | null, end: string | null): string {
-  if (!start || !end) return "--";
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (ms <= 0) return "--";
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds}s`;
-  return `${minutes}m ${seconds}s`;
 }
 
 function RoutesPageInner() {
@@ -284,7 +274,7 @@ function RoutesPageInner() {
                           Duration
                         </dt>
                         <dd className="text-[var(--text-primary)]">
-                          {formatDuration(route.startTime, route.endTime)}
+                          {formatDurationBetween(route.startTime, route.endTime)}
                         </dd>
                       </div>
                       <div className="flex justify-between">
