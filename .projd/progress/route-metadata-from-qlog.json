@@ -3,7 +3,7 @@
   "name": "Route metadata worker: populate start_time, end_time, geometry from qlog",
   "description": "Today routes.start_time, routes.end_time, and routes.geometry are NULL for every row in the database, because internal/api/upload.go:286 calls db.CreateRoute with only DongleID + RouteName and nothing ever updates those columns afterwards. The downstream effect is that the trip aggregator runs and writes a trip row with all-NULL stats (no distance, no duration, no start/end coordinates, no addresses), the route map shows nothing, and the routes-list filter UI cannot filter by date or duration. Add a background worker that parses uploaded qlogs and writes derived metadata back to the routes table.\n\nDependency note: this feature is blocked by qlog-zstd-support (real code dependency: the worker must be able to read qlog.zst to extract GPS) AND by qcamera-hls-fallback (staggering only -- both features append a goroutine block to cmd/server/workers.go and merging them in parallel would create a 3-way conflict that is annoying to resolve without force-push, which agent.json forbids).",
   "priority": 1,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/route-metadata-from-qlog",
   "base_branch": "main",
   "blocked_by": ["qlog-zstd-support", "qcamera-hls-fallback"],
