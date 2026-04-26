@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"time"
 
+	"comma-personal-backend/internal/api"
+	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/geocode"
 	"comma-personal-backend/internal/worker"
+	"comma-personal-backend/internal/ws"
 )
 
 // startWorkers launches the background goroutines that make up the
@@ -95,6 +99,40 @@ func startWorkers(ctx context.Context, d *deps) {
 		log.Printf("thumbnail worker started")
 	} else {
 		log.Printf("thumbnail worker: disabled via THUMBNAIL_ENABLED=false")
+	}
+
+	// Route data request dispatcher: retries pending on-demand pulls when
+	// the target device reconnects. ROUTE_DATA_DISPATCHER_ENABLED is
+	// opt-IN by default-false so an operator who hasn't set up the
+	// public-URL plumbing won't accidentally enqueue requests against a
+	// localhost URL the device cannot reach. ROUTE_DATA_PUBLIC_URL is the
+	// origin (e.g. https://comma.example.com) the device will PUT files
+	// back to; empty falls back to a path-only URL the device resolves
+	// against its own server origin (works when the device shares an
+	// origin with the API, e.g. behind a single Caddy/Nginx).
+	if envBool("ROUTE_DATA_DISPATCHER_ENABLED", false) {
+		baseURL := os.Getenv("ROUTE_DATA_PUBLIC_URL")
+		dispatcher := &worker.HubBackedDispatcher{
+			Hub: d.hub,
+			RPC: d.rpcCaller,
+			BuildItems: func(ctx context.Context, row db.ListPendingRouteDataRequestsRow) ([]ws.UploadFileToUrlParams, error) {
+				wanted, err := api.FilesForKind(row.Kind)
+				if err != nil {
+					return nil, err
+				}
+				segments, err := d.queries.ListSegmentsByRoute(ctx, row.RouteID)
+				if err != nil {
+					return nil, err
+				}
+				return api.BuildUploadItemsAt(baseURL, row.DongleID, row.RouteName, segments, wanted), nil
+			},
+		}
+		w := worker.NewRouteDataRequestDispatcher(d.queries, dispatcher)
+		go w.Run(ctx)
+		log.Printf("route data dispatcher started (poll=%s, max_attempts=%d, public_url=%q)",
+			w.PollInterval, w.MaxAttempts, baseURL)
+	} else {
+		log.Printf("route data dispatcher: disabled via ROUTE_DATA_DISPATCHER_ENABLED")
 	}
 
 	// Transcoder worker: rewraps qcamera.ts (and re-encodes HEVC where
