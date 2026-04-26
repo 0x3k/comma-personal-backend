@@ -38,6 +38,16 @@ type Config struct {
 	// fallback when the settings table does not contain a retention_days
 	// override.
 	RetentionDays int
+
+	// PublicBaseURL, when non-empty, is the absolute origin (e.g.
+	// "https://comma.example.com") that the upload-URL endpoints prefix every
+	// device-facing PUT URL with. Empty preserves the legacy behaviour of
+	// deriving scheme + host from the inbound request via X-Forwarded-Proto /
+	// r.TLS / r.Host. Required when the backend sits behind a TLS terminator
+	// that does not forward X-Forwarded-Proto (notably `tailscale serve`),
+	// which otherwise causes the backend to mint http:// URLs the device
+	// cannot PUT to.
+	PublicBaseURL string
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -82,6 +92,20 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("failed to load config: RETENTION_DAYS must be >= 0, got %d", n)
 		}
 		cfg.RetentionDays = n
+	}
+
+	if v := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); v != "" {
+		if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+			return nil, fmt.Errorf("failed to load config: PUBLIC_BASE_URL must start with http:// or https://, got %q", v)
+		}
+		host := strings.TrimPrefix(strings.TrimPrefix(v, "https://"), "http://")
+		if host == "" || strings.HasPrefix(host, "/") {
+			return nil, fmt.Errorf("failed to load config: PUBLIC_BASE_URL must include a host, got %q", v)
+		}
+		if strings.HasSuffix(v, "/") {
+			return nil, fmt.Errorf("failed to load config: PUBLIC_BASE_URL must not end with a trailing slash, got %q", v)
+		}
+		cfg.PublicBaseURL = v
 	}
 
 	if cfg.StoragePath == "" {

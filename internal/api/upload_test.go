@@ -324,6 +324,60 @@ func TestUploadFile(t *testing.T) {
 	}
 }
 
+func TestGetUploadURLHonorsPublicBaseURL(t *testing.T) {
+	// When PUBLIC_BASE_URL is configured (operator uses tailscale serve or
+	// any TLS terminator that does not forward X-Forwarded-Proto), every
+	// minted URL must use the configured origin, not whatever scheme/host
+	// the inbound request happens to carry. Cover both segment and boot
+	// paths; cover the case where the inbound request would otherwise
+	// have produced http:// (no XFP, no r.TLS).
+	const baseURL = "https://comma.example.com"
+	store := storage.New(t.TempDir())
+	handler := NewUploadHandler(store, nil).WithPublicBaseURL(baseURL)
+
+	cases := []struct {
+		name    string
+		path    string
+		wantURL string
+	}{
+		{
+			name:    "segment path uses configured origin",
+			path:    "2024-03-15--12-30-00--0/qlog.zst",
+			wantURL: baseURL + "/upload/abc123/2024-03-15--12-30-00/0/qlog.zst",
+		},
+		{
+			name:    "boot path uses configured origin",
+			path:    "boot/00000022--e1b4cb408a.zst",
+			wantURL: baseURL + "/upload/abc123/boot/00000022--e1b4cb408a.zst",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequest(http.MethodGet, "/v1.4/abc123/upload_url/?path="+tt.path, nil)
+			// Pretend the proxy forwarded http and a different host. The
+			// override must beat both.
+			req.Host = "internal.lan:7070"
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetParamNames("dongle_id")
+			c.SetParamValues("abc123")
+			c.Set(middleware.ContextKeyDongleID, "abc123")
+
+			if err := handler.GetUploadURL(c); err != nil {
+				t.Fatalf("handler returned error: %v", err)
+			}
+			var body uploadURLResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if body.URL != tt.wantURL {
+				t.Errorf("URL = %q, want %q", body.URL, tt.wantURL)
+			}
+		})
+	}
+}
+
 func TestGetUploadURLHonorsForwardedProto(t *testing.T) {
 	// Behind a TLS-terminating reverse proxy (e.g. `tailscale serve`), the
 	// upstream request is plain HTTP. The returned URL must be https:// so

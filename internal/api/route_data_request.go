@@ -130,10 +130,11 @@ func (d *hubDispatcher) Dispatch(_ context.Context, dongleID string, items []ws.
 // RouteDataRequestHandler holds the dependencies for the on-demand route
 // data request endpoints.
 type RouteDataRequestHandler struct {
-	queries      RouteDataRequestQueries
-	dispatcher   DeviceUploadDispatcher
-	uploadSecret []byte
-	now          func() time.Time
+	queries       RouteDataRequestQueries
+	dispatcher    DeviceUploadDispatcher
+	uploadSecret  []byte
+	publicBaseURL string
+	now           func() time.Time
 }
 
 // NewRouteDataRequestHandler builds a handler from the live deps. Pass the
@@ -148,6 +149,16 @@ func NewRouteDataRequestHandler(queries RouteDataRequestQueries, dispatcher Devi
 		uploadSecret: uploadSecret,
 		now:          time.Now,
 	}
+}
+
+// WithPublicBaseURL configures the absolute origin (e.g.
+// "https://comma.example.com") that buildUploadItems prefixes every minted
+// PUT URL with. Empty preserves the legacy behaviour of deriving scheme +
+// host from the inbound request. Returns the receiver so it can be chained
+// off the constructor.
+func (h *RouteDataRequestHandler) WithPublicBaseURL(baseURL string) *RouteDataRequestHandler {
+	h.publicBaseURL = baseURL
+	return h
 }
 
 // RegisterRoutes wires the POST and GET endpoints on the given Echo group.
@@ -477,8 +488,7 @@ func segmentHasFile(seg db.Segment, filename string) bool {
 // so the device joins it with its log_root (Paths.log_root() in athenad.py)
 // to find the on-disk file.
 func (h *RouteDataRequestHandler) buildUploadItems(c echo.Context, dongleID, routeName string, segments []db.Segment, wanted []string) []ws.UploadFileToUrlParams {
-	baseURL := schemeFromRequest(c.Request()) + "://" + c.Request().Host
-	return BuildUploadItemsAt(baseURL, h.uploadSecret, dongleID, routeName, segments, wanted)
+	return BuildUploadItemsAt(resolveBaseURL(h.publicBaseURL, c), h.uploadSecret, dongleID, routeName, segments, wanted)
 }
 
 // BuildUploadItemsAt is the pure-function flavour of buildUploadItems used by

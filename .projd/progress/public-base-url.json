@@ -1,0 +1,19 @@
+{
+  "id": "public-base-url",
+  "name": "PUBLIC_BASE_URL override for self-hosted upload URLs",
+  "description": "When the backend sits behind a TLS terminator that does not forward X-Forwarded-Proto (notably `tailscale serve`), the upload URLs returned by GET /v1.4/:dongle_id/upload_url/ and embedded in uploadFilesToUrls RPCs fall back to http://, so the device PUTs to a port that is not listening and gets a 404. Add an operator-controlled PUBLIC_BASE_URL config that, when set, overrides scheme+host derivation for every device-facing upload URL the backend mints.",
+  "acceptance_criteria": [
+    "Config loads PUBLIC_BASE_URL from the environment; empty preserves the existing schemeFromRequest behaviour",
+    "PUBLIC_BASE_URL is validated at startup: must start with http:// or https://, must include a host, must not end in a trailing slash",
+    "When set, GET /v1.4/:dongle_id/upload_url/ returns URLs prefixed with PUBLIC_BASE_URL regardless of incoming Host or X-Forwarded-Proto headers (covers both segment and boot paths)",
+    "When set, RouteDataRequestHandler.buildUploadItems uses PUBLIC_BASE_URL as the baseURL for every uploadFilesToUrls payload",
+    "Tests cover: PUBLIC_BASE_URL set wins over X-Forwarded-Proto, PUBLIC_BASE_URL empty preserves existing fallback, config validation rejects malformed values",
+    "go build, go vet, gofmt all pass; smoke.sh passes"
+  ],
+  "priority": 5,
+  "status": "in_progress",
+  "branch": "agent/public-base-url",
+  "base_branch": "main",
+  "blocked_by": [],
+  "notes": ""
+}
