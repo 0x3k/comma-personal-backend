@@ -60,10 +60,13 @@ type segmentSignals struct {
 }
 
 // qlogFilenames lists the possible on-disk names for a segment's qlog, in the
-// preferred-first order the resolver walks them. Devices may upload either
-// the raw capnp stream or the bz2-wrapped form; the cereal parser handles
-// both, but we need to know which filename to open.
-var qlogFilenames = []string{"qlog.bz2", "qlog"}
+// preferred-first order the resolver walks them. Current openpilot/sunnypilot
+// devices upload the zstd-wrapped form (qlog.zst); older devices uploaded
+// bz2 (qlog.bz2); the raw capnp stream form is rare. The cereal parser
+// handles all three framings transparently, but we need to know which
+// filename to open. Newest-first ordering means modern devices win without
+// breaking historical data.
+var qlogFilenames = []string{"qlog.zst", "qlog.bz2", "qlog"}
 
 // signalsCacheFilename is the on-disk cache written next to the qlog after
 // the first parse. It holds one segment's signalsResponse columns as JSON.

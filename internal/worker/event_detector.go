@@ -48,6 +48,14 @@ const (
 	fcwAlertPrefixCollision  = "Forward Collision"
 )
 
+// qlogPickerOrder lists the on-disk qlog filenames the event detector tries
+// per segment, in order of preference. Newer openpilot/sunnypilot devices
+// upload qlog.zst; older devices upload qlog.bz2; the raw qlog form is
+// rare in practice but still supported by the parser. The first match
+// wins, so the newest-first order means modern uploads are picked even
+// when a legacy file is also present from a partial reupload.
+var qlogPickerOrder = []string{"qlog.zst", "qlog.bz2", "qlog"}
+
 // Thresholds bundles the operator-tunable event detection parameters.
 // Zero values fall back to the defaults at run time.
 type Thresholds struct {
@@ -216,9 +224,11 @@ func (d *EventDetector) extract(ctx context.Context, dongleID, route string) (*c
 	}()
 	for _, seg := range segments {
 		segName := strconv.Itoa(seg)
-		// Prefer bz2; fall back to raw qlog when the device uploaded an
-		// uncompressed copy.
-		for _, name := range []string{"qlog.bz2", "qlog"} {
+		// Prefer zstd (current openpilot/sunnypilot upload format), then
+		// bz2 (older devices), then raw qlog (rare; mostly tests). The
+		// cereal parser auto-detects all three framings so the only
+		// concern here is which file to open per segment.
+		for _, name := range qlogPickerOrder {
 			if !d.Storage.Exists(dongleID, route, segName, name) {
 				continue
 			}

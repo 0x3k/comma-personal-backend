@@ -1,12 +1,21 @@
 package worker
 
 import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
 	"time"
 
+	capnp "capnproto.org/go/capnp/v3"
+	"github.com/klauspost/compress/zstd"
+
 	"comma-personal-backend/internal/cereal"
+	"comma-personal-backend/internal/cereal/schema"
+	"comma-personal-backend/internal/storage"
 )
 
 // buildSignals is a small helper for building a column-oriented
@@ -306,6 +315,209 @@ func TestThresholdsOverride(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("loose thresholds: expected 1 hard_brake, got %d (%v)", n, eventTypes(loose))
+	}
+}
+
+// buildWorkerQlogFixture builds a small uncompressed cap'n proto qlog
+// stream containing one carState (vEgo=10) and one selfdriveState
+// (engaged=true) event. We keep it self-contained here rather than reach
+// across packages so the worker test stays readable.
+func buildWorkerQlogFixture(t *testing.T) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	enc := capnp.NewEncoder(&buf)
+
+	// carState frame
+	msg0, seg0, err := capnp.NewMessage(capnp.SingleSegment(nil))
+	if err != nil {
+		t.Fatalf("NewMessage: %v", err)
+	}
+	evt0, err := schema.NewRootEvent(seg0)
+	if err != nil {
+		t.Fatalf("NewRootEvent: %v", err)
+	}
+	evt0.SetLogMonoTime(0)
+	evt0.SetValid(true)
+	cs, err := evt0.NewCarState()
+	if err != nil {
+		t.Fatalf("NewCarState: %v", err)
+	}
+	cs.SetVEgo(10)
+	if err := enc.Encode(msg0); err != nil {
+		t.Fatalf("Encode 0: %v", err)
+	}
+
+	// selfdriveState frame
+	msg1, seg1, err := capnp.NewMessage(capnp.SingleSegment(nil))
+	if err != nil {
+		t.Fatalf("NewMessage: %v", err)
+	}
+	evt1, err := schema.NewRootEvent(seg1)
+	if err != nil {
+		t.Fatalf("NewRootEvent: %v", err)
+	}
+	evt1.SetLogMonoTime(100_000_000)
+	evt1.SetValid(true)
+	ss, err := evt1.NewSelfdriveState()
+	if err != nil {
+		t.Fatalf("NewSelfdriveState: %v", err)
+	}
+	ss.SetEnabled(true)
+	if err := ss.SetAlertText1("Engaged"); err != nil {
+		t.Fatalf("SetAlertText1: %v", err)
+	}
+	if err := enc.Encode(msg1); err != nil {
+		t.Fatalf("Encode 1: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
+// writeWorkerQlogFile drops a file named filename into the segment dir on
+// disk under the given storage root, creating parent directories. Returns
+// the absolute path written.
+func writeWorkerQlogFile(t *testing.T, store *storage.Storage, dongle, route, segment, filename string, data []byte) string {
+	t.Helper()
+	dir := filepath.Dir(store.Path(dongle, route, segment, filename))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("MkdirAll %s: %v", dir, err)
+	}
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("WriteFile %s: %v", path, err)
+	}
+	return path
+}
+
+// TestEventDetectorExtractPrefersZstd is the qlog-zstd-support feature's
+// worker-side regression guard: a route whose only qlog file is qlog.zst
+// must still produce a non-empty DrivingSignals through the default
+// (non-overridden) extract path. This exercises the qlogPickerOrder
+// branch that picks qlog.zst plus the cereal parser's zstd decode.
+func TestEventDetectorExtractPrefersZstd(t *testing.T) {
+	const dongle = "dongle-1"
+	const route = "2024-03-15--12-30-00"
+
+	store := storage.New(t.TempDir())
+
+	// Compress the fixture with zstd and write only the .zst file. No
+	// qlog.bz2 / qlog on disk -- this is the "modern device" case.
+	fixture := buildWorkerQlogFixture(t)
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
+	}
+	compressed := enc.EncodeAll(fixture, nil)
+	if err := enc.Close(); err != nil {
+		t.Fatalf("zstd close: %v", err)
+	}
+	writeWorkerQlogFile(t, store, dongle, route, "0", "qlog.zst", compressed)
+
+	d := &EventDetector{Storage: store}
+	sig, err := d.extract(context.Background(), dongle, route)
+	if err != nil {
+		t.Fatalf("extract from qlog.zst: %v", err)
+	}
+	if sig == nil || len(sig.Times) == 0 {
+		t.Fatalf("extract from qlog.zst produced empty signals: %+v", sig)
+	}
+	if got := len(sig.Times); got != 2 {
+		t.Errorf("len(Times) = %d, want 2 from fixture", got)
+	}
+	if sig.VEgo[0] != 10 {
+		t.Errorf("VEgo[0] = %v, want 10", sig.VEgo[0])
+	}
+	if !sig.Engaged[1] {
+		t.Errorf("Engaged[1] = %v, want true", sig.Engaged[1])
+	}
+	if sig.AlertText[1] != "Engaged" {
+		t.Errorf("AlertText[1] = %q, want %q", sig.AlertText[1], "Engaged")
+	}
+}
+
+// TestEventDetectorPickerOrderPrefersZstdOverBz2 confirms that when both
+// qlog.zst and qlog.bz2 are on disk, the picker opens qlog.zst first.
+// The two files carry distinguishable payloads (different vEgo) so we can
+// tell which one the extractor read.
+func TestEventDetectorPickerOrderPrefersZstdOverBz2(t *testing.T) {
+	const dongle = "dongle-1"
+	const route = "2024-03-15--12-30-00"
+
+	store := storage.New(t.TempDir())
+
+	// Build a "winning" fixture (vEgo=42) and compress as zstd.
+	winning := buildWorkerVEgoFixture(t, 42)
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
+	}
+	compressed := enc.EncodeAll(winning, nil)
+	if err := enc.Close(); err != nil {
+		t.Fatalf("zstd close: %v", err)
+	}
+	writeWorkerQlogFile(t, store, dongle, route, "0", "qlog.zst", compressed)
+
+	// And a "losing" raw qlog on disk under the legacy name. The cereal
+	// parser would happily decode this if the picker preferred it; the
+	// test asserts it does not.
+	losing := buildWorkerVEgoFixture(t, 7)
+	writeWorkerQlogFile(t, store, dongle, route, "0", "qlog.bz2", losing) // raw bytes; never opened by parser, so the malformed framing is fine -- just needs to exist on disk
+
+	d := &EventDetector{Storage: store}
+	sig, err := d.extract(context.Background(), dongle, route)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if sig == nil || len(sig.VEgo) == 0 {
+		t.Fatalf("extract produced empty signals")
+	}
+	if sig.VEgo[0] != 42 {
+		t.Errorf("VEgo[0] = %v, want 42 (the zstd fixture); picker may be honoring qlog.bz2 ahead of qlog.zst", sig.VEgo[0])
+	}
+}
+
+// buildWorkerVEgoFixture builds a one-frame uncompressed qlog with a
+// single carState event whose vEgo is the supplied value. Used to make
+// the picker-order test self-describing.
+func buildWorkerVEgoFixture(t *testing.T, vEgo float32) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	enc := capnp.NewEncoder(&buf)
+
+	msg, seg, err := capnp.NewMessage(capnp.SingleSegment(nil))
+	if err != nil {
+		t.Fatalf("NewMessage: %v", err)
+	}
+	evt, err := schema.NewRootEvent(seg)
+	if err != nil {
+		t.Fatalf("NewRootEvent: %v", err)
+	}
+	evt.SetLogMonoTime(0)
+	evt.SetValid(true)
+	cs, err := evt.NewCarState()
+	if err != nil {
+		t.Fatalf("NewCarState: %v", err)
+	}
+	cs.SetVEgo(vEgo)
+	if err := enc.Encode(msg); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestQlogPickerOrder pins the on-disk preference order in the worker's
+// extract loop. Newer-first ordering means a modern device's qlog.zst
+// upload wins over a stale qlog.bz2 left behind by a partial reupload.
+func TestQlogPickerOrder(t *testing.T) {
+	want := []string{"qlog.zst", "qlog.bz2", "qlog"}
+	if len(qlogPickerOrder) != len(want) {
+		t.Fatalf("qlogPickerOrder = %v, want %v", qlogPickerOrder, want)
+	}
+	for i, name := range want {
+		if qlogPickerOrder[i] != name {
+			t.Errorf("qlogPickerOrder[%d] = %q, want %q", i, qlogPickerOrder[i], name)
+		}
 	}
 }
 
