@@ -475,13 +475,16 @@ func thumbnailKey(dongleID, route string) string {
 }
 
 // defaultFFmpegRunner implements the real ffmpeg invocation. It runs
-// `ffmpeg -ss 0 -i <input> -frames:v 1 -vf scale=<width>:-2 -q:v 4 <output>`
+// `ffmpeg -ss 0 -i <input> -frames:v 1 -vf scale=<width>:-2 -q:v 4 -f mjpeg <output>`
 // with a process-group-aware cancel so ctx cancellation kills the child.
 func defaultFFmpegRunner(ctx context.Context, ffmpegPath, inputPath, outputPath string, width int) error {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return fmt.Errorf("mkdir output dir: %w", err)
 	}
 
+	// -f mjpeg forces the output muxer so ffmpeg does not try to infer it
+	// from the file extension. The worker writes to <output>.tmp before
+	// renaming for atomicity, and ffmpeg cannot guess "jpeg" from ".tmp".
 	args := []string{
 		"-y",
 		"-ss", "0",
@@ -489,6 +492,7 @@ func defaultFFmpegRunner(ctx context.Context, ffmpegPath, inputPath, outputPath 
 		"-frames:v", "1",
 		"-vf", fmt.Sprintf("scale=%d:-2", width),
 		"-q:v", "4",
+		"-f", "mjpeg",
 		outputPath,
 	}
 
