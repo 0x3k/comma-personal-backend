@@ -48,6 +48,19 @@ type Route struct {
 	Starred   bool               `json:"starred"`
 }
 
+type RouteDataRequest struct {
+	ID             int32              `json:"id"`
+	RouteID        int32              `json:"routeId"`
+	RequestedBy    pgtype.Text        `json:"requestedBy"`
+	RequestedAt    pgtype.Timestamptz `json:"requestedAt"`
+	Kind           string             `json:"kind"`
+	Status         string             `json:"status"`
+	DispatchedAt   pgtype.Timestamptz `json:"dispatchedAt"`
+	CompletedAt    pgtype.Timestamptz `json:"completedAt"`
+	Error          pgtype.Text        `json:"error"`
+	FilesRequested int32              `json:"filesRequested"`
+}
+
 type RouteTag struct {
 	RouteID int32  `json:"routeId"`
 	Tag     string `json:"tag"`
