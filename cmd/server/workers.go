@@ -36,8 +36,25 @@ func startWorkers(ctx context.Context, d *deps) {
 		log.Printf("event detector worker disabled via EVENT_DETECTOR_ENABLED")
 	}
 
+	// Route metadata worker: parses uploaded qlogs and backfills the
+	// routes table's start_time / end_time / geometry columns. MUST run
+	// before the trip aggregator -- the aggregator reads those columns
+	// off routes and writes NULL stats on the trip row when they are
+	// missing. ROUTE_METADATA_ENABLED defaults to true; set to false to
+	// skip (e.g. when a sibling replica already owns the workload).
+	if envBool("ROUTE_METADATA_ENABLED", true) {
+		metaWorker := worker.NewRouteMetadataWorker(d.queries, d.store)
+		go metaWorker.Run(ctx)
+		log.Printf("route metadata worker started (poll=%s, finalized_after=%s)",
+			metaWorker.PollInterval, metaWorker.FinalizedAfter)
+	} else {
+		log.Printf("route metadata worker disabled via ROUTE_METADATA_ENABLED")
+	}
+
 	// Background trip aggregator. Defaults on; set TRIP_AGGREGATOR_ENABLED=0
 	// (or false/no/off) to skip it, e.g. in constrained test environments.
+	// Depends on the route metadata worker above to populate start_time /
+	// end_time / geometry; without that, every trip row would be all-NULL.
 	if envBool("TRIP_AGGREGATOR_ENABLED", true) {
 		aggregator := worker.NewTripAggregator(d.queries, geocode.NewClient("", ""))
 		go aggregator.Run(ctx)

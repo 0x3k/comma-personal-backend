@@ -556,6 +556,91 @@ func (q *Queries) ListRoutesForTripAggregation(ctx context.Context, arg ListRout
 	return items, nil
 }
 
+const listRoutesNeedingMetadata = `
+SELECT r.id, r.dongle_id, r.route_name, r.start_time, r.end_time, r.geometry,
+       r.created_at, r.preserved,
+       seg.latest_segment_at,
+       seg.segment_count
+FROM routes r
+LEFT JOIN LATERAL (
+    SELECT MAX(s.created_at) AS latest_segment_at,
+           COUNT(*)          AS segment_count
+    FROM segments s
+    WHERE s.route_id = r.id
+) seg ON TRUE
+WHERE seg.segment_count > 0
+  AND seg.latest_segment_at IS NOT NULL
+  AND seg.latest_segment_at < $1
+  AND (r.start_time IS NULL OR r.geometry IS NULL)
+ORDER BY r.created_at ASC, r.id ASC
+LIMIT $2
+`
+
+// RouteNeedingMetadata is the subset of a route row needed by the metadata
+// worker plus the latest segment timestamp used for the "finalized" check.
+// The shape mirrors RouteForTripAggregation deliberately so the two workers
+// look alike and a future refactor could share a common base type without
+// surprising column reorderings.
+type RouteNeedingMetadata struct {
+	ID              int32
+	DongleID        string
+	RouteName       string
+	StartTime       pgtype.Timestamptz
+	EndTime         pgtype.Timestamptz
+	Geometry        interface{}
+	CreatedAt       pgtype.Timestamptz
+	Preserved       bool
+	LatestSegmentAt pgtype.Timestamptz
+	SegmentCount    int64
+}
+
+// ListRoutesNeedingMetadataParams selects routes whose latest segment is
+// older than FinalizedBefore (i.e. the route looks "done uploading") and
+// whose start_time or geometry has not yet been derived from the qlog.
+type ListRoutesNeedingMetadataParams struct {
+	FinalizedBefore pgtype.Timestamptz
+	Limit           int32
+}
+
+// ListRoutesNeedingMetadata returns routes that are ready to have their
+// metadata (start_time, end_time, geometry) derived from uploaded qlogs.
+// A route qualifies when its newest segment upload is older than
+// FinalizedBefore and EITHER start_time IS NULL OR geometry IS NULL.
+//
+// Hand-written rather than sqlc-generated because sqlc 1.x does not
+// resolve the LATERAL subquery alias used to compute latest_segment_at
+// (same reason ListRoutesForTripAggregation lives here).
+func (q *Queries) ListRoutesNeedingMetadata(ctx context.Context, arg ListRoutesNeedingMetadataParams) ([]RouteNeedingMetadata, error) {
+	rows, err := q.db.Query(ctx, listRoutesNeedingMetadata, arg.FinalizedBefore, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RouteNeedingMetadata
+	for rows.Next() {
+		var i RouteNeedingMetadata
+		if err := rows.Scan(
+			&i.ID,
+			&i.DongleID,
+			&i.RouteName,
+			&i.StartTime,
+			&i.EndTime,
+			&i.Geometry,
+			&i.CreatedAt,
+			&i.Preserved,
+			&i.LatestSegmentAt,
+			&i.SegmentCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getRouteGeometryStats = `
 SELECT
     ST_NumPoints(geometry)                                       AS num_points,
