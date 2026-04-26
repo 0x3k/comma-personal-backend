@@ -18,6 +18,7 @@ var configEnvVars = []string{
 	"ADMIN_USERNAME",
 	"ADMIN_PASSWORD",
 	"RETENTION_DAYS",
+	"PUBLIC_BASE_URL",
 }
 
 // clearConfigEnv unsets all config-related environment variables.
@@ -353,6 +354,76 @@ func TestLoad_SessionEnvVars(t *testing.T) {
 	}
 	if !cfg.UIAuthEnabled() {
 		t.Error("UIAuthEnabled() = false, want true when SESSION_SECRET is set")
+	}
+}
+
+func TestLoad_PublicBaseURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		envVal  string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:   "unset stays empty",
+			envVal: "",
+			want:   "",
+		},
+		{
+			name:   "https origin accepted",
+			envVal: "https://comma.example.com",
+			want:   "https://comma.example.com",
+		},
+		{
+			name:   "http origin accepted",
+			envVal: "http://10.0.0.1:7070",
+			want:   "http://10.0.0.1:7070",
+		},
+		{
+			name:   "whitespace trimmed",
+			envVal: "  https://comma.example.com  ",
+			want:   "https://comma.example.com",
+		},
+		{
+			name:    "missing scheme rejected",
+			envVal:  "comma.example.com",
+			wantErr: true,
+		},
+		{
+			name:    "trailing slash rejected",
+			envVal:  "https://comma.example.com/",
+			wantErr: true,
+		},
+		{
+			name:    "missing host rejected",
+			envVal:  "https://",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			t.Setenv("DATABASE_URL", "postgres://localhost:5432/testdb")
+
+			if tt.envVal != "" {
+				t.Setenv("PUBLIC_BASE_URL", tt.envVal)
+			}
+
+			cfg, err := Load()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() = nil error, want error for PUBLIC_BASE_URL=%q", tt.envVal)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() returned unexpected error: %v", err)
+			}
+			if cfg.PublicBaseURL != tt.want {
+				t.Errorf("PublicBaseURL = %q, want %q", cfg.PublicBaseURL, tt.want)
+			}
+		})
 	}
 }
 

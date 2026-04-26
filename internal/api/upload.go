@@ -75,9 +75,10 @@ var filenameToFlag = map[string]string{
 
 // UploadHandler holds the dependencies for upload-related HTTP handlers.
 type UploadHandler struct {
-	storage *storage.Storage
-	queries *db.Queries
-	metrics *metrics.Metrics
+	storage       *storage.Storage
+	queries       *db.Queries
+	metrics       *metrics.Metrics
+	publicBaseURL string
 }
 
 // NewUploadHandler creates an UploadHandler with the given storage backend
@@ -92,6 +93,16 @@ func NewUploadHandler(s *storage.Storage, queries *db.Queries) *UploadHandler {
 // treated as a no-op.
 func NewUploadHandlerWithMetrics(s *storage.Storage, queries *db.Queries, m *metrics.Metrics) *UploadHandler {
 	return &UploadHandler{storage: s, queries: queries, metrics: m}
+}
+
+// WithPublicBaseURL configures the absolute origin (e.g.
+// "https://comma.example.com") that GetUploadURL prefixes every minted PUT
+// URL with. Empty preserves the legacy behaviour of deriving scheme + host
+// from the inbound request. Returns the receiver so it can be chained off
+// the constructor.
+func (h *UploadHandler) WithPublicBaseURL(baseURL string) *UploadHandler {
+	h.publicBaseURL = baseURL
+	return h
 }
 
 // uploadURLResponse is the JSON response for the upload URL endpoint.
@@ -117,29 +128,46 @@ func schemeFromRequest(r *http.Request) string {
 	return "http"
 }
 
+// resolveBaseURL returns the absolute origin to prefix device-facing upload
+// URLs with. When override is non-empty (operator set PUBLIC_BASE_URL), it
+// wins unconditionally so the URL shape is independent of whatever scheme
+// and Host the inbound request happens to carry. Empty falls back to
+// schemeFromRequest + r.Host, which is correct only when the inbound
+// request is genuinely on the public origin (no proxy that strips
+// X-Forwarded-Proto).
+func resolveBaseURL(override string, c echo.Context) string {
+	if override != "" {
+		return override
+	}
+	return schemeFromRequest(c.Request()) + "://" + c.Request().Host
+}
+
 // BuildSegmentUploadURL builds the self-hosted PUT URL for a single segment
-// file given the request context (used to derive scheme + host) and the
-// segment coordinates. It is shared by GetUploadURL (the device-facing v1.4
-// endpoint) and the on-demand route data request handler so the URL shape
-// stays in lockstep across both call sites.
+// file given the request context and the segment coordinates. It is shared
+// by GetUploadURL (the device-facing v1.4 endpoint) and the on-demand route
+// data request handler so the URL shape stays in lockstep across both call
+// sites.
 //
 // The empty headers map mirrors the shape of GetUploadURL today: openpilot's
 // uploader / athenad clients accept a headers field on the upload_url
 // response and forward it verbatim on the PUT, but we have nothing to add at
 // this layer (the PUT handler reads only the URL path components).
-func BuildSegmentUploadURL(c echo.Context, dongleID, route, segment, filename string) (string, map[string]string) {
-	scheme := schemeFromRequest(c.Request())
-	host := c.Request().Host
-	return BuildSegmentUploadURLAt(scheme+"://"+host, dongleID, route, segment, filename)
+func (h *UploadHandler) BuildSegmentUploadURL(c echo.Context, dongleID, route, segment, filename string) (string, map[string]string) {
+	return BuildSegmentUploadURLAt(resolveBaseURL(h.publicBaseURL, c), dongleID, route, segment, filename)
 }
 
 // BuildBootUploadURL builds the self-hosted PUT URL for a boot log. Boot logs
 // have no route or segment; they live at /upload/<dongle_id>/boot/<id>.zst.
-func BuildBootUploadURL(c echo.Context, dongleID, bootID string) (string, map[string]string) {
-	scheme := schemeFromRequest(c.Request())
-	host := c.Request().Host
+func (h *UploadHandler) BuildBootUploadURL(c echo.Context, dongleID, bootID string) (string, map[string]string) {
+	return BuildBootUploadURLAt(resolveBaseURL(h.publicBaseURL, c), dongleID, bootID)
+}
+
+// BuildBootUploadURLAt is the pure-function flavour of BuildBootUploadURL.
+// baseURL is the public origin of the server (e.g.
+// "https://comma.example.com").
+func BuildBootUploadURLAt(baseURL, dongleID, bootID string) (string, map[string]string) {
 	uploadPath := fmt.Sprintf("/upload/%s/boot/%s.zst", dongleID, bootID)
-	return scheme + "://" + host + uploadPath, map[string]string{}
+	return baseURL + uploadPath, map[string]string{}
 }
 
 // BuildSegmentUploadURLAt is the pure-function flavour of
@@ -205,7 +233,7 @@ func (h *UploadHandler) GetUploadURL(c echo.Context) error {
 				Code:  http.StatusBadRequest,
 			})
 		}
-		uploadURL, headers = BuildBootUploadURL(c, dongleID, bootID)
+		uploadURL, headers = h.BuildBootUploadURL(c, dongleID, bootID)
 	} else {
 		// Parse path: expected format is "route_name/segment/filename" or
 		// "route_name--segment/filename" (segment embedded in route name).
@@ -226,7 +254,7 @@ func (h *UploadHandler) GetUploadURL(c echo.Context) error {
 			})
 		}
 
-		uploadURL, headers = BuildSegmentUploadURL(c, dongleID, route, segment, filename)
+		uploadURL, headers = h.BuildSegmentUploadURL(c, dongleID, route, segment, filename)
 	}
 
 	// Echo the request's Authorization header so the device's PUT carries the

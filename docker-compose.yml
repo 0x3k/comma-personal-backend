@@ -37,6 +37,7 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
     ports:
       - "${BACKEND_PORT:-7070}:8080"
     volumes:

@@ -177,7 +177,7 @@ func setupRoutes(e *echo.Echo, d *deps) {
 		d.queries,
 		api.NewHubDispatcher(d.hub, d.rpcCaller),
 		d.sessionSecret,
-	).RegisterRoutes(v1Route)
+	).WithPublicBaseURL(d.cfg.PublicBaseURL).RegisterRoutes(v1Route)
 
 	// Trip stats: per-device lifetime totals + recent trip list on /v1, and
 	// per-route aggregated trip detail on /v1/routes.
@@ -186,7 +186,7 @@ func setupRoutes(e *echo.Echo, d *deps) {
 
 	// Upload URL and file upload -- device-facing, JWT only.
 	v14 := e.Group("/v1.4", auth)
-	uploadHandler := api.NewUploadHandlerWithMetrics(d.store, d.queries, d.metrics)
+	uploadHandler := api.NewUploadHandlerWithMetrics(d.store, d.queries, d.metrics).WithPublicBaseURL(d.cfg.PublicBaseURL)
 	v14.GET("/:dongle_id/upload_url/", uploadHandler.GetUploadURL)
 	v14.GET("/:dongle_id/upload_url", uploadHandler.GetUploadURL)
 
