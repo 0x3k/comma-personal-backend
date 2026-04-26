@@ -3,7 +3,7 @@
   "name": "On-demand full-route data: backend endpoint + athena trigger + status tracking",
   "description": "Today the only files that auto-upload from the device are qlog.zst and qcamera.ts. Full-resolution HEVC (fcamera/ecamera/dcamera.hevc) and full rlog.zst stay on the device unless the route is preserved or the operator pulls them manually. Add an explicit on-demand pull: a single backend call that, for a given route, generates upload URLs for every missing full-res file across every segment, instructs the device to enqueue them via the existing uploadFilesToUrls RPC (internal/ws/methods.go:197), and persists a request row so the UI can poll progress. The backend already has all the pieces -- this feature wires them together end-to-end and adds the status surface.\n\nDependency note: blocked by route-metadata-from-qlog purely to stagger cmd/server/workers.go writes (this feature, route-metadata-from-qlog, and qcamera-hls-fallback all append a goroutine block there; agent.json forbids force-push, so we serialize their merges instead of forcing a 3-way conflict resolution). There is no logical code dependency on route metadata -- if scheduling allows, the chain can be reordered as long as the three workers.go-touchers merge one after another.",
   "priority": 2,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/request-full-route-data-api",
   "base_branch": "main",
   "blocked_by": ["route-metadata-from-qlog"],
