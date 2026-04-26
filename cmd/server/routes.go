@@ -39,7 +39,18 @@ func setupRoutes(e *echo.Echo, d *deps) {
 			AllowCredentials: true,
 		}))
 	}
-	e.Use(echomw.RateLimiter(echomw.NewRateLimiterMemoryStore(20)))
+	// Global rate limiter at 100 req/s. Excludes /storage/ because HLS
+	// streaming is naturally bursty (one playlist + many .ts chunks per
+	// segment per camera) and would otherwise starve every other endpoint
+	// the dashboard hits during playback. /storage/ is still gated by
+	// sessionOrJWT + checkDongleAccess so the exclusion is auth-only,
+	// not authorization-only.
+	e.Use(echomw.RateLimiterWithConfig(echomw.RateLimiterConfig{
+		Skipper: func(c echo.Context) bool {
+			return strings.HasPrefix(c.Request().URL.Path, "/storage/")
+		},
+		Store: echomw.NewRateLimiterMemoryStore(100),
+	}))
 	// Global 1M body limit for the API surface. /upload/* sets its own
 	// (larger) limit later; without this skipper, the global limit fires
 	// first, closes the connection mid-stream, and the device sees a TLS
@@ -110,6 +121,13 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	api.NewSignalsHandler(d.queries, d.store).RegisterRoutes(v1Routes)
 	api.NewThumbnailHandler(d.store).RegisterRoutes(v1Routes)
 
+	// Authenticated segment file streaming. Mounted at the top-level path
+	// /storage/... (not under /v1) because the frontend was already
+	// constructing those URLs in MultiCameraPlayer; the handler mirrors
+	// the public /v1/share/:token/... routes but enforces sessionOrJWT +
+	// checkDongleAccess in place of the signed-token check.
+	api.NewStorageFilesHandler(d.store).RegisterRoutes(e, sessionOrJWT)
+
 	// Share link creation is a mutation (mints a signed token) so it rides
 	// the session-only group. The public /v1/share/:token endpoints are
 	// mounted directly on the top-level Echo instance below -- they must
@@ -137,6 +155,7 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	api.NewRouteDataRequestHandler(
 		d.queries,
 		api.NewHubDispatcher(d.hub, d.rpcCaller),
+		d.sessionSecret,
 	).RegisterRoutes(v1Route)
 
 	// Trip stats: per-device lifetime totals + recent trip list on /v1, and
@@ -150,7 +169,15 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	v14.GET("/:dongle_id/upload_url/", uploadHandler.GetUploadURL)
 	v14.GET("/:dongle_id/upload_url", uploadHandler.GetUploadURL)
 
-	uploadGroup := e.Group("/upload", auth, echomw.BodyLimit("100M"))
+	// /upload accepts either a valid device JWT (regular auto-upload path,
+	// where the device already has a token to attach) or a backend-signed URL
+	// (the on-demand "Get full quality" path -- athenad PUTs the URL it was
+	// given via RPC and has nothing to sign with). uploadAuth checks the
+	// signature first and only falls through to JWT validation when no
+	// signature is present, so a malformed signature fails closed instead of
+	// silently downgrading to JWT.
+	uploadAuth := uploadAuthOrSignature(d.sessionSecret, auth)
+	uploadGroup := e.Group("/upload", uploadAuth, echomw.BodyLimit("100M"))
 	uploadGroup.PUT("/:dongle_id/*", uploadHandler.UploadFile)
 
 	// Device config parameters. Reads accept either cookie or JWT; writes
@@ -252,4 +279,45 @@ func setupRoutes(e *echo.Echo, d *deps) {
 		"storeStats":  ws.MakeStoreStatsHandler(d.store, nil),
 	}
 	ws.NewHandler(d.hub, d.queries, wsHandlers, d.rpcCaller).RegisterRoutes(e)
+}
+
+// uploadAuthOrSignature returns middleware that authenticates an /upload PUT
+// via either an HMAC-signed URL (sig+exp query params) or a device JWT.
+// Signed URLs are how the on-demand "Get full quality" path tells athenad to
+// upload files: athenad PUTs the URL it was handed via RPC and has no JWT
+// to attach, so the URL itself carries authorisation. JWT remains the
+// auto-upload path: the regular uploader pulls a URL via /v1.4/.../upload_url/
+// and reflects the JWT it used there onto its PUT.
+//
+// uploadSecret may be empty -- in which case all signature attempts fail
+// closed and the middleware degrades to JWT-only auth, matching legacy
+// behaviour. A signature that is *present* but invalid (bad sig, expired,
+// or path mismatch) is rejected with 401 instead of falling through to JWT;
+// otherwise an attacker could probe with garbage signatures and silently
+// retry as JWT.
+func uploadAuthOrSignature(uploadSecret []byte, jwtMW echo.MiddlewareFunc) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		jwtChain := jwtMW(next)
+		return func(c echo.Context) error {
+			expParam := c.QueryParam("exp")
+			sigParam := c.QueryParam("sig")
+			if expParam != "" || sigParam != "" {
+				if len(uploadSecret) == 0 {
+					return c.JSON(http.StatusUnauthorized, map[string]any{
+						"error": "upload signing is not configured",
+						"code":  http.StatusUnauthorized,
+					})
+				}
+				if !api.VerifyUploadSignature(uploadSecret, c.Request().URL.Path, expParam, sigParam) {
+					return c.JSON(http.StatusUnauthorized, map[string]any{
+						"error": "invalid or expired upload signature",
+						"code":  http.StatusUnauthorized,
+					})
+				}
+				c.Set(middleware.ContextKeyDongleID, c.Param("dongle_id"))
+				return next(c)
+			}
+			return jwtChain(c)
+		}
+	}
 }

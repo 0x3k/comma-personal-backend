@@ -172,23 +172,35 @@ export function FullDataRequestControl({
     [dongleId, routeName, onComplete],
   );
 
-  // Compute the kinds that are currently in flight so we know what to
-  // poll. useMemo keeps the deps array stable across renders.
-  const inFlightKinds = useMemo<RouteDataRequestKind[]>(() => {
-    const out: RouteDataRequestKind[] = [];
+  // Stable string key describing which kinds are currently in flight.
+  // Polling depends on this key (not on the requests object) so a poll
+  // that updates progress without changing which kinds are in flight
+  // does NOT restart the timer. Restarting on every poll caused a tight
+  // loop: setRequests -> new object -> derived array re-memoized to a
+  // new reference -> useEffect deps changed -> immediate tick -> repeat.
+  const inFlightKey = useMemo(() => {
+    const kinds: string[] = [];
     for (const opt of KIND_OPTIONS) {
       const r = requests[opt.kind];
-      if (r && isInFlightStatus(r.status)) out.push(opt.kind);
+      if (r && isInFlightStatus(r.status)) kinds.push(opt.kind);
     }
-    return out;
+    return kinds.join(",");
   }, [requests]);
 
-  // Polling effect. Fires immediately on mount-or-change, then every
-  // POLL_INTERVAL_MS while the tab is visible. document.visibilityState
-  // is consulted on each tick so a backgrounded tab pauses without
-  // tearing down the timer.
+  // tick reads the latest requests via a ref so the polling effect can
+  // depend only on inFlightKey -- the alternative (deps including
+  // `requests`) would restart the interval on every poll response.
+  const requestsRef = useRef(requests);
   useEffect(() => {
-    if (inFlightKinds.length === 0) return;
+    requestsRef.current = requests;
+  }, [requests]);
+
+  // Polling effect. Fires immediately when an in-flight set first
+  // becomes non-empty, then every POLL_INTERVAL_MS while the tab is
+  // visible. document.visibilityState is consulted on each tick so a
+  // backgrounded tab pauses without tearing down the timer.
+  useEffect(() => {
+    if (inFlightKey === "") return;
     let cancelled = false;
 
     const tick = () => {
@@ -197,28 +209,21 @@ export function FullDataRequestControl({
         typeof document === "undefined" ||
         document.visibilityState === "visible"
       ) {
-        for (const kind of inFlightKinds) {
-          const req = requests[kind];
+        const current = requestsRef.current;
+        for (const kind of inFlightKey.split(",") as RouteDataRequestKind[]) {
+          const req = current[kind];
           if (!req) continue;
           void pollOnce(kind, req.id);
         }
       }
     };
-    // Kick off an immediate poll so the UI doesn't wait the full
-    // interval to reflect server-side progress after a click.
     tick();
     const handle = window.setInterval(tick, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
     };
-    // We intentionally exclude `requests` from the deps -- it gets
-    // mutated by pollOnce inside the interval, and adding it would
-    // restart the timer on every poll. inFlightKinds (which is
-    // memoized off requests) is sufficient to detect the kinds going
-    // in/out of flight.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inFlightKinds, pollOnce]);
+  }, [inFlightKey, pollOnce]);
 
   // -----------------------------------------------------------------
   // Click handlers

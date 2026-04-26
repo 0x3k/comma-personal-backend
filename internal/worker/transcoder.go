@@ -27,15 +27,14 @@
 //
 // Like the thumbnail worker, the transcoder owns a small scannerLoop
 // that periodically (DefaultTranscoderScanInterval) lists the most
-// recent routes, walks their segments, and enqueues any that have
-// qcamera.ts but no qcamera/index.m3u8 yet. The scan deliberately
-// targets qcamera (not the HEVC files) because qcamera is the only
-// camera we expect to be present for every uploaded route -- HEVC files
-// are still picked up via the existing per-segment ProcessSegment path
-// when the operator preserves a route or triggers a manual transcode.
+// recent routes, walks their segments, and enqueues any segment that
+// has at least one camera input file (qcamera.ts or one of the HEVCs)
+// without its matching HLS playlist. ProcessSegment then transcodes
+// only the cameras that are pending, so a segment with qcamera already
+// done but freshly-pulled HEVC files still gets queued.
 //
 // Running the scanner once at startup means a freshly-restarted server
-// drains the backlog of qcamera.ts uploads accumulated during downtime
+// drains the backlog of camera uploads accumulated during downtime
 // without waiting a full interval.
 package worker
 
@@ -275,8 +274,9 @@ func (t *Transcoder) scannerLoop(ctx context.Context) {
 }
 
 // scanOnce performs a single pass: fetch recent routes, walk their
-// segments, and enqueue any whose qcamera.ts has not been packaged
-// into HLS yet.
+// segments, and enqueue any segment with a camera input file
+// (qcamera.ts or one of the HEVCs) that does not yet have an HLS
+// playlist on disk.
 func (t *Transcoder) scanOnce(ctx context.Context) {
 	if t.queries == nil {
 		return
@@ -299,11 +299,7 @@ func (t *Transcoder) scanOnce(ctx context.Context) {
 				return
 			}
 			seg := strconv.Itoa(n)
-			if !t.storage.Exists(r.DongleID, r.RouteName, seg, QcameraFile) {
-				continue
-			}
-			// Skip if qcamera HLS already exists.
-			if t.storage.Exists(r.DongleID, r.RouteName, seg, filepath.Join("qcamera", "index.m3u8")) {
+			if !t.segmentNeedsTranscode(r.DongleID, r.RouteName, seg) {
 				continue
 			}
 			if !t.Enqueue(r.DongleID, r.RouteName, seg) {
@@ -313,6 +309,28 @@ func (t *Transcoder) scanOnce(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// segmentNeedsTranscode reports whether the segment has any camera
+// input file (qcamera.ts or one of the HEVCs) that is missing its
+// corresponding HLS playlist. ProcessSegment skips cameras already
+// transcoded, so it is safe to enqueue as soon as one camera is
+// pending -- the others will be no-ops.
+func (t *Transcoder) segmentNeedsTranscode(dongleID, route, segment string) bool {
+	if t.storage.Exists(dongleID, route, segment, QcameraFile) &&
+		!t.storage.Exists(dongleID, route, segment, filepath.Join("qcamera", "index.m3u8")) {
+		return true
+	}
+	for _, camera := range hevcCameraFiles {
+		if !t.storage.Exists(dongleID, route, segment, camera) {
+			continue
+		}
+		base := strings.TrimSuffix(camera, filepath.Ext(camera))
+		if !t.storage.Exists(dongleID, route, segment, filepath.Join(base, "index.m3u8")) {
+			return true
+		}
+	}
+	return false
 }
 
 // worker drains the job channel, transcoding each segment until ctx is
