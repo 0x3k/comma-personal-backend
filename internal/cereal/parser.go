@@ -36,6 +36,7 @@ import (
 	"io"
 
 	capnp "capnproto.org/go/capnp/v3"
+	"github.com/klauspost/compress/zstd"
 
 	"comma-personal-backend/internal/cereal/schema"
 )
@@ -62,20 +63,25 @@ type Parser struct {
 // bzip2Magic is the prefix of any bz2 stream ("BZh" + block size digit).
 var bzip2Magic = []byte{'B', 'Z', 'h'}
 
-// zstdMagic is the prefix of any zstd stream. We detect it so we can return
-// a clear error rather than feeding garbage into the Cap'n Proto decoder;
-// openpilot has started emitting .zst logs in some versions.
+// zstdMagic is the prefix of any zstd stream. Recent openpilot/sunnypilot
+// builds upload qlog/rlog as .zst, so we transparently decode them via the
+// pure-Go decoder from github.com/klauspost/compress/zstd.
 var zstdMagic = []byte{0x28, 0xB5, 0x2F, 0xFD}
 
-// ErrZstdUnsupported is returned when the input looks like a zstd stream.
-// zstd support can be added by depending on a pure-Go zstd decoder; we keep
-// this package bz2-only for now to avoid the extra dependency.
+// ErrZstdUnsupported is retained for backwards compatibility. The current
+// Parse() decodes zstd transparently and never returns this error; it is
+// kept exported so callers (and tests) that previously branched on it still
+// compile.
+//
+// Deprecated: zstd inputs are now decoded automatically. This sentinel will
+// be removed in a future release.
 var ErrZstdUnsupported = errors.New("cereal: zstd-compressed logs are not supported yet")
 
 // Parse reads Cap'n Proto Event messages from r and invokes handler for each
 // one in order. If handler returns a non-nil error, parsing stops and that
-// error is propagated. Parse transparently detects and decompresses bz2
-// streams by inspecting the leading magic bytes.
+// error is propagated. Parse transparently detects and decompresses bz2 and
+// zstd streams by inspecting the leading magic bytes; raw Cap'n Proto
+// streams are passed through unchanged.
 //
 // The underlying *capnp.Message is released after the handler returns -- do
 // not retain references to the Event (or any pointer field of it) across
@@ -95,7 +101,18 @@ func (p *Parser) Parse(r io.Reader, handler func(Event) error) error {
 		// bzip2.NewReader is streaming and decompresses incrementally.
 		r = bzip2.NewReader(br)
 	case bytes.HasPrefix(head, zstdMagic):
-		return ErrZstdUnsupported
+		// klauspost/compress/zstd.NewReader is streaming and does not
+		// buffer the whole input in memory. The returned *Decoder owns
+		// background goroutines that we must close when Parse returns,
+		// so wrap it in a deferred Close. The IOReadCloser() call would
+		// also work but its Close is best-effort; calling Decoder.Close
+		// directly is the documented teardown path.
+		zr, err := zstd.NewReader(br)
+		if err != nil {
+			return fmt.Errorf("cereal: init zstd reader: %w", err)
+		}
+		defer zr.Close()
+		r = zr
 	default:
 		r = br
 	}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	capnp "capnproto.org/go/capnp/v3"
+	"github.com/klauspost/compress/zstd"
 
 	"comma-personal-backend/internal/cereal/schema"
 )
@@ -149,16 +150,119 @@ func TestParserEmptyStream(t *testing.T) {
 	}
 }
 
-func TestParserRejectsZstd(t *testing.T) {
-	// The first four bytes of any zstd frame are 28 B5 2F FD.
-	zstd := []byte{0x28, 0xB5, 0x2F, 0xFD, 0x00}
-	p := &Parser{}
-	err := p.Parse(bytes.NewReader(zstd), func(Event) error { return nil })
-	if err == nil {
-		t.Fatal("expected an error for zstd input, got nil")
+// TestParserDecodesZstd round-trips the standard fixture through a real
+// zstd-compressed stream and verifies every Event is recovered. This locks
+// in the magic-detection branch and the streaming decode path together.
+func TestParserDecodesZstd(t *testing.T) {
+	fixture := buildFixture(t)
+
+	var compressed bytes.Buffer
+	enc, err := zstd.NewWriter(&compressed)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
 	}
-	if err != ErrZstdUnsupported {
-		t.Errorf("got %v, want ErrZstdUnsupported", err)
+	if _, err := enc.Write(fixture); err != nil {
+		t.Fatalf("zstd write: %v", err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("zstd close: %v", err)
+	}
+	if !bytes.HasPrefix(compressed.Bytes(), zstdMagic) {
+		t.Fatalf("compressed output missing zstd magic: %x", compressed.Bytes()[:4])
+	}
+
+	var monoTimes []uint64
+	p := &Parser{}
+	if err := p.Parse(bytes.NewReader(compressed.Bytes()), func(evt Event) error {
+		monoTimes = append(monoTimes, evt.LogMonoTime())
+		return nil
+	}); err != nil {
+		t.Fatalf("Parse(zstd): %v", err)
+	}
+
+	if got, want := len(monoTimes), 6; got != want {
+		t.Fatalf("parsed %d events from zstd stream, want %d", got, want)
+	}
+	if monoTimes[0] != 0 || monoTimes[5] != 300_000_000 {
+		t.Errorf("monotime ordering wrong after zstd decode: %v", monoTimes)
+	}
+}
+
+// TestSignalExtractorZstd ensures the higher-level SignalExtractor produces
+// the same column-oriented output for a zstd-wrapped fixture as it does for
+// the raw and bz2 variants.
+func TestSignalExtractorZstd(t *testing.T) {
+	fixture := buildFixture(t)
+
+	var compressed bytes.Buffer
+	enc, err := zstd.NewWriter(&compressed)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
+	}
+	if _, err := enc.Write(fixture); err != nil {
+		t.Fatalf("zstd write: %v", err)
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("zstd close: %v", err)
+	}
+
+	e := &SignalExtractor{}
+	sig, err := e.ExtractDriving(bytes.NewReader(compressed.Bytes()))
+	if err != nil {
+		t.Fatalf("ExtractDriving(zstd): %v", err)
+	}
+	assertSignals(t, sig)
+}
+
+// TestParserDetectsZstdMagic guards the magic-sniffing branch with a
+// minimal zstd-encoded one-byte payload. The compressed frame still starts
+// with the zstd magic, so the magic match in Parse fires; the Cap'n Proto
+// decoder then sees a single junk byte and returns EOF, which Parse maps
+// to nil. The point is to exercise the magic-detection branch without
+// relying on the round-trip TestParserDecodesZstd test above.
+func TestParserDetectsZstdMagic(t *testing.T) {
+	enc, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatalf("zstd.NewWriter: %v", err)
+	}
+	compressed := enc.EncodeAll([]byte{0x00}, nil)
+	if err := enc.Close(); err != nil {
+		t.Fatalf("zstd close: %v", err)
+	}
+	if !bytes.HasPrefix(compressed, zstdMagic) {
+		t.Fatalf("zstd payload missing magic: %x", compressed[:4])
+	}
+
+	// Sanity: confirm the payload decompresses to a single byte so the
+	// fixture stays minimal as the zstd library evolves.
+	dec, err := zstd.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatalf("zstd.NewReader: %v", err)
+	}
+	defer dec.Close()
+	round, err := io.ReadAll(dec)
+	if err != nil {
+		t.Fatalf("decompress fixture: %v", err)
+	}
+	if len(round) != 1 {
+		t.Fatalf("zstd fixture decompressed to %d bytes, want 1", len(round))
+	}
+
+	// One garbage payload byte will not parse as a Cap'n Proto frame:
+	// capnp.Decoder.Decode returns an error rather than EOF for short
+	// reads, which Parse should propagate. The test only requires the
+	// magic-detection branch to fire (no panic, no ErrZstdUnsupported).
+	p := &Parser{}
+	calls := 0
+	err = p.Parse(bytes.NewReader(compressed), func(Event) error {
+		calls++
+		return nil
+	})
+	if err == ErrZstdUnsupported {
+		t.Fatalf("Parse rejected zstd input: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("garbage zstd payload produced %d events, want 0", calls)
 	}
 }
 
