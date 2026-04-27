@@ -217,6 +217,15 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	settingsHandler.RegisterReadRoutes(v1ConfigRead)
 	settingsHandler.RegisterMutationRoutes(v1ConfigWrite)
 
+	// ALPR configuration. Routes always register (no env-gating) so the
+	// frontend can flip the master flag without a server restart. Reads
+	// ride sessionOrJWT because devices can ask "is ALPR enabled?";
+	// mutations are session-only because a compromised device must never
+	// be able to enable plate recording on itself.
+	alprSettingsHandler := api.NewALPRSettingsHandler(d.settings, d.cfg.ALPR)
+	alprSettingsHandler.RegisterReadRoutes(v1ConfigRead)
+	alprSettingsHandler.RegisterMutationRoutes(v1ConfigWrite)
+
 	// Per-device trip stats live at /v1/devices/:dongle_id/stats, so they
 	// accept either a session cookie or a device JWT via the shared read group.
 	tripHandler.RegisterStatsRoute(v1ConfigRead)
