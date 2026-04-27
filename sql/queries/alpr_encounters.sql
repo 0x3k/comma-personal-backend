@@ -1,0 +1,104 @@
+-- name: UpsertEncounter :one
+-- Insert-or-update an encounter row keyed on (dongle_id, route,
+-- plate_hash, first_seen_ts). Re-running the aggregator over the same
+-- route is idempotent: the unique constraint catches the conflict and
+-- the DO UPDATE refreshes the mutable fields (last_seen_ts,
+-- detection_count, turn_count, gap, signature_id, status, bbox_last,
+-- updated_at). first_seen_ts and bbox_first are NOT updated because
+-- they identify the encounter and changing them would defeat
+-- idempotency.
+INSERT INTO plate_encounters (
+    dongle_id,
+    route,
+    plate_hash,
+    first_seen_ts,
+    last_seen_ts,
+    detection_count,
+    turn_count,
+    max_internal_gap_seconds,
+    signature_id,
+    status,
+    bbox_first,
+    bbox_last
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+ON CONFLICT (dongle_id, route, plate_hash, first_seen_ts) DO UPDATE
+SET last_seen_ts             = EXCLUDED.last_seen_ts,
+    detection_count          = EXCLUDED.detection_count,
+    turn_count               = EXCLUDED.turn_count,
+    max_internal_gap_seconds = EXCLUDED.max_internal_gap_seconds,
+    signature_id             = EXCLUDED.signature_id,
+    status                   = EXCLUDED.status,
+    bbox_last                = EXCLUDED.bbox_last,
+    updated_at               = now()
+RETURNING id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
+          detection_count, turn_count, max_internal_gap_seconds,
+          signature_id, status, bbox_first, bbox_last,
+          created_at, updated_at;
+
+-- name: DeleteEncountersForRoute :execrows
+-- Wipe the encounter rows for one route. The aggregator calls this
+-- before re-running over a route so the new pass starts from a clean
+-- slate. Returns the number of rows deleted so the caller can log how
+-- much state it discarded.
+DELETE FROM plate_encounters
+WHERE dongle_id = $1 AND route = $2;
+
+-- name: ListEncountersForRoute :many
+-- All encounter rows for a route, ordered by first_seen_ts. Powers the
+-- per-route review UI ("which plates did we see on this drive").
+SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
+       detection_count, turn_count, max_internal_gap_seconds,
+       signature_id, status, bbox_first, bbox_last,
+       created_at, updated_at
+FROM plate_encounters
+WHERE dongle_id = $1 AND route = $2
+ORDER BY first_seen_ts ASC, id ASC;
+
+-- name: ListEncountersForPlate :many
+-- All encounters of a single plate across every route, newest first.
+-- Backs the plate-detail page and feeds the stalking heuristic's
+-- "recurring plate" lookups.
+SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
+       detection_count, turn_count, max_internal_gap_seconds,
+       signature_id, status, bbox_first, bbox_last,
+       created_at, updated_at
+FROM plate_encounters
+WHERE plate_hash = $1
+ORDER BY last_seen_ts DESC, id DESC;
+
+-- name: ListEncountersForPlateInWindow :many
+-- Encounters for a plate that overlap a given time window. The window is
+-- inclusive on both ends. Used by the stalking heuristic to count how
+-- many recent times the suspect plate was seen, without paging through
+-- the entire history.
+SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
+       detection_count, turn_count, max_internal_gap_seconds,
+       signature_id, status, bbox_first, bbox_last,
+       created_at, updated_at
+FROM plate_encounters
+WHERE plate_hash    = $1
+  AND last_seen_ts >= $2
+  AND first_seen_ts <= $3
+ORDER BY last_seen_ts DESC, id DESC;
+
+-- name: ListEncountersForSignatureInArea :many
+-- Encounters linked to a vehicle signature whose first detection lies
+-- inside a lat/lng bounding box. Used by the signature-fusion heuristic
+-- to find "the same vehicle (by signature) showing up in our area" even
+-- across partial plate observations. The bbox is supplied as four
+-- scalars rather than a PostGIS geometry to keep this query independent
+-- of the signature schema's geometry columns.
+SELECT pe.id, pe.dongle_id, pe.route, pe.plate_hash, pe.first_seen_ts,
+       pe.last_seen_ts, pe.detection_count, pe.turn_count,
+       pe.max_internal_gap_seconds, pe.signature_id, pe.status,
+       pe.bbox_first, pe.bbox_last, pe.created_at, pe.updated_at
+FROM plate_encounters pe
+JOIN plate_detections pd ON pd.dongle_id = pe.dongle_id
+                        AND pd.route     = pe.route
+                        AND pd.plate_hash = pe.plate_hash
+                        AND pd.frame_ts  = pe.first_seen_ts
+WHERE pe.signature_id = sqlc.arg('signature_id')
+  AND pd.gps_lat BETWEEN sqlc.arg('min_lat') AND sqlc.arg('max_lat')
+  AND pd.gps_lng BETWEEN sqlc.arg('min_lng') AND sqlc.arg('max_lng')
+ORDER BY pe.last_seen_ts DESC, pe.id DESC;

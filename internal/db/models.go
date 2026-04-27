@@ -8,6 +8,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AlprAuditLog struct {
+	ID        int64              `json:"id"`
+	Action    string             `json:"action"`
+	Actor     pgtype.Text        `json:"actor"`
+	Payload   []byte             `json:"payload"`
+	CreatedAt pgtype.Timestamptz `json:"createdAt"`
+}
+
+type AlprSegmentProgress struct {
+	DongleID             string             `json:"dongleId"`
+	Route                string             `json:"route"`
+	Segment              int32              `json:"segment"`
+	ProcessedAtExtractor pgtype.Timestamptz `json:"processedAtExtractor"`
+	ProcessedAtDetector  pgtype.Timestamptz `json:"processedAtDetector"`
+}
+
 type Crash struct {
 	ID          int32              `json:"id"`
 	EventID     string             `json:"eventId"`
@@ -52,6 +68,68 @@ type Event struct {
 	CreatedAt          pgtype.Timestamptz `json:"createdAt"`
 }
 
+type PlateAlertEvent struct {
+	ID               int64              `json:"id"`
+	PlateHash        []byte             `json:"plateHash"`
+	Route            pgtype.Text        `json:"route"`
+	DongleID         pgtype.Text        `json:"dongleId"`
+	ComputedAt       pgtype.Timestamptz `json:"computedAt"`
+	Severity         int16              `json:"severity"`
+	Components       []byte             `json:"components"`
+	HeuristicVersion string             `json:"heuristicVersion"`
+}
+
+type PlateDetection struct {
+	ID              int64              `json:"id"`
+	DongleID        string             `json:"dongleId"`
+	Route           string             `json:"route"`
+	Segment         int32              `json:"segment"`
+	FrameOffsetMs   int32              `json:"frameOffsetMs"`
+	PlateCiphertext []byte             `json:"plateCiphertext"`
+	PlateHash       []byte             `json:"plateHash"`
+	Bbox            []byte             `json:"bbox"`
+	Confidence      float32            `json:"confidence"`
+	OcrCorrected    bool               `json:"ocrCorrected"`
+	GpsLat          pgtype.Float8      `json:"gpsLat"`
+	GpsLng          pgtype.Float8      `json:"gpsLng"`
+	GpsHeadingDeg   pgtype.Float4      `json:"gpsHeadingDeg"`
+	FrameTs         pgtype.Timestamptz `json:"frameTs"`
+	ThumbPath       pgtype.Text        `json:"thumbPath"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+}
+
+type PlateEncounter struct {
+	ID                    int64              `json:"id"`
+	DongleID              string             `json:"dongleId"`
+	Route                 string             `json:"route"`
+	PlateHash             []byte             `json:"plateHash"`
+	FirstSeenTs           pgtype.Timestamptz `json:"firstSeenTs"`
+	LastSeenTs            pgtype.Timestamptz `json:"lastSeenTs"`
+	DetectionCount        int32              `json:"detectionCount"`
+	TurnCount             int32              `json:"turnCount"`
+	MaxInternalGapSeconds int32              `json:"maxInternalGapSeconds"`
+	SignatureID           pgtype.Int8        `json:"signatureId"`
+	Status                string             `json:"status"`
+	BboxFirst             []byte             `json:"bboxFirst"`
+	BboxLast              []byte             `json:"bboxLast"`
+	CreatedAt             pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt             pgtype.Timestamptz `json:"updatedAt"`
+}
+
+type PlateWatchlist struct {
+	ID              int64              `json:"id"`
+	PlateHash       []byte             `json:"plateHash"`
+	LabelCiphertext []byte             `json:"labelCiphertext"`
+	Kind            string             `json:"kind"`
+	Severity        pgtype.Int2        `json:"severity"`
+	FirstAlertAt    pgtype.Timestamptz `json:"firstAlertAt"`
+	LastAlertAt     pgtype.Timestamptz `json:"lastAlertAt"`
+	AckedAt         pgtype.Timestamptz `json:"ackedAt"`
+	Notes           pgtype.Text        `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt       pgtype.Timestamptz `json:"updatedAt"`
+}
+
 type Route struct {
 	ID        int32              `json:"id"`
 	DongleID  string             `json:"dongleId"`
@@ -83,6 +161,19 @@ type RouteDataRequest struct {
 type RouteTag struct {
 	RouteID int32  `json:"routeId"`
 	Tag     string `json:"tag"`
+}
+
+type RouteTurn struct {
+	ID               int64              `json:"id"`
+	DongleID         string             `json:"dongleId"`
+	Route            string             `json:"route"`
+	TurnTs           pgtype.Timestamptz `json:"turnTs"`
+	TurnOffsetMs     int32              `json:"turnOffsetMs"`
+	BearingBeforeDeg float32            `json:"bearingBeforeDeg"`
+	BearingAfterDeg  float32            `json:"bearingAfterDeg"`
+	DeltaDeg         float32            `json:"deltaDeg"`
+	GpsLat           pgtype.Float8      `json:"gpsLat"`
+	GpsLng           pgtype.Float8      `json:"gpsLng"`
 }
 
 type Segment struct {
