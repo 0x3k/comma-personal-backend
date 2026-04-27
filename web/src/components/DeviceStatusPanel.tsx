@@ -32,6 +32,23 @@ const THERMAL_STATUS_NAMES: Record<number, { label: string; variant: "success" |
   3: { label: "Danger", variant: "error" },
 };
 
+// NetworkStrength enum, mirroring cereal's enum order. Index aligns with the
+// number of filled signal bars (0 = unknown -> all dim, 4 = great -> all on).
+const NETWORK_STRENGTH_NAMES: Record<number, string> = {
+  0: "unknown",
+  1: "poor",
+  2: "moderate",
+  3: "good",
+  4: "great",
+};
+const NETWORK_STRENGTH_BY_NAME: Record<string, number> = {
+  unknown: 0,
+  poor: 1,
+  moderate: 2,
+  good: 3,
+  great: 4,
+};
+
 export interface DeviceLiveStatus {
   online: boolean;
   network_type: unknown;
@@ -39,6 +56,16 @@ export interface DeviceLiveStatus {
   sim: unknown;
   free_space_gb: number | null;
   thermal_status: number | null;
+  cpu_usage_percent: number | null;
+  memory_usage_percent: number | null;
+  max_temp_c: number | null;
+  network_strength: unknown;
+  power_draw_w: number | null;
+  upload_speed_mbps: number | null;
+  immediate_queue_count: number | null;
+  immediate_queue_size_bytes: number | null;
+  raw_queue_count: number | null;
+  raw_queue_size_bytes: number | null;
   fetched_at: string;
   cached_at?: string | null;
 }
@@ -99,6 +126,91 @@ function describeThermal(value: number | null): { label: string; variant: "succe
   return entry;
 }
 
+// resolveNetworkStrength normalises the cereal enum into a 0..4 integer plus a
+// label. athenad may serialise the enum as either a name string or a numeric
+// index, so we accept both. Returns null when we cannot interpret the value.
+function resolveNetworkStrength(value: unknown): { index: number; label: string } | null {
+  if (value == null) return null;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const i = Math.max(0, Math.min(4, Math.trunc(value)));
+    return { index: i, label: NETWORK_STRENGTH_NAMES[i] ?? `#${i}` };
+  }
+  if (typeof value === "string") {
+    const i = NETWORK_STRENGTH_BY_NAME[value.toLowerCase()];
+    if (typeof i === "number") return { index: i, label: value };
+  }
+  return null;
+}
+
+// Format raw bytes as a short human string. Used for upload-queue sizes which
+// span <1 KB through several GB.
+function formatBytes(n: number | null): string {
+  if (n == null || !Number.isFinite(n) || n < 0) return "-";
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[u]}`;
+}
+
+// PercentBar renders a 0-100 percent value as a small horizontal bar plus the
+// numeric label. value === null renders a muted dash.
+function PercentBar({ value, danger }: { value: number | null; danger?: boolean }) {
+  if (value == null) {
+    return <span className="text-[var(--text-secondary)]">-</span>;
+  }
+  const clamped = Math.max(0, Math.min(100, value));
+  const fillClass = danger
+    ? "bg-danger-500"
+    : clamped >= 90
+      ? "bg-danger-500"
+      : clamped >= 70
+        ? "bg-warning-500"
+        : "bg-success-500";
+  return (
+    <div className="flex items-center gap-2">
+      <div
+        className="h-1.5 w-16 overflow-hidden rounded-full bg-[var(--bg-tertiary)]"
+        role="progressbar"
+        aria-valuenow={clamped}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        <div
+          className={`h-full ${fillClass}`}
+          style={{ width: `${clamped}%` }}
+        />
+      </div>
+      <span className="text-xs tabular-nums text-[var(--text-primary)]">
+        {Math.round(clamped)}%
+      </span>
+    </div>
+  );
+}
+
+// SignalBars renders a 4-bar cellular-strength indicator. index in [0..4];
+// 0 means unknown / no signal so all bars are dim.
+function SignalBars({ index, label }: { index: number; label: string }) {
+  return (
+    <div className="flex items-center gap-2" title={label}>
+      <div className="flex items-end gap-0.5">
+        {[1, 2, 3, 4].map((bar) => (
+          <span
+            key={bar}
+            className={`block w-1 rounded-sm ${bar <= index ? "bg-success-500" : "bg-[var(--bg-tertiary)]"}`}
+            style={{ height: `${bar * 3 + 2}px` }}
+          />
+        ))}
+      </div>
+      <span className="text-xs text-[var(--text-primary)]">{label}</span>
+    </div>
+  );
+}
+
 export function DeviceStatusPanel({ dongleId }: DeviceStatusPanelProps) {
   const [status, setStatus] = useState<DeviceLiveStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +256,22 @@ export function DeviceStatusPanel({ dongleId }: DeviceStatusPanelProps) {
   const freeGB = status?.free_space_gb ?? null;
   const metered = status?.metered ?? null;
   const lastSeen = status?.cached_at ?? null;
+  const cpu = status?.cpu_usage_percent ?? null;
+  const mem = status?.memory_usage_percent ?? null;
+  const maxTemp = status?.max_temp_c ?? null;
+  const power = status?.power_draw_w ?? null;
+  const strength = resolveNetworkStrength(status?.network_strength ?? null);
+  const uploadSpeed = status?.upload_speed_mbps ?? null;
+  const immCount = status?.immediate_queue_count ?? null;
+  const rawCount = status?.raw_queue_count ?? null;
+  const totalQueued =
+    immCount != null || rawCount != null
+      ? (immCount ?? 0) + (rawCount ?? 0)
+      : null;
+  const totalQueuedSize =
+    status?.immediate_queue_size_bytes != null || status?.raw_queue_size_bytes != null
+      ? (status?.immediate_queue_size_bytes ?? 0) + (status?.raw_queue_size_bytes ?? 0)
+      : null;
 
   return (
     <Card className={online ? "" : "opacity-70"}>
@@ -180,42 +308,109 @@ export function DeviceStatusPanel({ dongleId }: DeviceStatusPanelProps) {
         )}
 
         {status && (
-          <dl className="grid grid-cols-1 gap-y-2 text-sm sm:grid-cols-2 sm:gap-x-4">
-            <div className="flex justify-between sm:block">
-              <dt className="text-[var(--text-secondary)]">Network</dt>
-              <dd className="text-[var(--text-primary)]">{network}</dd>
-            </div>
-            <div className="flex justify-between sm:block">
-              <dt className="text-[var(--text-secondary)]">Metered</dt>
-              <dd className="text-[var(--text-primary)]">
-                {metered == null ? "-" : metered ? "yes" : "no"}
-              </dd>
-            </div>
-            <div className="flex justify-between sm:block">
-              <dt className="text-[var(--text-secondary)]">SIM</dt>
-              <dd className="text-[var(--text-primary)]">{sim}</dd>
-            </div>
-            <div className="flex justify-between sm:block">
-              <dt className="text-[var(--text-secondary)]">Free disk</dt>
-              <dd className="text-[var(--text-primary)]">
-                {freeGB == null ? "-" : `${freeGB.toFixed(1)} GB`}
-              </dd>
-            </div>
-            <div className="flex justify-between sm:block">
-              <dt className="text-[var(--text-secondary)]">Thermal</dt>
-              <dd>
-                <Badge variant={thermal.variant === "neutral" ? "neutral" : thermal.variant}>
-                  {thermal.label}
-                </Badge>
-              </dd>
-            </div>
-            {!online && lastSeen && (
+          <>
+            <dl className="grid grid-cols-1 gap-y-2 text-sm sm:grid-cols-2 sm:gap-x-4">
               <div className="flex justify-between sm:block">
-                <dt className="text-[var(--text-secondary)]">Last seen</dt>
-                <dd className="text-[var(--text-primary)]">{formatTimestamp(lastSeen)}</dd>
+                <dt className="text-[var(--text-secondary)]">Network</dt>
+                <dd className="text-[var(--text-primary)]">{network}</dd>
               </div>
-            )}
-          </dl>
+              <div className="flex justify-between sm:block">
+                <dt className="text-[var(--text-secondary)]">Signal</dt>
+                <dd>
+                  {strength == null ? (
+                    <span className="text-[var(--text-secondary)]">-</span>
+                  ) : (
+                    <SignalBars index={strength.index} label={strength.label} />
+                  )}
+                </dd>
+              </div>
+              <div className="flex justify-between sm:block">
+                <dt className="text-[var(--text-secondary)]">Metered</dt>
+                <dd className="text-[var(--text-primary)]">
+                  {metered == null ? "-" : metered ? "yes" : "no"}
+                </dd>
+              </div>
+              <div className="flex justify-between sm:block">
+                <dt className="text-[var(--text-secondary)]">SIM</dt>
+                <dd className="text-[var(--text-primary)]">{sim}</dd>
+              </div>
+              <div className="flex justify-between sm:block">
+                <dt className="text-[var(--text-secondary)]">Free disk</dt>
+                <dd className="text-[var(--text-primary)]">
+                  {freeGB == null ? "-" : `${freeGB.toFixed(1)} GB`}
+                </dd>
+              </div>
+              <div className="flex justify-between sm:block">
+                <dt className="text-[var(--text-secondary)]">Thermal</dt>
+                <dd>
+                  <Badge variant={thermal.variant === "neutral" ? "neutral" : thermal.variant}>
+                    {thermal.label}
+                  </Badge>
+                  {maxTemp != null && (
+                    <span className="ml-2 text-xs text-[var(--text-secondary)] tabular-nums">
+                      {maxTemp.toFixed(0)}&deg;C
+                    </span>
+                  )}
+                </dd>
+              </div>
+              <div className="flex justify-between sm:block">
+                <dt className="text-[var(--text-secondary)]">CPU (peak)</dt>
+                <dd>
+                  <PercentBar value={cpu} />
+                </dd>
+              </div>
+              <div className="flex justify-between sm:block">
+                <dt className="text-[var(--text-secondary)]">Memory</dt>
+                <dd>
+                  <PercentBar value={mem} />
+                </dd>
+              </div>
+              <div className="flex justify-between sm:block">
+                <dt className="text-[var(--text-secondary)]">Power draw</dt>
+                <dd className="text-[var(--text-primary)] tabular-nums">
+                  {power == null ? "-" : `${power.toFixed(1)} W`}
+                </dd>
+              </div>
+              <div className="flex justify-between sm:block">
+                <dt className="text-[var(--text-secondary)]">Upload speed</dt>
+                <dd className="text-[var(--text-primary)] tabular-nums">
+                  {uploadSpeed == null
+                    ? "-"
+                    : uploadSpeed === 0
+                      ? "idle"
+                      : `${uploadSpeed.toFixed(2)} MB/s`}
+                </dd>
+              </div>
+              <div className="flex justify-between sm:block sm:col-span-2">
+                <dt className="text-[var(--text-secondary)]">Upload queue</dt>
+                <dd className="text-[var(--text-primary)] tabular-nums">
+                  {totalQueued == null ? (
+                    "-"
+                  ) : (
+                    <>
+                      {totalQueued} {totalQueued === 1 ? "file" : "files"}
+                      {totalQueuedSize != null && totalQueuedSize > 0 ? (
+                        <span className="ml-1 text-[var(--text-secondary)]">
+                          ({formatBytes(totalQueuedSize)})
+                        </span>
+                      ) : null}
+                      {immCount != null && rawCount != null ? (
+                        <span className="ml-2 text-xs text-[var(--text-secondary)]">
+                          {immCount} priority / {rawCount} raw
+                        </span>
+                      ) : null}
+                    </>
+                  )}
+                </dd>
+              </div>
+              {!online && lastSeen && (
+                <div className="flex justify-between sm:block sm:col-span-2">
+                  <dt className="text-[var(--text-secondary)]">Last seen</dt>
+                  <dd className="text-[var(--text-primary)]">{formatTimestamp(lastSeen)}</dd>
+                </div>
+              )}
+            </dl>
+          </>
         )}
       </CardBody>
     </Card>

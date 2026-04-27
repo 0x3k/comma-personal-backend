@@ -1,0 +1,24 @@
+{
+  "id": "device-analytics-expanded",
+  "name": "Expanded device analytics: CPU/MEM/temp + upload throughput",
+  "description": "Surface more live device telemetry on the devices page and upload-queue page without adding new poll loops. Extend the existing GET /v1/devices/:dongle_id/live handler to (a) parse additional fields from the deviceState cereal message it already fetches (cpu_usage_percent, memory_usage_percent, max_temp_c, network_strength, power_draw_w) and (b) issue one extra parallel getMessage('uploaderState') call to expose upload_speed_mbps and queue depths. Update DeviceStatusPanel and the upload-queue page to render the new fields. No new endpoints, no new poll cadences, no device-side changes.",
+  "priority": 3,
+  "status": "complete",
+  "branch": "agent/device-analytics-expanded",
+  "base_branch": "main",
+  "blocked_by": [],
+  "acceptance_criteria": [
+    "Backend extracts additional fields from getMessage('deviceState') in the existing /v1/devices/:dongle_id/live handler: cpu_usage_percent (peak of the cpuUsagePercent list), memory_usage_percent, max_temp_c (deviceState.maxTempC), network_strength (enum int), power_draw_w (float). Any missing field returns null rather than failing the whole call.",
+    "Backend adds one parallel getMessage('uploaderState') call inside the same /live handler. New response fields: upload_speed_mbps (float, from uploaderState.lastSpeed), immediate_queue_count (int), immediate_queue_size_bytes (int64), raw_queue_count (int), raw_queue_size_bytes (int64). All null if the call fails or the field is missing -- never fails the whole /live request.",
+    "Cached values (the existing 5-minute offline cache) include the new fields so they survive offline gaps just like network_type/free_space_gb do today.",
+    "DeviceStatusPanel renders the new metrics in a compact stats grid: CPU% bar, MEM% bar, max temp (with thermal-status color), network strength (signal bars), power draw, upload speed, queue depth (immediate + raw counts). Fields that are null render as a muted dash, not as 0.",
+    "Upload-queue page (web/src/app/devices/[dongleId]/upload-queue/page.tsx) gains a small header strip showing 'x in queue at y MB/s' sourced from the same /live endpoint (so no new poll). Header still renders sensibly when the device is offline (cached values, dimmed).",
+    "Per-item progress on the upload-queue page additionally shows transferred / total bytes (e.g. '12.3 MB / 48.0 MB') alongside the existing percentage when current_byte/total_byte are present.",
+    "Backend handler tests cover: full-success (both deviceState and uploaderState present), uploaderState RPC failure (deviceState fields still populated, uploader fields null), deviceState RPC failure (uploader fields still populated, device fields null), offline (cached extended fields returned).",
+    "Frontend renders without console errors when any subset of the new fields is null, including the all-null offline case.",
+    "pnpm --dir web lint, type-check, build pass",
+    "go test ./internal/api/... passes",
+    "go vet ./... and gofmt -l . pass (./.projd/scripts/smoke.sh exits 0)"
+  ],
+  "notes": "PR: https://github.com/0x3k/comma-personal-backend/pull/81. Bandwidth budget: one extra getMessage RPC per 5s poll cycle (uploaderState payload is a few hundred bytes). All other new fields piggyback on the deviceState payload that the handler already fetches. No additional poll loops or websocket push channels."
+}
