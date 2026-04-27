@@ -1,7 +1,7 @@
 {
   "id": "alpr-turn-detector",
   "name": "Per-route turn timeline from GPS geometry",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 3,
   "blocked_by": [],
   "branch": "agent/alpr-turn-detector",
@@ -20,5 +20,5 @@
     "Metrics: turn_detector_runs_total, turn_detector_turns_emitted_total, turn_detector_run_seconds histogram.",
     "Tests: synthetic geometry with a known 90 deg right turn -> exactly one turn at the expected timestamp. Straight-line geometry -> 0 turns. Circle geometry -> at least the dedup-bound count. Bearing-wrap edge case (358 deg -> 2 deg = +4 deg, NOT -356 deg) -> no spurious turn. Window-shorter-than-min-route guard."
   ],
-  "notes": ""
+  "notes": "Ships its own minimal route_turns migration (015) so the feature lands independently of alpr-schema. Both migrations use IF NOT EXISTS and are coexistence-safe."
 }
