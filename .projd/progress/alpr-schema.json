@@ -1,10 +1,11 @@
 {
   "id": "alpr-schema",
   "name": "ALPR core schema: detections, encounters, watchlist, route_turns",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 1,
   "blocked_by": [],
-  "branch": "",
+  "branch": "agent/alpr-schema",
+  "base_branch": "feat/alpr",
   "summary": "Core database schema for ALPR data plus a related route_turns table that the stalking heuristic consumes (route_turns is independently useful, e.g. for analytics, so it is intentionally not gated on alpr_enabled). All plate text columns are stored encrypted (BYTEA ciphertext) and indexed by HMAC hash; cleartext never touches the DB. This feature defines tables, indexes, and sqlc query files only -- no handlers, no workers, no business logic. Migrations are idempotent so they run safely even when the user never enables ALPR.",
   "acceptance_criteria": [
     "New migration sql/migrations/NNNN_alpr_schema.up.sql + matching .down.sql. Use the next sequential number after the latest existing migration; check sql/migrations/ for the highest current number.",
