@@ -130,8 +130,19 @@ function MomentsPageInner() {
   // Filter state. Types is a multi-select so the user can pick any subset;
   // the backend only supports a single `type=` param, so we hit it
   // multiple times when more than one is selected and merge the results.
-  const urlTypes = params.getAll("type");
-  const urlSeverity = (params.get("severity") ?? "") as "" | Severity;
+  // Drop URL values that don't match the current detector vocabulary --
+  // older shareable links sent `disengagement` / `alert` / `warning`,
+  // which no event row carries and which would otherwise show up as
+  // invisible filters that hide every event.
+  const urlTypes = params
+    .getAll("type")
+    .filter((t): t is (typeof KNOWN_EVENT_TYPES)[number] =>
+      (KNOWN_EVENT_TYPES as readonly string[]).includes(t),
+    );
+  const rawSeverity = params.get("severity") ?? "";
+  const urlSeverity = (KNOWN_SEVERITIES as readonly string[]).includes(rawSeverity)
+    ? (rawSeverity as Severity)
+    : "";
   const urlLimitRaw = parseInt(params.get("limit") ?? "", 10);
   const urlLimit = LIMIT_OPTIONS.includes(urlLimitRaw as (typeof LIMIT_OPTIONS)[number])
     ? (urlLimitRaw as (typeof LIMIT_OPTIONS)[number])
