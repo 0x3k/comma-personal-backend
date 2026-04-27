@@ -223,15 +223,10 @@ export default function UploadQueuePage() {
   // /live and queue endpoints poll on independent cadences).
   const liveImmediate = live?.immediate_queue_count ?? null;
   const liveRaw = live?.raw_queue_count ?? null;
-  const liveTotalCount =
-    liveImmediate != null || liveRaw != null
-      ? (liveImmediate ?? 0) + (liveRaw ?? 0)
-      : null;
-  const liveTotalSize =
-    live?.immediate_queue_size_bytes != null || live?.raw_queue_size_bytes != null
-      ? (live?.immediate_queue_size_bytes ?? 0) + (live?.raw_queue_size_bytes ?? 0)
-      : null;
-  const liveSpeed = live?.upload_speed_mbps ?? null;
+  const liveTotalCount = live?.upload_queue_count ?? null;
+  const liveUploadingNow = live?.uploading_now ?? null;
+  const liveUploadingPath = live?.uploading_path ?? null;
+  const liveUploadingProgress = live?.uploading_progress ?? null;
   const liveOffline = live ? !live.online : false;
 
   return (
@@ -248,20 +243,29 @@ export default function UploadQueuePage() {
             <span className="tabular-nums text-[var(--text-primary)]">
               {liveTotalCount == null ? "-" : `${liveTotalCount} file${liveTotalCount === 1 ? "" : "s"}`}
             </span>
-            {liveTotalSize != null && liveTotalSize > 0 && (
-              <span className="text-xs text-[var(--text-secondary)]">
-                ({formatBytes(liveTotalSize)})
-              </span>
-            )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-[var(--text-secondary)]">Throughput:</span>
+            <span className="text-[var(--text-secondary)]">Uploading:</span>
             <span className="tabular-nums text-[var(--text-primary)]">
-              {liveSpeed == null
-                ? "-"
-                : liveSpeed === 0
-                  ? "idle"
-                  : `${liveSpeed.toFixed(2)} MB/s`}
+              {liveUploadingNow == null ? (
+                "-"
+              ) : !liveUploadingNow ? (
+                "idle"
+              ) : (
+                <span className="flex items-baseline gap-2">
+                  <span
+                    title={liveUploadingPath ?? undefined}
+                    className="max-w-[14rem] truncate font-mono text-xs"
+                  >
+                    {liveUploadingPath ?? "in-flight"}
+                  </span>
+                  {liveUploadingProgress != null && (
+                    <span className="text-xs text-[var(--text-secondary)]">
+                      {(liveUploadingProgress * 100).toFixed(0)}%
+                    </span>
+                  )}
+                </span>
+              )}
             </span>
           </div>
           {liveImmediate != null && liveRaw != null && (

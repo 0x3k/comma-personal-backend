@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -19,6 +20,11 @@ const liveCacheTTL = 5 * time.Minute
 // live endpoint fans out several calls in parallel and the UI polls every 5s.
 const liveRPCTimeout = 3 * time.Second
 
+// defaultUploadPriority mirrors openpilot's athenad DEFAULT_UPLOAD_PRIORITY
+// (system/athena/athenad.py:57). Items with priority < this are considered
+// "immediate" (e.g. user-requested route data); >= are "raw" / background.
+const defaultUploadPriority = 99
+
 // DeviceLiveHandler orchestrates the parallel athenad RPC calls that feed the
 // web UI's live status card. It owns a small in-memory cache so an offline
 // device can still surface its last-known values.
@@ -31,11 +37,11 @@ type DeviceLiveHandler struct {
 
 	// Injected seams for testing so the handler can exercise success and
 	// partial-failure paths without standing up a real WebSocket client.
-	callNetworkType    func(*ws.Client) (interface{}, error)
-	callNetworkMetered func(*ws.Client) (bool, error)
-	callSimInfo        func(*ws.Client) (interface{}, error)
-	callDeviceState    func(*ws.Client) (map[string]interface{}, error)
-	callUploaderState  func(*ws.Client) (map[string]interface{}, error)
+	callNetworkType     func(*ws.Client) (interface{}, error)
+	callNetworkMetered  func(*ws.Client) (bool, error)
+	callSimInfo         func(*ws.Client) (interface{}, error)
+	callDeviceState     func(*ws.Client) (map[string]interface{}, error)
+	callListUploadQueue func(*ws.Client) ([]ws.UploadItem, error)
 }
 
 // NewDeviceLiveHandler constructs a live-status handler. hub and rpc may be
@@ -58,8 +64,8 @@ func NewDeviceLiveHandler(hub *ws.Hub, rpc *ws.RPCCaller) *DeviceLiveHandler {
 	h.callDeviceState = func(c *ws.Client) (map[string]interface{}, error) {
 		return ws.CallGetMessage(rpc, c, "deviceState", int(liveRPCTimeout/time.Millisecond))
 	}
-	h.callUploaderState = func(c *ws.Client) (map[string]interface{}, error) {
-		return ws.CallGetMessage(rpc, c, "uploaderState", int(liveRPCTimeout/time.Millisecond))
+	h.callListUploadQueue = func(c *ws.Client) ([]ws.UploadItem, error) {
+		return ws.CallListUploadQueue(rpc, c)
 	}
 	return h
 }
@@ -84,13 +90,17 @@ type liveResponse struct {
 	NetworkStrength    interface{} `json:"network_strength"`
 	PowerDrawW         *float64    `json:"power_draw_w"`
 
-	// Uploader analytics, sourced from getMessage("uploaderState"). One extra
-	// parallel RPC per /live poll. Null when uploaderState is unavailable.
-	UploadSpeedMbps         *float64 `json:"upload_speed_mbps"`
-	ImmediateQueueCount     *int     `json:"immediate_queue_count"`
-	ImmediateQueueSizeBytes *int64   `json:"immediate_queue_size_bytes"`
-	RawQueueCount           *int     `json:"raw_queue_count"`
-	RawQueueSizeBytes       *int64   `json:"raw_queue_size_bytes"`
+	// Upload queue analytics, sourced from listUploadQueue. The earlier
+	// uploaderState cereal RPC is deprecated upstream and not published by
+	// either openpilot or sunnypilot, so we read the canonical queue
+	// endpoint instead. Counts are split by athenad's DEFAULT_UPLOAD_PRIORITY
+	// (=99): items with priority < 99 are immediate, >= 99 are raw.
+	UploadQueueCount    *int     `json:"upload_queue_count"`
+	ImmediateQueueCount *int     `json:"immediate_queue_count"`
+	RawQueueCount       *int     `json:"raw_queue_count"`
+	UploadingNow        *bool    `json:"uploading_now"`
+	UploadingPath       *string  `json:"uploading_path"`
+	UploadingProgress   *float64 `json:"uploading_progress"`
 
 	FetchedAt time.Time `json:"fetched_at"`
 	// CachedAt is non-zero when Online is false and the payload was served
@@ -111,8 +121,8 @@ type cachedLive struct {
 //     merged with whatever was cached within liveCacheTTL. Cached values that
 //     are older than the TTL are dropped.
 //   - Otherwise, fan out getNetworkType, getNetworkMetered, getSimInfo,
-//     getMessage("deviceState"), and getMessage("uploaderState") in parallel.
-//     Each RPC's failure is swallowed: its field becomes null in the response.
+//     getMessage("deviceState"), and listUploadQueue in parallel. Each
+//     RPC's failure is swallowed: its field becomes null in the response.
 //     A partial response is still cached because it is strictly more
 //     informative than nothing.
 func (h *DeviceLiveHandler) GetLive(c echo.Context) error {
@@ -184,13 +194,19 @@ func (h *DeviceLiveHandler) fetchLive(client *ws.Client) liveResponse {
 	}()
 	go func() {
 		defer wg.Done()
-		if v, err := h.callUploaderState(client); err == nil {
-			us := extractUploaderState(v)
-			resp.UploadSpeedMbps = us.lastSpeedMbps
-			resp.ImmediateQueueCount = us.immediateQueueCount
-			resp.ImmediateQueueSizeBytes = us.immediateQueueSizeBytes
-			resp.RawQueueCount = us.rawQueueCount
-			resp.RawQueueSizeBytes = us.rawQueueSizeBytes
+		if items, err := h.callListUploadQueue(client); err == nil {
+			q := extractUploadQueue(items)
+			resp.UploadQueueCount = &q.totalCount
+			resp.ImmediateQueueCount = &q.immediateCount
+			resp.RawQueueCount = &q.rawCount
+			resp.UploadingNow = &q.uploadingNow
+			if q.uploadingPath != "" {
+				path := q.uploadingPath
+				resp.UploadingPath = &path
+			}
+			if q.uploadingProgress != nil {
+				resp.UploadingProgress = q.uploadingProgress
+			}
 		}
 	}()
 
@@ -230,11 +246,12 @@ func (h *DeviceLiveHandler) offlineResponse(dongleID string) liveResponse {
 	resp.MaxTempC = cached.resp.MaxTempC
 	resp.NetworkStrength = cached.resp.NetworkStrength
 	resp.PowerDrawW = cached.resp.PowerDrawW
-	resp.UploadSpeedMbps = cached.resp.UploadSpeedMbps
+	resp.UploadQueueCount = cached.resp.UploadQueueCount
 	resp.ImmediateQueueCount = cached.resp.ImmediateQueueCount
-	resp.ImmediateQueueSizeBytes = cached.resp.ImmediateQueueSizeBytes
 	resp.RawQueueCount = cached.resp.RawQueueCount
-	resp.RawQueueSizeBytes = cached.resp.RawQueueSizeBytes
+	resp.UploadingNow = cached.resp.UploadingNow
+	resp.UploadingPath = cached.resp.UploadingPath
+	resp.UploadingProgress = cached.resp.UploadingProgress
 	cachedAt := cached.at.UTC()
 	resp.CachedAt = &cachedAt
 	return resp
@@ -341,74 +358,41 @@ func extractDeviceState(msg map[string]interface{}) extractedDeviceState {
 	return out
 }
 
-// extractedUploaderState is the parsed subset of the uploaderState cereal
-// message. UInt32 byte sizes are widened to int64 to keep JSON unambiguous.
-type extractedUploaderState struct {
-	lastSpeedMbps           *float64
-	immediateQueueCount     *int
-	immediateQueueSizeBytes *int64
-	rawQueueCount           *int
-	rawQueueSizeBytes       *int64
+// extractedUploadQueue is the aggregate view of athenad's listUploadQueue
+// result. uploadingPath is empty when no item is currently uploading;
+// uploadingProgress is non-nil only when the active item reports progress > 0.
+type extractedUploadQueue struct {
+	totalCount        int
+	immediateCount    int
+	rawCount          int
+	uploadingNow      bool
+	uploadingPath     string
+	uploadingProgress *float64
 }
 
-// extractUploaderState pulls the fields the UI needs from the uploaderState
-// message returned by getMessage. Tree is
-// {"uploaderState": {"lastSpeed": f, "immediateQueueCount": n, ...}}.
-func extractUploaderState(msg map[string]interface{}) extractedUploaderState {
-	var out extractedUploaderState
-	if msg == nil {
-		return out
-	}
-	inner, ok := msg["uploaderState"].(map[string]interface{})
-	if !ok {
-		return out
-	}
-
-	for _, k := range []string{"lastSpeed", "last_speed", "lastSpeedMbps", "last_speed_mbps"} {
-		if v, ok := inner[k]; ok {
-			if f, ok := toFloat64(v); ok {
-				out.lastSpeedMbps = &f
-				break
+// extractUploadQueue derives the panel's queue stats from athenad's queue
+// items. priority < defaultUploadPriority (99) counts as immediate; >= 99
+// is raw. uploadingNow is set when any item has current=true; the path and
+// progress fields surface the first such item so the UI can show "uploading
+// <basename> at NN%" without rendering the full queue.
+func extractUploadQueue(items []ws.UploadItem) extractedUploadQueue {
+	out := extractedUploadQueue{totalCount: len(items)}
+	for i := range items {
+		item := items[i]
+		if item.Priority < defaultUploadPriority {
+			out.immediateCount++
+		} else {
+			out.rawCount++
+		}
+		if item.Current && !out.uploadingNow {
+			out.uploadingNow = true
+			out.uploadingPath = filepath.Base(item.Path)
+			if item.Progress > 0 {
+				p := item.Progress
+				out.uploadingProgress = &p
 			}
 		}
 	}
-
-	for _, k := range []string{"immediateQueueCount", "immediate_queue_count"} {
-		if v, ok := inner[k]; ok {
-			if n, ok := toInt(v); ok {
-				out.immediateQueueCount = &n
-				break
-			}
-		}
-	}
-
-	for _, k := range []string{"immediateQueueSize", "immediate_queue_size", "immediateQueueSizeBytes", "immediate_queue_size_bytes"} {
-		if v, ok := inner[k]; ok {
-			if n, ok := toInt64(v); ok {
-				out.immediateQueueSizeBytes = &n
-				break
-			}
-		}
-	}
-
-	for _, k := range []string{"rawQueueCount", "raw_queue_count"} {
-		if v, ok := inner[k]; ok {
-			if n, ok := toInt(v); ok {
-				out.rawQueueCount = &n
-				break
-			}
-		}
-	}
-
-	for _, k := range []string{"rawQueueSize", "raw_queue_size", "rawQueueSizeBytes", "raw_queue_size_bytes"} {
-		if v, ok := inner[k]; ok {
-			if n, ok := toInt64(v); ok {
-				out.rawQueueSizeBytes = &n
-				break
-			}
-		}
-	}
-
 	return out
 }
 
@@ -445,24 +429,6 @@ func toInt(v interface{}) (int, bool) {
 		return int(n), true
 	case float32:
 		return int(n), true
-	}
-	return 0, false
-}
-
-// toInt64 widens any JSON-decoded numeric value to int64. Used for byte sizes
-// where UInt32 from cereal can exceed int32 on 32-bit platforms.
-func toInt64(v interface{}) (int64, bool) {
-	switch n := v.(type) {
-	case int:
-		return int64(n), true
-	case int32:
-		return int64(n), true
-	case int64:
-		return n, true
-	case float64:
-		return int64(n), true
-	case float32:
-		return int64(n), true
 	}
 	return 0, false
 }

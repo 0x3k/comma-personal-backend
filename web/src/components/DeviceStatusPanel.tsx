@@ -61,11 +61,12 @@ export interface DeviceLiveStatus {
   max_temp_c: number | null;
   network_strength: unknown;
   power_draw_w: number | null;
-  upload_speed_mbps: number | null;
+  upload_queue_count: number | null;
   immediate_queue_count: number | null;
-  immediate_queue_size_bytes: number | null;
   raw_queue_count: number | null;
-  raw_queue_size_bytes: number | null;
+  uploading_now: boolean | null;
+  uploading_path: string | null;
+  uploading_progress: number | null;
   fetched_at: string;
   cached_at?: string | null;
 }
@@ -140,21 +141,6 @@ function resolveNetworkStrength(value: unknown): { index: number; label: string 
     if (typeof i === "number") return { index: i, label: value };
   }
   return null;
-}
-
-// Format raw bytes as a short human string. Used for upload-queue sizes which
-// span <1 KB through several GB.
-function formatBytes(n: number | null): string {
-  if (n == null || !Number.isFinite(n) || n < 0) return "-";
-  if (n < 1024) return `${n} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = n / 1024;
-  let u = 0;
-  while (v >= 1024 && u < units.length - 1) {
-    v /= 1024;
-    u++;
-  }
-  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[u]}`;
 }
 
 // PercentBar renders a 0-100 percent value as a small horizontal bar plus the
@@ -261,17 +247,12 @@ export function DeviceStatusPanel({ dongleId }: DeviceStatusPanelProps) {
   const maxTemp = status?.max_temp_c ?? null;
   const power = status?.power_draw_w ?? null;
   const strength = resolveNetworkStrength(status?.network_strength ?? null);
-  const uploadSpeed = status?.upload_speed_mbps ?? null;
   const immCount = status?.immediate_queue_count ?? null;
   const rawCount = status?.raw_queue_count ?? null;
-  const totalQueued =
-    immCount != null || rawCount != null
-      ? (immCount ?? 0) + (rawCount ?? 0)
-      : null;
-  const totalQueuedSize =
-    status?.immediate_queue_size_bytes != null || status?.raw_queue_size_bytes != null
-      ? (status?.immediate_queue_size_bytes ?? 0) + (status?.raw_queue_size_bytes ?? 0)
-      : null;
+  const totalQueued = status?.upload_queue_count ?? null;
+  const uploadingNow = status?.uploading_now ?? null;
+  const uploadingPath = status?.uploading_path ?? null;
+  const uploadingProgress = status?.uploading_progress ?? null;
 
   return (
     <Card className={online ? "" : "opacity-70"}>
@@ -372,13 +353,27 @@ export function DeviceStatusPanel({ dongleId }: DeviceStatusPanelProps) {
                 </dd>
               </div>
               <div className="flex justify-between sm:block">
-                <dt className="text-[var(--text-secondary)]">Upload speed</dt>
+                <dt className="text-[var(--text-secondary)]">Uploading</dt>
                 <dd className="text-[var(--text-primary)] tabular-nums">
-                  {uploadSpeed == null
-                    ? "-"
-                    : uploadSpeed === 0
-                      ? "idle"
-                      : `${uploadSpeed.toFixed(2)} MB/s`}
+                  {uploadingNow == null ? (
+                    "-"
+                  ) : !uploadingNow ? (
+                    "idle"
+                  ) : (
+                    <span className="flex flex-wrap items-baseline gap-x-2">
+                      <span
+                        title={uploadingPath ?? undefined}
+                        className="max-w-[12rem] truncate font-mono text-xs"
+                      >
+                        {uploadingPath ?? "in-flight"}
+                      </span>
+                      {uploadingProgress != null && (
+                        <span className="text-xs text-[var(--text-secondary)]">
+                          {(uploadingProgress * 100).toFixed(0)}%
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </dd>
               </div>
               <div className="flex justify-between sm:block sm:col-span-2">
@@ -389,11 +384,6 @@ export function DeviceStatusPanel({ dongleId }: DeviceStatusPanelProps) {
                   ) : (
                     <>
                       {totalQueued} {totalQueued === 1 ? "file" : "files"}
-                      {totalQueuedSize != null && totalQueuedSize > 0 ? (
-                        <span className="ml-1 text-[var(--text-secondary)]">
-                          ({formatBytes(totalQueuedSize)})
-                        </span>
-                      ) : null}
                       {immCount != null && rawCount != null ? (
                         <span className="ml-2 text-xs text-[var(--text-secondary)]">
                           {immCount} priority / {rawCount} raw

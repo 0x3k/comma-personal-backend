@@ -200,15 +200,11 @@ func TestGetLiveOnlineSuccess(t *testing.T) {
 			},
 		}, nil
 	}
-	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
-		return map[string]interface{}{
-			"uploaderState": map[string]interface{}{
-				"lastSpeed":           2.5,
-				"immediateQueueCount": 4.0,
-				"immediateQueueSize":  1024.0,
-				"rawQueueCount":       17.0,
-				"rawQueueSize":        2048.0,
-			},
+	h.callListUploadQueue = func(_ *ws.Client) ([]ws.UploadItem, error) {
+		return []ws.UploadItem{
+			{ID: "a", Path: "/data/media/0/realdata/00000050--xx--12/qlog.zst", Priority: 1, Current: true, Progress: 0.42},
+			{ID: "b", Path: "/data/media/0/realdata/00000050--xx--12/fcamera.hevc", Priority: 99},
+			{ID: "c", Path: "/data/media/0/realdata/00000049--xx--3/dcamera.hevc", Priority: 99},
 		}, nil
 	}
 
@@ -262,14 +258,23 @@ func TestGetLiveOnlineSuccess(t *testing.T) {
 	if resp.PowerDrawW == nil || *resp.PowerDrawW != 6.7 {
 		t.Errorf("power_draw_w = %v, want 6.7", pf(resp.PowerDrawW))
 	}
-	if resp.UploadSpeedMbps == nil || *resp.UploadSpeedMbps != 2.5 {
-		t.Errorf("upload_speed_mbps = %v, want 2.5", pf(resp.UploadSpeedMbps))
+	if resp.UploadQueueCount == nil || *resp.UploadQueueCount != 3 {
+		t.Errorf("upload_queue_count = %v, want 3", pi(resp.UploadQueueCount))
 	}
-	if resp.ImmediateQueueCount == nil || *resp.ImmediateQueueCount != 4 {
-		t.Errorf("immediate_queue_count = %v, want 4", pi(resp.ImmediateQueueCount))
+	if resp.ImmediateQueueCount == nil || *resp.ImmediateQueueCount != 1 {
+		t.Errorf("immediate_queue_count = %v, want 1", pi(resp.ImmediateQueueCount))
 	}
-	if resp.RawQueueCount == nil || *resp.RawQueueCount != 17 {
-		t.Errorf("raw_queue_count = %v, want 17", pi(resp.RawQueueCount))
+	if resp.RawQueueCount == nil || *resp.RawQueueCount != 2 {
+		t.Errorf("raw_queue_count = %v, want 2", pi(resp.RawQueueCount))
+	}
+	if resp.UploadingNow == nil || *resp.UploadingNow != true {
+		t.Errorf("uploading_now = %v, want true", resp.UploadingNow)
+	}
+	if resp.UploadingPath == nil || *resp.UploadingPath != "qlog.zst" {
+		t.Errorf("uploading_path = %v, want qlog.zst", resp.UploadingPath)
+	}
+	if resp.UploadingProgress == nil || *resp.UploadingProgress != 0.42 {
+		t.Errorf("uploading_progress = %v, want 0.42", pf(resp.UploadingProgress))
 	}
 
 	// Cache must be populated for the offline-fallback path.
@@ -298,7 +303,7 @@ func TestGetLivePartialFailure(t *testing.T) {
 	h.callDeviceState = func(_ *ws.Client) (map[string]interface{}, error) {
 		return nil, errors.New("service unavailable")
 	}
-	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
+	h.callListUploadQueue = func(_ *ws.Client) ([]ws.UploadItem, error) {
 		return nil, errors.New("service unavailable")
 	}
 
@@ -340,17 +345,20 @@ func TestGetLivePartialFailure(t *testing.T) {
 	if resp.ThermalStatus != nil {
 		t.Errorf("thermal_status = %v, want nil (rpc failed)", *resp.ThermalStatus)
 	}
-	if resp.UploadSpeedMbps != nil {
-		t.Errorf("upload_speed_mbps = %v, want nil (rpc failed)", *resp.UploadSpeedMbps)
+	if resp.UploadQueueCount != nil {
+		t.Errorf("upload_queue_count = %v, want nil (rpc failed)", *resp.UploadQueueCount)
+	}
+	if resp.UploadingNow != nil {
+		t.Errorf("uploading_now = %v, want nil (rpc failed)", *resp.UploadingNow)
 	}
 }
 
-// TestGetLiveUploaderRPCFailureLeavesDeviceFields asserts that when only the
-// uploaderState RPC fails, the deviceState-derived fields (CPU, memory, free
-// disk, etc.) still populate. This is the inverse of the partial-failure test
-// and is required by the feature's acceptance criteria: failures of either
-// RPC must not knock the other out.
-func TestGetLiveUploaderRPCFailureLeavesDeviceFields(t *testing.T) {
+// TestGetLiveUploadQueueRPCFailureLeavesDeviceFields asserts that when only
+// the listUploadQueue RPC fails, the deviceState-derived fields (CPU, memory,
+// free disk, etc.) still populate. This is the inverse of the partial-failure
+// test and is required by the feature's acceptance criteria: failures of
+// either RPC must not knock the other out.
+func TestGetLiveUploadQueueRPCFailureLeavesDeviceFields(t *testing.T) {
 	h, hub := newTestLiveHandler()
 
 	client := ws.TestNewClient("abc123", hub)
@@ -369,8 +377,8 @@ func TestGetLiveUploaderRPCFailureLeavesDeviceFields(t *testing.T) {
 			},
 		}, nil
 	}
-	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
-		return nil, errors.New("uploader rpc failed")
+	h.callListUploadQueue = func(_ *ws.Client) ([]ws.UploadItem, error) {
+		return nil, errors.New("upload queue rpc failed")
 	}
 
 	e := echo.New()
@@ -390,25 +398,28 @@ func TestGetLiveUploaderRPCFailureLeavesDeviceFields(t *testing.T) {
 	}
 
 	if resp.FreeSpaceGB == nil || *resp.FreeSpaceGB != 20.0 {
-		t.Errorf("free_space_gb = %v, want 20.0 (deviceState should survive uploader failure)", pf(resp.FreeSpaceGB))
+		t.Errorf("free_space_gb = %v, want 20.0 (deviceState should survive queue failure)", pf(resp.FreeSpaceGB))
 	}
 	if resp.CPUUsagePercent == nil || *resp.CPUUsagePercent != 15 {
 		t.Errorf("cpu_usage_percent = %v, want 15", pi(resp.CPUUsagePercent))
 	}
 	if resp.MemoryUsagePercent == nil {
-		t.Error("memory_usage_percent should survive uploader failure")
+		t.Error("memory_usage_percent should survive queue failure")
 	}
-	if resp.UploadSpeedMbps != nil {
-		t.Errorf("upload_speed_mbps = %v, want nil (rpc failed)", *resp.UploadSpeedMbps)
+	if resp.UploadQueueCount != nil {
+		t.Errorf("upload_queue_count = %v, want nil (rpc failed)", *resp.UploadQueueCount)
 	}
 	if resp.ImmediateQueueCount != nil {
 		t.Errorf("immediate_queue_count = %v, want nil (rpc failed)", *resp.ImmediateQueueCount)
 	}
+	if resp.UploadingNow != nil {
+		t.Errorf("uploading_now = %v, want nil (rpc failed)", *resp.UploadingNow)
+	}
 }
 
-// TestGetLiveDeviceStateFailureLeavesUploaderFields is the symmetric check:
-// when deviceState RPC fails, uploaderState fields still populate.
-func TestGetLiveDeviceStateFailureLeavesUploaderFields(t *testing.T) {
+// TestGetLiveDeviceStateFailureLeavesQueueFields is the symmetric check:
+// when deviceState RPC fails, listUploadQueue-derived fields still populate.
+func TestGetLiveDeviceStateFailureLeavesQueueFields(t *testing.T) {
 	h, hub := newTestLiveHandler()
 
 	client := ws.TestNewClient("abc123", hub)
@@ -421,13 +432,10 @@ func TestGetLiveDeviceStateFailureLeavesUploaderFields(t *testing.T) {
 	h.callDeviceState = func(_ *ws.Client) (map[string]interface{}, error) {
 		return nil, errors.New("device state unavailable")
 	}
-	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
-		return map[string]interface{}{
-			"uploaderState": map[string]interface{}{
-				"lastSpeed":           3.14,
-				"immediateQueueCount": 7.0,
-				"rawQueueCount":       1.0,
-			},
+	h.callListUploadQueue = func(_ *ws.Client) ([]ws.UploadItem, error) {
+		return []ws.UploadItem{
+			{ID: "1", Path: "/data/foo/qlog.zst", Priority: 1, Current: false},
+			{ID: "2", Path: "/data/foo/fcamera.hevc", Priority: 99},
 		}, nil
 	}
 
@@ -447,11 +455,14 @@ func TestGetLiveDeviceStateFailureLeavesUploaderFields(t *testing.T) {
 		t.Fatalf("failed to unmarshal response: %v", err)
 	}
 
-	if resp.UploadSpeedMbps == nil || *resp.UploadSpeedMbps != 3.14 {
-		t.Errorf("upload_speed_mbps = %v, want 3.14", pf(resp.UploadSpeedMbps))
+	if resp.UploadQueueCount == nil || *resp.UploadQueueCount != 2 {
+		t.Errorf("upload_queue_count = %v, want 2", pi(resp.UploadQueueCount))
 	}
-	if resp.ImmediateQueueCount == nil || *resp.ImmediateQueueCount != 7 {
-		t.Errorf("immediate_queue_count = %v, want 7", pi(resp.ImmediateQueueCount))
+	if resp.ImmediateQueueCount == nil || *resp.ImmediateQueueCount != 1 {
+		t.Errorf("immediate_queue_count = %v, want 1", pi(resp.ImmediateQueueCount))
+	}
+	if resp.RawQueueCount == nil || *resp.RawQueueCount != 1 {
+		t.Errorf("raw_queue_count = %v, want 1", pi(resp.RawQueueCount))
 	}
 	if resp.FreeSpaceGB != nil {
 		t.Errorf("free_space_gb = %v, want nil (deviceState rpc failed)", *resp.FreeSpaceGB)
@@ -462,36 +473,38 @@ func TestGetLiveDeviceStateFailureLeavesUploaderFields(t *testing.T) {
 }
 
 // TestGetLiveOfflineServesExtendedCache verifies that the new analytics
-// fields (CPU, MEM, upload speed, queue depths) survive a device disconnect
-// just like the original network/free_space fields do.
+// fields (CPU, MEM, queue counts, currently-uploading) survive a device
+// disconnect just like the original network/free_space fields do.
 func TestGetLiveOfflineServesExtendedCache(t *testing.T) {
 	h, _ := newTestLiveHandler()
 
 	cpu := 33
 	mem := 41
-	speed := 1.25
+	queueTotal := 14
 	immCount := 5
-	immSize := int64(2_000_000_000)
 	rawCount := 9
-	rawSize := int64(123)
 	maxT := 51.0
 	power := 7.1
+	uploadingNow := true
+	uploadingPath := "qlog.zst"
+	uploadingProgress := 0.62
 
 	cachedAt := h.now().Add(-2 * time.Minute)
 	h.cache.Store("abc123", cachedLive{
 		resp: liveResponse{
-			Online:                  true,
-			CPUUsagePercent:         &cpu,
-			MemoryUsagePercent:      &mem,
-			MaxTempC:                &maxT,
-			NetworkStrength:         "good",
-			PowerDrawW:              &power,
-			UploadSpeedMbps:         &speed,
-			ImmediateQueueCount:     &immCount,
-			ImmediateQueueSizeBytes: &immSize,
-			RawQueueCount:           &rawCount,
-			RawQueueSizeBytes:       &rawSize,
-			FetchedAt:               cachedAt,
+			Online:              true,
+			CPUUsagePercent:     &cpu,
+			MemoryUsagePercent:  &mem,
+			MaxTempC:            &maxT,
+			NetworkStrength:     "good",
+			PowerDrawW:          &power,
+			UploadQueueCount:    &queueTotal,
+			ImmediateQueueCount: &immCount,
+			RawQueueCount:       &rawCount,
+			UploadingNow:        &uploadingNow,
+			UploadingPath:       &uploadingPath,
+			UploadingProgress:   &uploadingProgress,
+			FetchedAt:           cachedAt,
 		},
 		at: cachedAt,
 	})
@@ -530,20 +543,23 @@ func TestGetLiveOfflineServesExtendedCache(t *testing.T) {
 	if resp.PowerDrawW == nil || *resp.PowerDrawW != 7.1 {
 		t.Errorf("cached power_draw_w = %v, want 7.1", pf(resp.PowerDrawW))
 	}
-	if resp.UploadSpeedMbps == nil || *resp.UploadSpeedMbps != 1.25 {
-		t.Errorf("cached upload_speed_mbps = %v, want 1.25", pf(resp.UploadSpeedMbps))
+	if resp.UploadQueueCount == nil || *resp.UploadQueueCount != 14 {
+		t.Errorf("cached upload_queue_count = %v, want 14", pi(resp.UploadQueueCount))
 	}
 	if resp.ImmediateQueueCount == nil || *resp.ImmediateQueueCount != 5 {
 		t.Errorf("cached immediate_queue_count = %v, want 5", pi(resp.ImmediateQueueCount))
 	}
-	if resp.ImmediateQueueSizeBytes == nil || *resp.ImmediateQueueSizeBytes != 2_000_000_000 {
-		t.Errorf("cached immediate_queue_size_bytes = %v, want 2e9", resp.ImmediateQueueSizeBytes)
-	}
 	if resp.RawQueueCount == nil || *resp.RawQueueCount != 9 {
 		t.Errorf("cached raw_queue_count = %v, want 9", pi(resp.RawQueueCount))
 	}
-	if resp.RawQueueSizeBytes == nil || *resp.RawQueueSizeBytes != 123 {
-		t.Errorf("cached raw_queue_size_bytes = %v, want 123", resp.RawQueueSizeBytes)
+	if resp.UploadingNow == nil || *resp.UploadingNow != true {
+		t.Error("cached uploading_now should be true")
+	}
+	if resp.UploadingPath == nil || *resp.UploadingPath != "qlog.zst" {
+		t.Errorf("cached uploading_path = %v, want qlog.zst", resp.UploadingPath)
+	}
+	if resp.UploadingProgress == nil || *resp.UploadingProgress != 0.62 {
+		t.Errorf("cached uploading_progress = %v, want 0.62", pf(resp.UploadingProgress))
 	}
 	if resp.CachedAt == nil {
 		t.Error("expected cached_at when serving from cache")
@@ -590,9 +606,9 @@ func TestGetLiveParallelDispatch(t *testing.T) {
 		slow()
 		return map[string]interface{}{}, nil
 	}
-	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
+	h.callListUploadQueue = func(_ *ws.Client) ([]ws.UploadItem, error) {
 		slow()
-		return map[string]interface{}{}, nil
+		return []ws.UploadItem{}, nil
 	}
 
 	e := echo.New()
@@ -785,42 +801,82 @@ func TestExtractDeviceStateCPUScalarFallback(t *testing.T) {
 	}
 }
 
-func TestExtractUploaderState(t *testing.T) {
-	msg := map[string]interface{}{
-		"uploaderState": map[string]interface{}{
-			"lastSpeed":           1.75,
-			"immediateQueueCount": 3.0,
-			"immediateQueueSize":  4_500_000_000.0, // larger than int32 to exercise int64 path
-			"rawQueueCount":       12.0,
-			"rawQueueSize":        890.0,
-		},
+func TestExtractUploadQueueEmpty(t *testing.T) {
+	q := extractUploadQueue(nil)
+	if q.totalCount != 0 || q.immediateCount != 0 || q.rawCount != 0 {
+		t.Errorf("nil queue: totals = %d/%d/%d, want 0/0/0", q.totalCount, q.immediateCount, q.rawCount)
 	}
-	us := extractUploaderState(msg)
-	if us.lastSpeedMbps == nil || *us.lastSpeedMbps != 1.75 {
-		t.Errorf("lastSpeed = %v, want 1.75", pf(us.lastSpeedMbps))
+	if q.uploadingNow {
+		t.Error("nil queue: uploadingNow should be false")
 	}
-	if us.immediateQueueCount == nil || *us.immediateQueueCount != 3 {
-		t.Errorf("immediateQueueCount = %v, want 3", pi(us.immediateQueueCount))
-	}
-	if us.immediateQueueSizeBytes == nil || *us.immediateQueueSizeBytes != 4_500_000_000 {
-		t.Errorf("immediateQueueSize = %v, want 4.5e9", us.immediateQueueSizeBytes)
-	}
-	if us.rawQueueCount == nil || *us.rawQueueCount != 12 {
-		t.Errorf("rawQueueCount = %v, want 12", pi(us.rawQueueCount))
-	}
-	if us.rawQueueSizeBytes == nil || *us.rawQueueSizeBytes != 890 {
-		t.Errorf("rawQueueSize = %v, want 890", us.rawQueueSizeBytes)
+
+	q = extractUploadQueue([]ws.UploadItem{})
+	if q.totalCount != 0 {
+		t.Errorf("empty queue: totalCount = %d, want 0", q.totalCount)
 	}
 }
 
-func TestExtractUploaderStateMissing(t *testing.T) {
-	us := extractUploaderState(nil)
-	if us.lastSpeedMbps != nil || us.immediateQueueCount != nil || us.rawQueueSizeBytes != nil {
-		t.Error("expected all uploader fields nil for nil msg")
+func TestExtractUploadQueuePrioritySplit(t *testing.T) {
+	// All-99 queue (the typical real-device case with athenad's
+	// DEFAULT_UPLOAD_PRIORITY) lands entirely in the raw bucket.
+	q := extractUploadQueue([]ws.UploadItem{
+		{ID: "a", Priority: 99},
+		{ID: "b", Priority: 99},
+		{ID: "c", Priority: 99},
+	})
+	if q.totalCount != 3 || q.immediateCount != 0 || q.rawCount != 3 {
+		t.Errorf("all-99 queue: totals = %d/%d/%d, want 3/0/3", q.totalCount, q.immediateCount, q.rawCount)
 	}
-	us = extractUploaderState(map[string]interface{}{"other": 1})
-	if us.lastSpeedMbps != nil || us.immediateQueueCount != nil {
-		t.Error("expected nil uploader fields when uploaderState key absent")
+
+	// Mixed priorities: anything < 99 is immediate.
+	q = extractUploadQueue([]ws.UploadItem{
+		{ID: "a", Priority: 1},
+		{ID: "b", Priority: 50},
+		{ID: "c", Priority: 99},
+		{ID: "d", Priority: 100},
+	})
+	if q.totalCount != 4 || q.immediateCount != 2 || q.rawCount != 2 {
+		t.Errorf("mixed queue: totals = %d/%d/%d, want 4/2/2", q.totalCount, q.immediateCount, q.rawCount)
+	}
+}
+
+func TestExtractUploadQueueActiveItem(t *testing.T) {
+	// Active item with progress: surface basename + progress fraction.
+	q := extractUploadQueue([]ws.UploadItem{
+		{ID: "a", Path: "/data/foo/bar/qlog.zst", Priority: 1, Current: true, Progress: 0.37},
+		{ID: "b", Path: "/data/foo/bar/fcamera.hevc", Priority: 99},
+	})
+	if !q.uploadingNow {
+		t.Error("uploadingNow should be true when an item is current")
+	}
+	if q.uploadingPath != "qlog.zst" {
+		t.Errorf("uploadingPath = %q, want qlog.zst (basename)", q.uploadingPath)
+	}
+	if q.uploadingProgress == nil || *q.uploadingProgress != 0.37 {
+		t.Errorf("uploadingProgress = %v, want 0.37", pf(q.uploadingProgress))
+	}
+
+	// Active item with zero progress: progress stays nil so the UI can
+	// distinguish "in-flight, no progress reported yet" from "37% done".
+	q = extractUploadQueue([]ws.UploadItem{
+		{ID: "a", Path: "/data/foo/qlog.zst", Priority: 1, Current: true, Progress: 0},
+	})
+	if !q.uploadingNow {
+		t.Error("uploadingNow should be true even when progress is 0")
+	}
+	if q.uploadingProgress != nil {
+		t.Errorf("uploadingProgress = %v, want nil for zero progress", pf(q.uploadingProgress))
+	}
+
+	// No current item: uploadingNow false, path empty.
+	q = extractUploadQueue([]ws.UploadItem{
+		{ID: "a", Path: "/data/foo/qlog.zst", Priority: 99, Current: false},
+	})
+	if q.uploadingNow {
+		t.Error("uploadingNow should be false when no item is current")
+	}
+	if q.uploadingPath != "" {
+		t.Errorf("uploadingPath = %q, want empty when no current item", q.uploadingPath)
 	}
 }
 
