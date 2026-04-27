@@ -18,19 +18,26 @@ JOIN routes r ON r.id = e.route_id
 WHERE r.dongle_id = $1
   AND ($2::text IS NULL OR e.type = $2)
   AND ($3::text IS NULL OR e.severity = $3)
+  AND ($4::text IS NULL OR r.route_name = $4)
 `
 
 type CountEventsByDongleIDParams struct {
-	DongleID       string      `json:"dongleId"`
-	TypeFilter     pgtype.Text `json:"typeFilter"`
-	SeverityFilter pgtype.Text `json:"severityFilter"`
+	DongleID        string      `json:"dongleId"`
+	TypeFilter      pgtype.Text `json:"typeFilter"`
+	SeverityFilter  pgtype.Text `json:"severityFilter"`
+	RouteNameFilter pgtype.Text `json:"routeNameFilter"`
 }
 
 // Total count matching the same filters as ListEventsByDongleID, so the UI
 // can paginate without repeatedly scanning the full set. Pass NULL for
-// @type_filter or @severity_filter to disable that filter.
+// any filter argument to disable it.
 func (q *Queries) CountEventsByDongleID(ctx context.Context, arg CountEventsByDongleIDParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countEventsByDongleID, arg.DongleID, arg.TypeFilter, arg.SeverityFilter)
+	row := q.db.QueryRow(ctx, countEventsByDongleID,
+		arg.DongleID,
+		arg.TypeFilter,
+		arg.SeverityFilter,
+		arg.RouteNameFilter,
+	)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -68,6 +75,30 @@ func (q *Queries) CountEventsByType(ctx context.Context, routeID int32) ([]Count
 		return nil, err
 	}
 	return items, nil
+}
+
+const countRoutesWithEventsByDongleID = `-- name: CountRoutesWithEventsByDongleID :one
+SELECT COUNT(DISTINCT r.id)::BIGINT
+FROM routes r
+JOIN events e ON e.route_id = r.id
+WHERE r.dongle_id = $1
+  AND ($2::text IS NULL OR e.type = $2)
+  AND ($3::text IS NULL OR e.severity = $3)
+`
+
+type CountRoutesWithEventsByDongleIDParams struct {
+	DongleID       string      `json:"dongleId"`
+	TypeFilter     pgtype.Text `json:"typeFilter"`
+	SeverityFilter pgtype.Text `json:"severityFilter"`
+}
+
+// Total route count matching the same filters as
+// ListRoutesWithEventsByDongleID. Used by the UI for pagination.
+func (q *Queries) CountRoutesWithEventsByDongleID(ctx context.Context, arg CountRoutesWithEventsByDongleIDParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRoutesWithEventsByDongleID, arg.DongleID, arg.TypeFilter, arg.SeverityFilter)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const insertEvent = `-- name: InsertEvent :one
@@ -120,6 +151,61 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (Event
 	return i, err
 }
 
+const listEventTypeBreakdownByDongleID = `-- name: ListEventTypeBreakdownByDongleID :many
+SELECT e.route_id, e.type, COUNT(*)::BIGINT AS count
+FROM events e
+JOIN routes r ON r.id = e.route_id
+WHERE r.dongle_id = $1
+  AND ($2::text IS NULL OR e.type = $2)
+  AND ($3::text IS NULL OR e.severity = $3)
+  AND e.route_id = ANY ($4::int[])
+GROUP BY e.route_id, e.type
+ORDER BY e.route_id, COUNT(*) DESC, e.type
+`
+
+type ListEventTypeBreakdownByDongleIDParams struct {
+	DongleID       string      `json:"dongleId"`
+	TypeFilter     pgtype.Text `json:"typeFilter"`
+	SeverityFilter pgtype.Text `json:"severityFilter"`
+	RouteIds       []int32     `json:"routeIds"`
+}
+
+type ListEventTypeBreakdownByDongleIDRow struct {
+	RouteID int32  `json:"routeId"`
+	Type    string `json:"type"`
+	Count   int64  `json:"count"`
+}
+
+// Per-route, per-type event counts for the routes returned by
+// ListRoutesWithEventsByDongleID. The UI calls this once per page-of-routes
+// and joins client-side, so a single round trip yields the breakdown for
+// every visible route. Filters mirror the routes query so the breakdown
+// only counts events the user is actually filtering on.
+func (q *Queries) ListEventTypeBreakdownByDongleID(ctx context.Context, arg ListEventTypeBreakdownByDongleIDParams) ([]ListEventTypeBreakdownByDongleIDRow, error) {
+	rows, err := q.db.Query(ctx, listEventTypeBreakdownByDongleID,
+		arg.DongleID,
+		arg.TypeFilter,
+		arg.SeverityFilter,
+		arg.RouteIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEventTypeBreakdownByDongleIDRow
+	for rows.Next() {
+		var i ListEventTypeBreakdownByDongleIDRow
+		if err := rows.Scan(&i.RouteID, &i.Type, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEventsByDongleID = `-- name: ListEventsByDongleID :many
 SELECT e.id, e.route_id, e.type, e.severity, e.route_offset_seconds,
        e.occurred_at, e.payload, e.created_at,
@@ -129,16 +215,18 @@ JOIN routes r ON r.id = e.route_id
 WHERE r.dongle_id = $1
   AND ($2::text IS NULL OR e.type = $2)
   AND ($3::text IS NULL OR e.severity = $3)
+  AND ($4::text IS NULL OR r.route_name = $4)
 ORDER BY e.occurred_at DESC NULLS LAST, e.id DESC
-LIMIT $5 OFFSET $4
+LIMIT $6 OFFSET $5
 `
 
 type ListEventsByDongleIDParams struct {
-	DongleID       string      `json:"dongleId"`
-	TypeFilter     pgtype.Text `json:"typeFilter"`
-	SeverityFilter pgtype.Text `json:"severityFilter"`
-	OffsetCount    int32       `json:"offsetCount"`
-	LimitCount     int32       `json:"limitCount"`
+	DongleID        string      `json:"dongleId"`
+	TypeFilter      pgtype.Text `json:"typeFilter"`
+	SeverityFilter  pgtype.Text `json:"severityFilter"`
+	RouteNameFilter pgtype.Text `json:"routeNameFilter"`
+	OffsetCount     int32       `json:"offsetCount"`
+	LimitCount      int32       `json:"limitCount"`
 }
 
 type ListEventsByDongleIDRow struct {
@@ -156,13 +244,16 @@ type ListEventsByDongleIDRow struct {
 
 // Paginated, filterable list of events for a device, joined with the owning
 // route so the UI can render the route_name alongside the event without a
-// second round trip. Pass NULL for @type_filter or @severity_filter to
-// disable that filter.
+// second round trip. Pass NULL for @type_filter, @severity_filter, or
+// @route_name_filter to disable that filter. The route_name filter is
+// exact-match and is intended for the moments-page "expand a route" UI,
+// which lazy-fetches a single route's events on demand.
 func (q *Queries) ListEventsByDongleID(ctx context.Context, arg ListEventsByDongleIDParams) ([]ListEventsByDongleIDRow, error) {
 	rows, err := q.db.Query(ctx, listEventsByDongleID,
 		arg.DongleID,
 		arg.TypeFilter,
 		arg.SeverityFilter,
+		arg.RouteNameFilter,
 		arg.OffsetCount,
 		arg.LimitCount,
 	)
@@ -221,6 +312,78 @@ func (q *Queries) ListEventsByRoute(ctx context.Context, routeID int32) ([]Event
 			&i.OccurredAt,
 			&i.Payload,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoutesWithEventsByDongleID = `-- name: ListRoutesWithEventsByDongleID :many
+SELECT r.id           AS route_id,
+       r.route_name,
+       r.start_time,
+       r.end_time,
+       COUNT(e.id)::BIGINT                       AS event_count,
+       MAX(e.occurred_at)::TIMESTAMPTZ            AS last_event_at
+FROM routes r
+JOIN events e ON e.route_id = r.id
+WHERE r.dongle_id = $1
+  AND ($2::text IS NULL OR e.type = $2)
+  AND ($3::text IS NULL OR e.severity = $3)
+GROUP BY r.id, r.route_name, r.start_time, r.end_time
+ORDER BY MAX(e.occurred_at) DESC NULLS LAST, r.id DESC
+LIMIT $5 OFFSET $4
+`
+
+type ListRoutesWithEventsByDongleIDParams struct {
+	DongleID       string      `json:"dongleId"`
+	TypeFilter     pgtype.Text `json:"typeFilter"`
+	SeverityFilter pgtype.Text `json:"severityFilter"`
+	OffsetCount    int32       `json:"offsetCount"`
+	LimitCount     int32       `json:"limitCount"`
+}
+
+type ListRoutesWithEventsByDongleIDRow struct {
+	RouteID     int32              `json:"routeId"`
+	RouteName   string             `json:"routeName"`
+	StartTime   pgtype.Timestamptz `json:"startTime"`
+	EndTime     pgtype.Timestamptz `json:"endTime"`
+	EventCount  int64              `json:"eventCount"`
+	LastEventAt pgtype.Timestamptz `json:"lastEventAt"`
+}
+
+// Backs the moments-page "collapsed list of routes" view. Returns one row
+// per route that has at least one event matching the type/severity filter,
+// with the total matching count and the most recent matching event time so
+// the UI can sort routes by recency without a follow-up call. Pass NULL
+// for @type_filter or @severity_filter to disable the corresponding filter.
+func (q *Queries) ListRoutesWithEventsByDongleID(ctx context.Context, arg ListRoutesWithEventsByDongleIDParams) ([]ListRoutesWithEventsByDongleIDRow, error) {
+	rows, err := q.db.Query(ctx, listRoutesWithEventsByDongleID,
+		arg.DongleID,
+		arg.TypeFilter,
+		arg.SeverityFilter,
+		arg.OffsetCount,
+		arg.LimitCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRoutesWithEventsByDongleIDRow
+	for rows.Next() {
+		var i ListRoutesWithEventsByDongleIDRow
+		if err := rows.Scan(
+			&i.RouteID,
+			&i.RouteName,
+			&i.StartTime,
+			&i.EndTime,
+			&i.EventCount,
+			&i.LastEventAt,
 		); err != nil {
 			return nil, err
 		}
