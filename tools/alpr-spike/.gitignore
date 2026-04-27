@@ -1,0 +1,9 @@
+# Spike-local artifacts: never commit raw fcamera frames or downloaded models.
+# Operator drops images into samples/ to reproduce benchmark numbers locally.
+samples/
+models/
+results/
+*.json.tmp
+.venv/
+__pycache__/
+*.pyc

@@ -1,0 +1,8 @@
+filename,plate_text,notes
+# Operator: hand-label one row per JPEG dropped into samples/.
+# Empty plate_text means "no plate visible in frame" (false-positive sentinel).
+# Lines starting with '#' are ignored by the harness.
+# Example rows:
+# frame_0001.jpg,7ABC123,clear daytime highway
+# frame_0002.jpg,,no plate visible (interior shot)
+# frame_0003.jpg,4XYZ789,night city dirty plate
