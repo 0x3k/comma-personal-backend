@@ -85,6 +85,19 @@ type RouteTag struct {
 	Tag     string `json:"tag"`
 }
 
+type RouteTurn struct {
+	ID               int64              `json:"id"`
+	DongleID         string             `json:"dongleId"`
+	Route            string             `json:"route"`
+	TurnTs           pgtype.Timestamptz `json:"turnTs"`
+	TurnOffsetMs     int32              `json:"turnOffsetMs"`
+	BearingBeforeDeg float32            `json:"bearingBeforeDeg"`
+	BearingAfterDeg  float32            `json:"bearingAfterDeg"`
+	DeltaDeg         float32            `json:"deltaDeg"`
+	GpsLat           pgtype.Float8      `json:"gpsLat"`
+	GpsLng           pgtype.Float8      `json:"gpsLng"`
+}
+
 type Segment struct {
 	ID              int32              `json:"id"`
 	RouteID         int32              `json:"routeId"`
