@@ -62,6 +62,7 @@ func resetSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	// Order matters only for ergonomics; CASCADE drops dependents anyway.
 	stmts := []string{
 		`DROP TABLE IF EXISTS crashes CASCADE`,
+		`DROP TABLE IF EXISTS route_turns CASCADE`,
 		`DROP TABLE IF EXISTS route_data_requests CASCADE`,
 		`DROP TABLE IF EXISTS route_tags CASCADE`,
 		`DROP TABLE IF EXISTS events CASCADE`,
