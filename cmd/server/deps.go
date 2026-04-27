@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/metrics"
@@ -15,6 +17,7 @@ import (
 // new dependency is a one-field edit rather than a signature change.
 type deps struct {
 	cfg           *config.Config
+	pool          *pgxpool.Pool
 	queries       *db.Queries
 	store         *storage.Storage
 	settings      *settings.Store
