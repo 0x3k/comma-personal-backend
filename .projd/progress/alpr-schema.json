@@ -1,7 +1,7 @@
 {
   "id": "alpr-schema",
   "name": "ALPR core schema: detections, encounters, watchlist, route_turns",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 1,
   "blocked_by": [],
   "branch": "agent/alpr-schema",
@@ -21,5 +21,5 @@
     "Down migration drops every table created here in reverse FK order.",
     "Add a smoke check to ./.projd/scripts/smoke.sh (or new internal test) verifying the migration applies and rolls back cleanly on a fresh DB."
   ],
-  "notes": ""
+  "notes": "Migration 015_alpr_schema.up.sql/.down.sql added. All seven tables (plate_detections, plate_encounters, plate_watchlist, plate_alert_events, route_turns, alpr_segment_progress, alpr_audit_log) created with the columns/indexes/constraints from the spec; plate_hash columns enforce octet_length=32 via CHECK. sqlc query files cover every function listed in criterion 9 and `make sqlc` regenerates cleanly. Integration test internal/db/alpr_schema_test.go (TestALPRSchema_MigrationUpDown + TestALPRSchema_PlateHashLengthCheck) verifies up applies and down rolls back on a fresh DB and that the CHECK constraint rejects short hashes; smoke.sh gained an alpr-schema check that runs them. go vet, gofmt, full backend test suite, and full frontend smoke (lint + typecheck) all pass."
 }
