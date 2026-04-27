@@ -31,7 +31,23 @@
       "Bash(tail *)",
       "Bash(wc *)",
       "Bash(awk *)",
-      "Bash(sed *)"
+      "Bash(sed *)",
+      "Bash(docker *)",
+      "Bash(uv *)",
+      "Bash(openssl *)",
+      "Bash(base64 *)",
+      "Bash(diff *)",
+      "Bash(env *)",
+      "Bash(printf *)",
+      "Bash(sort *)",
+      "Bash(xargs *)",
+      "Bash(tr *)",
+      "Bash(sha256sum *)",
+      "Bash(stat *)",
+      "Bash(file *)",
+      "Bash(date *)",
+      "Bash(true)",
+      "Bash(false)"
     ]
   },
   "statusLine": {
