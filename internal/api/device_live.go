@@ -293,11 +293,23 @@ func extractDeviceState(msg map[string]interface{}) extractedDeviceState {
 		}
 	}
 
+	// thermalStatus is a capnp enum. athenad's getMessage rehydrates capnp
+	// messages via to_dict(), which serialises enums as their field name (a
+	// string), not the integer index. Accept both. Sunnypilot renamed the
+	// enum values (green/yellow/red/danger) while upstream openpilot kept
+	// the original ok/warmDEPRECATED/overheated/critical, so both name sets
+	// are mapped to the same 0..3 codes the frontend expects.
 	for _, k := range []string{"thermalStatus", "thermal_status"} {
 		if v, ok := inner[k]; ok {
 			if n, ok := toInt(v); ok {
 				out.thermalStatus = &n
 				break
+			}
+			if s, ok := v.(string); ok {
+				if n, ok := thermalStatusFromString(s); ok {
+					out.thermalStatus = &n
+					break
+				}
 			}
 		}
 	}
@@ -394,6 +406,23 @@ func extractUploadQueue(items []ws.UploadItem) extractedUploadQueue {
 		}
 	}
 	return out
+}
+
+// thermalStatusFromString maps the cereal enum field name to its integer
+// code. Returns false for unknown names so callers can fall through to other
+// representations.
+func thermalStatusFromString(s string) (int, bool) {
+	switch s {
+	case "green", "ok":
+		return 0, true
+	case "yellow", "warm", "warmDEPRECATED":
+		return 1, true
+	case "red", "overheated":
+		return 2, true
+	case "danger", "critical":
+		return 3, true
+	}
+	return 0, false
 }
 
 // toFloat64 widens any JSON-decoded numeric value to float64. JSON numbers
