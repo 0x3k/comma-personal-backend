@@ -1,10 +1,11 @@
 {
   "id": "alpr-config",
   "name": "ALPR configuration: env vars, runtime settings, status endpoint",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 1,
   "blocked_by": [],
-  "branch": "",
+  "branch": "agent/alpr-config",
+  "base_branch": "feat/alpr",
   "summary": "Master configuration plumbing for the ALPR pipeline. ALPR is opt-in via a runtime settings flag (alpr_enabled, default false) -- the user toggles it from the UI without touching .env. The flag is the single source of truth that workers, API handlers, and the frontend all consult. Env vars only configure deployment-time concerns (engine URL, encryption key, default tunables). Encryption key is the one hard prerequisite: the PUT endpoint refuses to set enabled=true while ALPR_ENCRYPTION_KEY is unset, because there is no safe way to store plate text without it. This feature must land BEFORE workers and API features so they can all reference the same flag and config helpers.",
   "acceptance_criteria": [
     "internal/config gains an ALPRConfig struct: EngineURL string, Region string (us|eu|uk|other), FramesPerSecond float64, ConfidenceMin float64, EncryptionKeyB64 string, RetentionDaysUnflagged int, RetentionDaysFlagged int, ExtractorConcurrency int, DetectorConcurrency int, NotifyMinSeverity int, NotifyEmail/Webhook fields. Loaded from env at startup with defaults: ALPR_ENGINE_URL='http://alpr:8081', ALPR_REGION='us', ALPR_FPS=2, ALPR_CONFIDENCE_MIN=0.75, ALPR_RETENTION_DAYS_UNFLAGGED=30, ALPR_RETENTION_DAYS_FLAGGED=365, ALPR_EXTRACTOR_CONCURRENCY=1, ALPR_DETECTOR_CONCURRENCY=2, ALPR_NOTIFY_MIN_SEVERITY=4. EncryptionKeyB64 has no default -- empty means feature cannot be enabled.",
