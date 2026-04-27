@@ -1,7 +1,7 @@
 {
   "id": "alpr-config",
   "name": "ALPR configuration: env vars, runtime settings, status endpoint",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 1,
   "blocked_by": [],
   "branch": "agent/alpr-config",
@@ -17,5 +17,5 @@
     "Backend tests: PUT validates each precondition (412 cases), boundary cases for fps/confidence (400), happy-path enable, GET shape stability.",
     "Follow the existing settings pattern in internal/api/settings/* and the GET/PUT /v1/settings/retention handlers. Match the registration site (cmd/server/routes.go) and middleware groupings (sessionOrJWT for read, session for write). Use checkDongleAccess where applicable; this endpoint is server-wide so no dongle check is needed."
   ],
-  "notes": ""
+  "notes": "Implemented in cmd/server/alpr.go (seed + startup log), internal/config/alpr.go (ALPRConfig + env loader + AES-256 key validation), internal/settings/alpr.go (key constants + bool/float/time helpers), internal/api/settings_alpr.go (GET/PUT /v1/settings/alpr handler with engine_reachable probe and prerequisite gating). Routes wired in cmd/server/routes.go. The disclaimer_acked_at precondition uses settings.KeyALPRDisclaimerAckedAt + settings.KeyALPRDisclaimerVersion -- writing those rows is owned by the still-pending alpr-disclaimer-gate feature, so enable=true currently fails with missing_prerequisites: [\"disclaimer\"] until that feature lands (intentional ordering)."
 }
