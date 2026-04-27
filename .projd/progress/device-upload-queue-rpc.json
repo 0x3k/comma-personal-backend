@@ -1,0 +1,22 @@
+{
+  "id": "device-upload-queue-rpc",
+  "name": "Live device upload analytics: switch from deprecated uploaderState to listUploadQueue",
+  "status": "in_progress",
+  "priority": 2,
+  "blocked_by": [],
+  "branch": "agent/device-upload-queue-rpc",
+  "summary": "PR #81 added upload analytics on the live status panel by calling getMessage('uploaderState') over athena. The user reports all upload fields render as dashes while the device is actively uploading. Inspecting upstream: openpilot's log.capnp marks uploaderStateDEPRECATED, and neither openpilot nor sunnypilot publishes the cereal message anymore. The RPC times out silently. Replace it with listUploadQueue, which returns real items, and re-derive the panel fields from there. We cannot recover MB/s without device-side byte sizes (queue items have only a 0..1 progress fraction), so drop the uncomputable fields and surface what we actually have: count, priority split, and the currently-uploading file with its progress.",
+  "acceptance_criteria": [
+    "GET /v1/devices/:dongle_id/live no longer calls getMessage('uploaderState'). Replaced with the canonical listUploadQueue JSON-RPC.",
+    "liveResponse.immediate_queue_count and raw_queue_count are populated from the queue items, split by priority < DEFAULT_UPLOAD_PRIORITY (99). All-99 queues count as raw.",
+    "liveResponse adds upload_queue_count (total) and uploading_now (bool) plus uploading_path / uploading_progress for the currently-active item.",
+    "liveResponse drops upload_speed_mbps, immediate_queue_size_bytes, raw_queue_size_bytes (uncomputable; were always null on real devices). Offline cache and tests updated accordingly.",
+    "extractUploadQueue handles: empty list (zeros), nil result (zeros), all-pending queue, mid-upload item with progress in (0,1].",
+    "DeviceStatusPanel renders 'Uploading' row showing path + percent when an item is current, 'idle' otherwise. Upload queue row shows total count and immediate/raw split with no bytes.",
+    "Upload queue page header strip uses the new fields: aggregate count, current upload file + percent. No more 'MB/s' or byte aggregate.",
+    "Existing tests refactored: callUploaderState seam removed, callListUploadQueue stubbed in all subtests. Add tests for extractUploadQueue (priority split, current detection, empty/nil) and offline cache propagation of new fields.",
+    "Frontend type-check + lint clean. go test ./... clean. ./.projd/scripts/smoke.sh clean.",
+    "Manual verification on the live device: panel shows real numbers, not dashes, while an upload is in progress."
+  ],
+  "notes": ""
+}
