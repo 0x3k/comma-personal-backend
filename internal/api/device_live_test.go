@@ -190,8 +190,24 @@ func TestGetLiveOnlineSuccess(t *testing.T) {
 	h.callDeviceState = func(_ *ws.Client) (map[string]interface{}, error) {
 		return map[string]interface{}{
 			"deviceState": map[string]interface{}{
-				"freeSpaceGB":   42.0,
-				"thermalStatus": 1.0,
+				"freeSpaceGB":        42.0,
+				"thermalStatus":      1.0,
+				"cpuUsagePercent":    []interface{}{10.0, 30.0, 5.0},
+				"memoryUsagePercent": 51.0,
+				"maxTempC":           58.0,
+				"networkStrength":    2.0,
+				"powerDrawW":         6.7,
+			},
+		}, nil
+	}
+	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
+		return map[string]interface{}{
+			"uploaderState": map[string]interface{}{
+				"lastSpeed":           2.5,
+				"immediateQueueCount": 4.0,
+				"immediateQueueSize":  1024.0,
+				"rawQueueCount":       17.0,
+				"rawQueueSize":        2048.0,
 			},
 		}, nil
 	}
@@ -234,6 +250,27 @@ func TestGetLiveOnlineSuccess(t *testing.T) {
 	if resp.NetworkType == nil {
 		t.Error("network_type = nil, want populated")
 	}
+	if resp.CPUUsagePercent == nil || *resp.CPUUsagePercent != 30 {
+		t.Errorf("cpu_usage_percent = %v, want 30 (peak)", pi(resp.CPUUsagePercent))
+	}
+	if resp.MemoryUsagePercent == nil || *resp.MemoryUsagePercent != 51 {
+		t.Errorf("memory_usage_percent = %v, want 51", pi(resp.MemoryUsagePercent))
+	}
+	if resp.MaxTempC == nil || *resp.MaxTempC != 58.0 {
+		t.Errorf("max_temp_c = %v, want 58.0", pf(resp.MaxTempC))
+	}
+	if resp.PowerDrawW == nil || *resp.PowerDrawW != 6.7 {
+		t.Errorf("power_draw_w = %v, want 6.7", pf(resp.PowerDrawW))
+	}
+	if resp.UploadSpeedMbps == nil || *resp.UploadSpeedMbps != 2.5 {
+		t.Errorf("upload_speed_mbps = %v, want 2.5", pf(resp.UploadSpeedMbps))
+	}
+	if resp.ImmediateQueueCount == nil || *resp.ImmediateQueueCount != 4 {
+		t.Errorf("immediate_queue_count = %v, want 4", pi(resp.ImmediateQueueCount))
+	}
+	if resp.RawQueueCount == nil || *resp.RawQueueCount != 17 {
+		t.Errorf("raw_queue_count = %v, want 17", pi(resp.RawQueueCount))
+	}
 
 	// Cache must be populated for the offline-fallback path.
 	if _, ok := h.cache.Load("abc123"); !ok {
@@ -259,6 +296,9 @@ func TestGetLivePartialFailure(t *testing.T) {
 		return nil, errors.New("rpc error")
 	}
 	h.callDeviceState = func(_ *ws.Client) (map[string]interface{}, error) {
+		return nil, errors.New("service unavailable")
+	}
+	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
 		return nil, errors.New("service unavailable")
 	}
 
@@ -300,6 +340,214 @@ func TestGetLivePartialFailure(t *testing.T) {
 	if resp.ThermalStatus != nil {
 		t.Errorf("thermal_status = %v, want nil (rpc failed)", *resp.ThermalStatus)
 	}
+	if resp.UploadSpeedMbps != nil {
+		t.Errorf("upload_speed_mbps = %v, want nil (rpc failed)", *resp.UploadSpeedMbps)
+	}
+}
+
+// TestGetLiveUploaderRPCFailureLeavesDeviceFields asserts that when only the
+// uploaderState RPC fails, the deviceState-derived fields (CPU, memory, free
+// disk, etc.) still populate. This is the inverse of the partial-failure test
+// and is required by the feature's acceptance criteria: failures of either
+// RPC must not knock the other out.
+func TestGetLiveUploaderRPCFailureLeavesDeviceFields(t *testing.T) {
+	h, hub := newTestLiveHandler()
+
+	client := ws.TestNewClient("abc123", hub)
+	hub.Register(client)
+	t.Cleanup(func() { client.Close() })
+
+	h.callNetworkType = func(_ *ws.Client) (interface{}, error) { return "LTE", nil }
+	h.callNetworkMetered = func(_ *ws.Client) (bool, error) { return false, nil }
+	h.callSimInfo = func(_ *ws.Client) (interface{}, error) { return map[string]interface{}{}, nil }
+	h.callDeviceState = func(_ *ws.Client) (map[string]interface{}, error) {
+		return map[string]interface{}{
+			"deviceState": map[string]interface{}{
+				"freeSpaceGB":        20.0,
+				"cpuUsagePercent":    []interface{}{15.0, 5.0},
+				"memoryUsagePercent": 30.0,
+			},
+		}, nil
+	}
+	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
+		return nil, errors.New("uploader rpc failed")
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/v1/devices/abc123/live", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id")
+	c.SetParamValues("abc123")
+
+	if err := h.GetLive(c); err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	var resp liveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if resp.FreeSpaceGB == nil || *resp.FreeSpaceGB != 20.0 {
+		t.Errorf("free_space_gb = %v, want 20.0 (deviceState should survive uploader failure)", pf(resp.FreeSpaceGB))
+	}
+	if resp.CPUUsagePercent == nil || *resp.CPUUsagePercent != 15 {
+		t.Errorf("cpu_usage_percent = %v, want 15", pi(resp.CPUUsagePercent))
+	}
+	if resp.MemoryUsagePercent == nil {
+		t.Error("memory_usage_percent should survive uploader failure")
+	}
+	if resp.UploadSpeedMbps != nil {
+		t.Errorf("upload_speed_mbps = %v, want nil (rpc failed)", *resp.UploadSpeedMbps)
+	}
+	if resp.ImmediateQueueCount != nil {
+		t.Errorf("immediate_queue_count = %v, want nil (rpc failed)", *resp.ImmediateQueueCount)
+	}
+}
+
+// TestGetLiveDeviceStateFailureLeavesUploaderFields is the symmetric check:
+// when deviceState RPC fails, uploaderState fields still populate.
+func TestGetLiveDeviceStateFailureLeavesUploaderFields(t *testing.T) {
+	h, hub := newTestLiveHandler()
+
+	client := ws.TestNewClient("abc123", hub)
+	hub.Register(client)
+	t.Cleanup(func() { client.Close() })
+
+	h.callNetworkType = func(_ *ws.Client) (interface{}, error) { return "LTE", nil }
+	h.callNetworkMetered = func(_ *ws.Client) (bool, error) { return false, nil }
+	h.callSimInfo = func(_ *ws.Client) (interface{}, error) { return map[string]interface{}{}, nil }
+	h.callDeviceState = func(_ *ws.Client) (map[string]interface{}, error) {
+		return nil, errors.New("device state unavailable")
+	}
+	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
+		return map[string]interface{}{
+			"uploaderState": map[string]interface{}{
+				"lastSpeed":           3.14,
+				"immediateQueueCount": 7.0,
+				"rawQueueCount":       1.0,
+			},
+		}, nil
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/v1/devices/abc123/live", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id")
+	c.SetParamValues("abc123")
+
+	if err := h.GetLive(c); err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	var resp liveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if resp.UploadSpeedMbps == nil || *resp.UploadSpeedMbps != 3.14 {
+		t.Errorf("upload_speed_mbps = %v, want 3.14", pf(resp.UploadSpeedMbps))
+	}
+	if resp.ImmediateQueueCount == nil || *resp.ImmediateQueueCount != 7 {
+		t.Errorf("immediate_queue_count = %v, want 7", pi(resp.ImmediateQueueCount))
+	}
+	if resp.FreeSpaceGB != nil {
+		t.Errorf("free_space_gb = %v, want nil (deviceState rpc failed)", *resp.FreeSpaceGB)
+	}
+	if resp.CPUUsagePercent != nil {
+		t.Errorf("cpu_usage_percent = %v, want nil (deviceState rpc failed)", *resp.CPUUsagePercent)
+	}
+}
+
+// TestGetLiveOfflineServesExtendedCache verifies that the new analytics
+// fields (CPU, MEM, upload speed, queue depths) survive a device disconnect
+// just like the original network/free_space fields do.
+func TestGetLiveOfflineServesExtendedCache(t *testing.T) {
+	h, _ := newTestLiveHandler()
+
+	cpu := 33
+	mem := 41
+	speed := 1.25
+	immCount := 5
+	immSize := int64(2_000_000_000)
+	rawCount := 9
+	rawSize := int64(123)
+	maxT := 51.0
+	power := 7.1
+
+	cachedAt := h.now().Add(-2 * time.Minute)
+	h.cache.Store("abc123", cachedLive{
+		resp: liveResponse{
+			Online:                  true,
+			CPUUsagePercent:         &cpu,
+			MemoryUsagePercent:      &mem,
+			MaxTempC:                &maxT,
+			NetworkStrength:         "good",
+			PowerDrawW:              &power,
+			UploadSpeedMbps:         &speed,
+			ImmediateQueueCount:     &immCount,
+			ImmediateQueueSizeBytes: &immSize,
+			RawQueueCount:           &rawCount,
+			RawQueueSizeBytes:       &rawSize,
+			FetchedAt:               cachedAt,
+		},
+		at: cachedAt,
+	})
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/v1/devices/abc123/live", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id")
+	c.SetParamValues("abc123")
+
+	if err := h.GetLive(c); err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	var resp liveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	if resp.Online {
+		t.Error("online = true, want false (device disconnected)")
+	}
+	if resp.CPUUsagePercent == nil || *resp.CPUUsagePercent != 33 {
+		t.Errorf("cached cpu_usage_percent = %v, want 33", pi(resp.CPUUsagePercent))
+	}
+	if resp.MemoryUsagePercent == nil || *resp.MemoryUsagePercent != 41 {
+		t.Errorf("cached memory_usage_percent = %v, want 41", pi(resp.MemoryUsagePercent))
+	}
+	if resp.MaxTempC == nil || *resp.MaxTempC != 51.0 {
+		t.Errorf("cached max_temp_c = %v, want 51.0", pf(resp.MaxTempC))
+	}
+	if resp.NetworkStrength != "good" {
+		t.Errorf("cached network_strength = %v, want \"good\"", resp.NetworkStrength)
+	}
+	if resp.PowerDrawW == nil || *resp.PowerDrawW != 7.1 {
+		t.Errorf("cached power_draw_w = %v, want 7.1", pf(resp.PowerDrawW))
+	}
+	if resp.UploadSpeedMbps == nil || *resp.UploadSpeedMbps != 1.25 {
+		t.Errorf("cached upload_speed_mbps = %v, want 1.25", pf(resp.UploadSpeedMbps))
+	}
+	if resp.ImmediateQueueCount == nil || *resp.ImmediateQueueCount != 5 {
+		t.Errorf("cached immediate_queue_count = %v, want 5", pi(resp.ImmediateQueueCount))
+	}
+	if resp.ImmediateQueueSizeBytes == nil || *resp.ImmediateQueueSizeBytes != 2_000_000_000 {
+		t.Errorf("cached immediate_queue_size_bytes = %v, want 2e9", resp.ImmediateQueueSizeBytes)
+	}
+	if resp.RawQueueCount == nil || *resp.RawQueueCount != 9 {
+		t.Errorf("cached raw_queue_count = %v, want 9", pi(resp.RawQueueCount))
+	}
+	if resp.RawQueueSizeBytes == nil || *resp.RawQueueSizeBytes != 123 {
+		t.Errorf("cached raw_queue_size_bytes = %v, want 123", resp.RawQueueSizeBytes)
+	}
+	if resp.CachedAt == nil {
+		t.Error("expected cached_at when serving from cache")
+	}
 }
 
 func TestGetLiveParallelDispatch(t *testing.T) {
@@ -339,6 +587,10 @@ func TestGetLiveParallelDispatch(t *testing.T) {
 		return map[string]interface{}{}, nil
 	}
 	h.callDeviceState = func(_ *ws.Client) (map[string]interface{}, error) {
+		slow()
+		return map[string]interface{}{}, nil
+	}
+	h.callUploaderState = func(_ *ws.Client) (map[string]interface{}, error) {
 		slow()
 		return map[string]interface{}{}, nil
 	}
@@ -480,14 +732,95 @@ func TestExtractDeviceState(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			free, thermal := extractDeviceState(tt.msg)
-			if !floatPtrEqual(free, tt.wantFree) {
-				t.Errorf("free = %v, want %v", pf(free), pf(tt.wantFree))
+			ds := extractDeviceState(tt.msg)
+			if !floatPtrEqual(ds.freeSpaceGB, tt.wantFree) {
+				t.Errorf("free = %v, want %v", pf(ds.freeSpaceGB), pf(tt.wantFree))
 			}
-			if !intPtrEqual(thermal, tt.wantThermal) {
-				t.Errorf("thermal = %v, want %v", pi(thermal), pi(tt.wantThermal))
+			if !intPtrEqual(ds.thermalStatus, tt.wantThermal) {
+				t.Errorf("thermal = %v, want %v", pi(ds.thermalStatus), pi(tt.wantThermal))
 			}
 		})
+	}
+}
+
+func TestExtractDeviceStateExtended(t *testing.T) {
+	msg := map[string]interface{}{
+		"deviceState": map[string]interface{}{
+			"freeSpaceGB":        15.0,
+			"thermalStatus":      1.0,
+			"cpuUsagePercent":    []interface{}{12.0, 47.0, 9.0, 5.0},
+			"memoryUsagePercent": 38.0,
+			"maxTempC":           62.5,
+			"networkStrength":    "good",
+			"powerDrawW":         8.4,
+		},
+	}
+	ds := extractDeviceState(msg)
+	if ds.cpuUsagePercent == nil || *ds.cpuUsagePercent != 47 {
+		t.Errorf("cpuUsagePercent = %v, want peak 47", pi(ds.cpuUsagePercent))
+	}
+	if ds.memoryUsagePercent == nil || *ds.memoryUsagePercent != 38 {
+		t.Errorf("memoryUsagePercent = %v, want 38", pi(ds.memoryUsagePercent))
+	}
+	if ds.maxTempC == nil || *ds.maxTempC != 62.5 {
+		t.Errorf("maxTempC = %v, want 62.5", pf(ds.maxTempC))
+	}
+	if ds.networkStrength != "good" {
+		t.Errorf("networkStrength = %v, want \"good\"", ds.networkStrength)
+	}
+	if ds.powerDrawW == nil || *ds.powerDrawW != 8.4 {
+		t.Errorf("powerDrawW = %v, want 8.4", pf(ds.powerDrawW))
+	}
+}
+
+func TestExtractDeviceStateCPUScalarFallback(t *testing.T) {
+	// Some firmwares may report cpuUsagePercent as a scalar Int8 instead of a
+	// per-core list. The extractor should tolerate both shapes.
+	msg := map[string]interface{}{
+		"deviceState": map[string]interface{}{"cpuUsagePercent": 22.0},
+	}
+	ds := extractDeviceState(msg)
+	if ds.cpuUsagePercent == nil || *ds.cpuUsagePercent != 22 {
+		t.Errorf("scalar cpuUsagePercent = %v, want 22", pi(ds.cpuUsagePercent))
+	}
+}
+
+func TestExtractUploaderState(t *testing.T) {
+	msg := map[string]interface{}{
+		"uploaderState": map[string]interface{}{
+			"lastSpeed":           1.75,
+			"immediateQueueCount": 3.0,
+			"immediateQueueSize":  4_500_000_000.0, // larger than int32 to exercise int64 path
+			"rawQueueCount":       12.0,
+			"rawQueueSize":        890.0,
+		},
+	}
+	us := extractUploaderState(msg)
+	if us.lastSpeedMbps == nil || *us.lastSpeedMbps != 1.75 {
+		t.Errorf("lastSpeed = %v, want 1.75", pf(us.lastSpeedMbps))
+	}
+	if us.immediateQueueCount == nil || *us.immediateQueueCount != 3 {
+		t.Errorf("immediateQueueCount = %v, want 3", pi(us.immediateQueueCount))
+	}
+	if us.immediateQueueSizeBytes == nil || *us.immediateQueueSizeBytes != 4_500_000_000 {
+		t.Errorf("immediateQueueSize = %v, want 4.5e9", us.immediateQueueSizeBytes)
+	}
+	if us.rawQueueCount == nil || *us.rawQueueCount != 12 {
+		t.Errorf("rawQueueCount = %v, want 12", pi(us.rawQueueCount))
+	}
+	if us.rawQueueSizeBytes == nil || *us.rawQueueSizeBytes != 890 {
+		t.Errorf("rawQueueSize = %v, want 890", us.rawQueueSizeBytes)
+	}
+}
+
+func TestExtractUploaderStateMissing(t *testing.T) {
+	us := extractUploaderState(nil)
+	if us.lastSpeedMbps != nil || us.immediateQueueCount != nil || us.rawQueueSizeBytes != nil {
+		t.Error("expected all uploader fields nil for nil msg")
+	}
+	us = extractUploaderState(map[string]interface{}{"other": 1})
+	if us.lastSpeedMbps != nil || us.immediateQueueCount != nil {
+		t.Error("expected nil uploader fields when uploaderState key absent")
 	}
 }
 

@@ -16,7 +16,7 @@ import (
 const liveCacheTTL = 5 * time.Minute
 
 // rpcCallTimeout bounds each individual athenad RPC. Kept short because the
-// live endpoint fans out four calls in parallel and the UI polls every 5s.
+// live endpoint fans out several calls in parallel and the UI polls every 5s.
 const liveRPCTimeout = 3 * time.Second
 
 // DeviceLiveHandler orchestrates the parallel athenad RPC calls that feed the
@@ -35,6 +35,7 @@ type DeviceLiveHandler struct {
 	callNetworkMetered func(*ws.Client) (bool, error)
 	callSimInfo        func(*ws.Client) (interface{}, error)
 	callDeviceState    func(*ws.Client) (map[string]interface{}, error)
+	callUploaderState  func(*ws.Client) (map[string]interface{}, error)
 }
 
 // NewDeviceLiveHandler constructs a live-status handler. hub and rpc may be
@@ -57,6 +58,9 @@ func NewDeviceLiveHandler(hub *ws.Hub, rpc *ws.RPCCaller) *DeviceLiveHandler {
 	h.callDeviceState = func(c *ws.Client) (map[string]interface{}, error) {
 		return ws.CallGetMessage(rpc, c, "deviceState", int(liveRPCTimeout/time.Millisecond))
 	}
+	h.callUploaderState = func(c *ws.Client) (map[string]interface{}, error) {
+		return ws.CallGetMessage(rpc, c, "uploaderState", int(liveRPCTimeout/time.Millisecond))
+	}
 	return h
 }
 
@@ -70,7 +74,25 @@ type liveResponse struct {
 	Sim           interface{} `json:"sim"`
 	FreeSpaceGB   *float64    `json:"free_space_gb"`
 	ThermalStatus *int        `json:"thermal_status"`
-	FetchedAt     time.Time   `json:"fetched_at"`
+
+	// Extended deviceState analytics. All extracted from the same getMessage
+	// payload as FreeSpaceGB/ThermalStatus, so they cost zero extra device
+	// round trips. Each field is null when absent or the call failed.
+	CPUUsagePercent    *int        `json:"cpu_usage_percent"`
+	MemoryUsagePercent *int        `json:"memory_usage_percent"`
+	MaxTempC           *float64    `json:"max_temp_c"`
+	NetworkStrength    interface{} `json:"network_strength"`
+	PowerDrawW         *float64    `json:"power_draw_w"`
+
+	// Uploader analytics, sourced from getMessage("uploaderState"). One extra
+	// parallel RPC per /live poll. Null when uploaderState is unavailable.
+	UploadSpeedMbps         *float64 `json:"upload_speed_mbps"`
+	ImmediateQueueCount     *int     `json:"immediate_queue_count"`
+	ImmediateQueueSizeBytes *int64   `json:"immediate_queue_size_bytes"`
+	RawQueueCount           *int     `json:"raw_queue_count"`
+	RawQueueSizeBytes       *int64   `json:"raw_queue_size_bytes"`
+
+	FetchedAt time.Time `json:"fetched_at"`
 	// CachedAt is non-zero when Online is false and the payload was served
 	// from the last-known-value cache. The UI renders it as "last seen".
 	CachedAt *time.Time `json:"cached_at,omitempty"`
@@ -88,10 +110,11 @@ type cachedLive struct {
 //   - If the device has no active WebSocket client, return {online:false}
 //     merged with whatever was cached within liveCacheTTL. Cached values that
 //     are older than the TTL are dropped.
-//   - Otherwise, fan out getNetworkType, getNetworkMetered, getSimInfo, and
-//     getMessage("deviceState") in parallel. Each RPC's failure is swallowed:
-//     its field becomes null in the response. A partial response is still
-//     cached because it is strictly more informative than nothing.
+//   - Otherwise, fan out getNetworkType, getNetworkMetered, getSimInfo,
+//     getMessage("deviceState"), and getMessage("uploaderState") in parallel.
+//     Each RPC's failure is swallowed: its field becomes null in the response.
+//     A partial response is still cached because it is strictly more
+//     informative than nothing.
 func (h *DeviceLiveHandler) GetLive(c echo.Context) error {
 	dongleID := c.Param("dongle_id")
 	if dongleID == "" {
@@ -115,9 +138,9 @@ func (h *DeviceLiveHandler) GetLive(c echo.Context) error {
 	return c.JSON(http.StatusOK, resp)
 }
 
-// fetchLive issues all four athenad RPCs in parallel and merges successful
-// results into a liveResponse. A failed RPC leaves its field as the zero
-// value (null when serialised).
+// fetchLive issues all athenad RPCs in parallel and merges successful results
+// into a liveResponse. A failed RPC leaves its field as the zero value (null
+// when serialised).
 func (h *DeviceLiveHandler) fetchLive(client *ws.Client) liveResponse {
 	resp := liveResponse{
 		Online:    true,
@@ -125,7 +148,7 @@ func (h *DeviceLiveHandler) fetchLive(client *ws.Client) liveResponse {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 
 	go func() {
 		defer wg.Done()
@@ -149,9 +172,25 @@ func (h *DeviceLiveHandler) fetchLive(client *ws.Client) liveResponse {
 	go func() {
 		defer wg.Done()
 		if v, err := h.callDeviceState(client); err == nil {
-			free, thermal := extractDeviceState(v)
-			resp.FreeSpaceGB = free
-			resp.ThermalStatus = thermal
+			ds := extractDeviceState(v)
+			resp.FreeSpaceGB = ds.freeSpaceGB
+			resp.ThermalStatus = ds.thermalStatus
+			resp.CPUUsagePercent = ds.cpuUsagePercent
+			resp.MemoryUsagePercent = ds.memoryUsagePercent
+			resp.MaxTempC = ds.maxTempC
+			resp.NetworkStrength = ds.networkStrength
+			resp.PowerDrawW = ds.powerDrawW
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if v, err := h.callUploaderState(client); err == nil {
+			us := extractUploaderState(v)
+			resp.UploadSpeedMbps = us.lastSpeedMbps
+			resp.ImmediateQueueCount = us.immediateQueueCount
+			resp.ImmediateQueueSizeBytes = us.immediateQueueSizeBytes
+			resp.RawQueueCount = us.rawQueueCount
+			resp.RawQueueSizeBytes = us.rawQueueSizeBytes
 		}
 	}()
 
@@ -186,45 +225,191 @@ func (h *DeviceLiveHandler) offlineResponse(dongleID string) liveResponse {
 	resp.Sim = cached.resp.Sim
 	resp.FreeSpaceGB = cached.resp.FreeSpaceGB
 	resp.ThermalStatus = cached.resp.ThermalStatus
+	resp.CPUUsagePercent = cached.resp.CPUUsagePercent
+	resp.MemoryUsagePercent = cached.resp.MemoryUsagePercent
+	resp.MaxTempC = cached.resp.MaxTempC
+	resp.NetworkStrength = cached.resp.NetworkStrength
+	resp.PowerDrawW = cached.resp.PowerDrawW
+	resp.UploadSpeedMbps = cached.resp.UploadSpeedMbps
+	resp.ImmediateQueueCount = cached.resp.ImmediateQueueCount
+	resp.ImmediateQueueSizeBytes = cached.resp.ImmediateQueueSizeBytes
+	resp.RawQueueCount = cached.resp.RawQueueCount
+	resp.RawQueueSizeBytes = cached.resp.RawQueueSizeBytes
 	cachedAt := cached.at.UTC()
 	resp.CachedAt = &cachedAt
 	return resp
 }
 
-// extractDeviceState pulls the two fields the UI needs from the deviceState
+// extractedDeviceState is the parsed subset of the deviceState cereal message
+// that the UI consumes. Each field is a pointer so callers can distinguish
+// "missing/unparseable" from "zero".
+type extractedDeviceState struct {
+	freeSpaceGB        *float64
+	thermalStatus      *int
+	cpuUsagePercent    *int
+	memoryUsagePercent *int
+	maxTempC           *float64
+	networkStrength    interface{}
+	powerDrawW         *float64
+}
+
+// extractDeviceState pulls the fields the UI needs from the deviceState
 // message returned by getMessage. The value tree is
-// {"deviceState": {"freeSpacePercent": f, "thermalStatus": n, ...}}; we
-// accept both camelCase and snake_case keys so older agnos builds still work.
-func extractDeviceState(msg map[string]interface{}) (*float64, *int) {
+// {"deviceState": {"freeSpacePercent": f, "thermalStatus": n, ...}}; we accept
+// both camelCase and snake_case keys so older agnos builds still work.
+func extractDeviceState(msg map[string]interface{}) extractedDeviceState {
+	var out extractedDeviceState
 	if msg == nil {
-		return nil, nil
+		return out
 	}
 	inner, ok := msg["deviceState"].(map[string]interface{})
 	if !ok {
-		return nil, nil
+		return out
 	}
 
-	var free *float64
 	for _, k := range []string{"freeSpaceGB", "free_space_gb", "freeSpacePercent", "free_space_percent", "freeSpace"} {
 		if v, ok := inner[k]; ok {
 			if f, ok := toFloat64(v); ok {
-				free = &f
+				out.freeSpaceGB = &f
 				break
 			}
 		}
 	}
 
-	var thermal *int
 	for _, k := range []string{"thermalStatus", "thermal_status"} {
 		if v, ok := inner[k]; ok {
 			if n, ok := toInt(v); ok {
-				thermal = &n
+				out.thermalStatus = &n
 				break
 			}
 		}
 	}
 
-	return free, thermal
+	// cpuUsagePercent is a List(Int8) per cereal: report the peak core so the
+	// UI can flag a single hot core without rendering N bars.
+	for _, k := range []string{"cpuUsagePercent", "cpu_usage_percent"} {
+		if v, ok := inner[k]; ok {
+			if peak, ok := peakIntList(v); ok {
+				out.cpuUsagePercent = &peak
+				break
+			}
+			// Some firmwares may report a scalar instead of a list; tolerate it.
+			if n, ok := toInt(v); ok {
+				out.cpuUsagePercent = &n
+				break
+			}
+		}
+	}
+
+	for _, k := range []string{"memoryUsagePercent", "memory_usage_percent"} {
+		if v, ok := inner[k]; ok {
+			if n, ok := toInt(v); ok {
+				out.memoryUsagePercent = &n
+				break
+			}
+		}
+	}
+
+	for _, k := range []string{"maxTempC", "max_temp_c"} {
+		if v, ok := inner[k]; ok {
+			if f, ok := toFloat64(v); ok {
+				out.maxTempC = &f
+				break
+			}
+		}
+	}
+
+	// networkStrength is a NetworkStrength enum (capnp). athenad may serialise
+	// it as either a string ("good") or an integer index; pass through as
+	// interface{} and let the frontend render it.
+	for _, k := range []string{"networkStrength", "network_strength"} {
+		if v, ok := inner[k]; ok {
+			out.networkStrength = v
+			break
+		}
+	}
+
+	for _, k := range []string{"powerDrawW", "power_draw_w"} {
+		if v, ok := inner[k]; ok {
+			if f, ok := toFloat64(v); ok {
+				out.powerDrawW = &f
+				break
+			}
+		}
+	}
+
+	return out
+}
+
+// extractedUploaderState is the parsed subset of the uploaderState cereal
+// message. UInt32 byte sizes are widened to int64 to keep JSON unambiguous.
+type extractedUploaderState struct {
+	lastSpeedMbps           *float64
+	immediateQueueCount     *int
+	immediateQueueSizeBytes *int64
+	rawQueueCount           *int
+	rawQueueSizeBytes       *int64
+}
+
+// extractUploaderState pulls the fields the UI needs from the uploaderState
+// message returned by getMessage. Tree is
+// {"uploaderState": {"lastSpeed": f, "immediateQueueCount": n, ...}}.
+func extractUploaderState(msg map[string]interface{}) extractedUploaderState {
+	var out extractedUploaderState
+	if msg == nil {
+		return out
+	}
+	inner, ok := msg["uploaderState"].(map[string]interface{})
+	if !ok {
+		return out
+	}
+
+	for _, k := range []string{"lastSpeed", "last_speed", "lastSpeedMbps", "last_speed_mbps"} {
+		if v, ok := inner[k]; ok {
+			if f, ok := toFloat64(v); ok {
+				out.lastSpeedMbps = &f
+				break
+			}
+		}
+	}
+
+	for _, k := range []string{"immediateQueueCount", "immediate_queue_count"} {
+		if v, ok := inner[k]; ok {
+			if n, ok := toInt(v); ok {
+				out.immediateQueueCount = &n
+				break
+			}
+		}
+	}
+
+	for _, k := range []string{"immediateQueueSize", "immediate_queue_size", "immediateQueueSizeBytes", "immediate_queue_size_bytes"} {
+		if v, ok := inner[k]; ok {
+			if n, ok := toInt64(v); ok {
+				out.immediateQueueSizeBytes = &n
+				break
+			}
+		}
+	}
+
+	for _, k := range []string{"rawQueueCount", "raw_queue_count"} {
+		if v, ok := inner[k]; ok {
+			if n, ok := toInt(v); ok {
+				out.rawQueueCount = &n
+				break
+			}
+		}
+	}
+
+	for _, k := range []string{"rawQueueSize", "raw_queue_size", "rawQueueSizeBytes", "raw_queue_size_bytes"} {
+		if v, ok := inner[k]; ok {
+			if n, ok := toInt64(v); ok {
+				out.rawQueueSizeBytes = &n
+				break
+			}
+		}
+	}
+
+	return out
 }
 
 // toFloat64 widens any JSON-decoded numeric value to float64. JSON numbers
@@ -262,6 +447,48 @@ func toInt(v interface{}) (int, bool) {
 		return int(n), true
 	}
 	return 0, false
+}
+
+// toInt64 widens any JSON-decoded numeric value to int64. Used for byte sizes
+// where UInt32 from cereal can exceed int32 on 32-bit platforms.
+func toInt64(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int32:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), true
+	case float32:
+		return int64(n), true
+	}
+	return 0, false
+}
+
+// peakIntList returns the maximum value in v when v is a JSON-decoded list of
+// numbers. Used for cpuUsagePercent where each entry is a per-core sample and
+// the UI wants the hottest core. Returns false if v is not a list or is empty.
+func peakIntList(v interface{}) (int, bool) {
+	list, ok := v.([]interface{})
+	if !ok || len(list) == 0 {
+		return 0, false
+	}
+	peak := 0
+	any := false
+	for _, item := range list {
+		if n, ok := toInt(item); ok {
+			if !any || n > peak {
+				peak = n
+				any = true
+			}
+		}
+	}
+	if !any {
+		return 0, false
+	}
+	return peak, true
 }
 
 // RegisterRoutes wires the live endpoint onto the given Echo group. The group

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
+import type { DeviceLiveStatus } from "@/components/DeviceStatusPanel";
 
 /**
  * UploadItem mirrors the backend's ws.UploadItem shape. Optional current_byte
@@ -33,12 +34,29 @@ interface UploadItem {
 /** Polling cadence for the GET endpoint. */
 const POLL_INTERVAL_MS = 10_000;
 
+/** Live-status polling cadence (matches DeviceStatusPanel). */
+const LIVE_POLL_INTERVAL_MS = 5_000;
+
+/** Format raw bytes as a short human string. */
+function formatBytes(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n) || n < 0) return "-";
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1024;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[u]}`;
+}
+
 /**
  * formatProgress renders the progress cell. When the device exposes
- * current_byte and total_byte we use the ratio directly; otherwise we fall
- * back to the 0-1 progress float reported by athenad, labelling the item
- * "queued" when not yet current and "in-flight" when current but not
- * reporting progress.
+ * current_byte and total_byte we use the ratio directly and append the
+ * transferred / total byte counts; otherwise we fall back to the 0-1
+ * progress float reported by athenad, labelling the item "queued" when not
+ * yet current and "in-flight" when current but not reporting progress.
  */
 function formatProgress(item: UploadItem): string {
   if (
@@ -47,7 +65,7 @@ function formatProgress(item: UploadItem): string {
     item.total_byte > 0
   ) {
     const pct = (item.current_byte / item.total_byte) * 100;
-    return `${pct.toFixed(1)}%`;
+    return `${pct.toFixed(1)}%  (${formatBytes(item.current_byte)} / ${formatBytes(item.total_byte)})`;
   }
   if (item.current) {
     if (item.progress > 0) {
@@ -73,6 +91,22 @@ async function fetchQueue(dongleId: string): Promise<UploadItem[]> {
     throw new Error(body.error ?? `HTTP ${resp.status}`);
   }
   return (await resp.json()) as UploadItem[];
+}
+
+/**
+ * fetchLive pulls the same /live payload that DeviceStatusPanel polls. We use
+ * it here to render an aggregate "x in queue at y MB/s" header strip without
+ * adding a new endpoint or poll loop.
+ */
+async function fetchLive(dongleId: string): Promise<DeviceLiveStatus> {
+  const resp = await fetch(
+    `${BASE_URL}/v1/devices/${encodeURIComponent(dongleId)}/live`,
+    { credentials: "include" },
+  );
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}`);
+  }
+  return (await resp.json()) as DeviceLiveStatus;
 }
 
 /**
@@ -104,6 +138,7 @@ export default function UploadQueuePage() {
   const dongleId = params?.dongleId ?? "";
 
   const [items, setItems] = useState<UploadItem[]>([]);
+  const [live, setLive] = useState<DeviceLiveStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -113,6 +148,7 @@ export default function UploadQueuePage() {
   // requests when the backend is slow (e.g. the device is on a flaky
   // cellular link).
   const inFlight = useRef(false);
+  const liveInFlight = useRef(false);
 
   const refresh = useCallback(
     async (showSpinner: boolean) => {
@@ -135,11 +171,35 @@ export default function UploadQueuePage() {
     [dongleId],
   );
 
+  // refreshLive runs on its own cadence so the header strip can show fresh
+  // throughput between queue polls. Errors are swallowed: a transient /live
+  // failure should not steal focus from the queue table itself.
+  const refreshLive = useCallback(async () => {
+    if (!dongleId) return;
+    if (liveInFlight.current) return;
+    liveInFlight.current = true;
+    try {
+      const data = await fetchLive(dongleId);
+      setLive(data);
+    } catch {
+      // Intentionally ignored -- the queue table remains usable, and the
+      // header just shows a dash on transient failures.
+    } finally {
+      liveInFlight.current = false;
+    }
+  }, [dongleId]);
+
   useEffect(() => {
     void refresh(true);
     const id = setInterval(() => void refresh(false), POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [refresh]);
+
+  useEffect(() => {
+    void refreshLive();
+    const id = setInterval(() => void refreshLive(), LIVE_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [refreshLive]);
 
   async function handleCancel(ids: string[]) {
     if (ids.length === 0) return;
@@ -157,11 +217,64 @@ export default function UploadQueuePage() {
     }
   }
 
+  // Aggregate queue stats from /live. Falls back to a dash when the device is
+  // offline and no cache is available; otherwise reports the device's own
+  // view of the queue (which may differ slightly from `items` because the
+  // /live and queue endpoints poll on independent cadences).
+  const liveImmediate = live?.immediate_queue_count ?? null;
+  const liveRaw = live?.raw_queue_count ?? null;
+  const liveTotalCount =
+    liveImmediate != null || liveRaw != null
+      ? (liveImmediate ?? 0) + (liveRaw ?? 0)
+      : null;
+  const liveTotalSize =
+    live?.immediate_queue_size_bytes != null || live?.raw_queue_size_bytes != null
+      ? (live?.immediate_queue_size_bytes ?? 0) + (live?.raw_queue_size_bytes ?? 0)
+      : null;
+  const liveSpeed = live?.upload_speed_mbps ?? null;
+  const liveOffline = live ? !live.online : false;
+
   return (
     <PageWrapper
       title="Upload Queue"
       description={`Pending uploads for ${dongleId || "device"}`}
     >
+      {live && (
+        <div
+          className={`mb-4 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-md border border-[var(--border-primary)] bg-[var(--bg-secondary)] px-4 py-2 text-sm ${liveOffline ? "opacity-70" : ""}`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-[var(--text-secondary)]">Device queue:</span>
+            <span className="tabular-nums text-[var(--text-primary)]">
+              {liveTotalCount == null ? "-" : `${liveTotalCount} file${liveTotalCount === 1 ? "" : "s"}`}
+            </span>
+            {liveTotalSize != null && liveTotalSize > 0 && (
+              <span className="text-xs text-[var(--text-secondary)]">
+                ({formatBytes(liveTotalSize)})
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[var(--text-secondary)]">Throughput:</span>
+            <span className="tabular-nums text-[var(--text-primary)]">
+              {liveSpeed == null
+                ? "-"
+                : liveSpeed === 0
+                  ? "idle"
+                  : `${liveSpeed.toFixed(2)} MB/s`}
+            </span>
+          </div>
+          {liveImmediate != null && liveRaw != null && (
+            <div className="text-xs text-[var(--text-secondary)]">
+              {liveImmediate} priority &middot; {liveRaw} raw
+            </div>
+          )}
+          {liveOffline && (
+            <Badge variant="neutral">device offline (cached)</Badge>
+          )}
+        </div>
+      )}
+
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Badge variant="info">{items.length} item{items.length === 1 ? "" : "s"}</Badge>
