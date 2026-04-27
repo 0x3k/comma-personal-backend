@@ -20,5 +20,5 @@
     "go test ./internal/api/... passes",
     "go vet ./... and gofmt -l . pass (./.projd/scripts/smoke.sh exits 0)"
   ],
-  "notes": "Bandwidth budget: one extra getMessage RPC per 5s poll cycle (uploaderState payload is a few hundred bytes). All other new fields piggyback on the deviceState payload that the handler already fetches. No additional poll loops or websocket push channels."
+  "notes": "PR: https://github.com/0x3k/comma-personal-backend/pull/81. Bandwidth budget: one extra getMessage RPC per 5s poll cycle (uploaderState payload is a few hundred bytes). All other new fields piggyback on the deviceState payload that the handler already fetches. No additional poll loops or websocket push channels."
 }
