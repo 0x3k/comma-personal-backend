@@ -1,7 +1,7 @@
 {
   "id": "alpr-engine-spike",
   "name": "ALPR engine evaluation spike (decision document)",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 1,
   "blocked_by": [],
   "branch": "agent/alpr-engine-spike",
@@ -16,5 +16,5 @@
     "Spike code lives under tools/alpr-spike/ with a small Python or bash harness that reproduces the benchmark numbers. Add tools/alpr-spike/ to .gitignore (or document the carve-out). No production-path Go code added in this feature.",
     "Decision document explicitly answers: (1) which engine, (2) Docker image source (pre-built vs we build), (3) CPU-only acceptable for typical user (yes/no with caveats), (4) does the chosen engine support make/model/color or does alpr-vehicle-attributes-engine need to bolt on a separate classifier."
   ],
-  "notes": ""
+  "notes": "Decision: FastALPR (MIT) as the primary engine. Build the Docker image locally under docker/alpr/. CPU-only acceptable for typical home use (~6-25x realtime at 1 fps sample rate); GPU recommended for bulk backfill. Vehicle make/color extension uses open-image-models (MIT, same author) in the same container; exact model+year stay nullable (no OSS engine supports them in 2026). Harness lives at tools/alpr-spike/ (samples/, models/, results/ git-ignored at both local and root level). Decision document at docs/ALPR-ENGINE-DECISION.md."
 }
