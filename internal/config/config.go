@@ -48,6 +48,12 @@ type Config struct {
 	// which otherwise causes the backend to mint http:// URLs the device
 	// cannot PUT to.
 	PublicBaseURL string
+
+	// ALPR holds the ALPR (automatic license plate recognition) config
+	// loaded from ALPR_* env vars. The runtime master flag (alpr_enabled)
+	// lives in the settings table, NOT here -- this struct only carries
+	// deployment-time defaults and the encryption key prerequisite.
+	ALPR *ALPRConfig
 }
 
 // Load reads configuration from environment variables and returns a Config.
@@ -119,6 +125,12 @@ func Load() (*Config, error) {
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("failed to load config: DATABASE_URL is required")
 	}
+
+	alpr, err := LoadALPR()
+	if err != nil {
+		return nil, err
+	}
+	cfg.ALPR = alpr
 
 	return cfg, nil
 }
