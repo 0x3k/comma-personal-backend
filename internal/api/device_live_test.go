@@ -789,6 +789,49 @@ func TestExtractDeviceStateExtended(t *testing.T) {
 	}
 }
 
+func TestExtractDeviceStateThermalStatusString(t *testing.T) {
+	// athenad's getMessage rehydrates capnp via to_dict(), which returns enum
+	// values as their field-name string. Both upstream openpilot ("ok") and
+	// sunnypilot ("green") spellings should map to the same int code the UI
+	// expects.
+	cases := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"sunnypilot green", "green", 0},
+		{"upstream ok", "ok", 0},
+		{"sunnypilot yellow", "yellow", 1},
+		{"upstream warmDEPRECATED", "warmDEPRECATED", 1},
+		{"sunnypilot red", "red", 2},
+		{"upstream overheated", "overheated", 2},
+		{"sunnypilot danger", "danger", 3},
+		{"upstream critical", "critical", 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := extractDeviceState(map[string]interface{}{
+				"deviceState": map[string]interface{}{"thermalStatus": tc.in},
+			})
+			if ds.thermalStatus == nil || *ds.thermalStatus != tc.want {
+				t.Errorf("thermalStatus(%q) = %v, want %d", tc.in, pi(ds.thermalStatus), tc.want)
+			}
+		})
+	}
+}
+
+func TestExtractDeviceStateThermalStatusUnknownString(t *testing.T) {
+	// An unknown enum string should leave thermalStatus nil rather than
+	// silently mapping to 0. This way the UI renders no badge instead of
+	// claiming the device is "Green".
+	ds := extractDeviceState(map[string]interface{}{
+		"deviceState": map[string]interface{}{"thermalStatus": "unknown_value"},
+	})
+	if ds.thermalStatus != nil {
+		t.Errorf("unknown thermalStatus string should be nil, got %d", *ds.thermalStatus)
+	}
+}
+
 func TestExtractDeviceStateCPUScalarFallback(t *testing.T) {
 	// Some firmwares may report cpuUsagePercent as a scalar Int8 instead of a
 	// per-core list. The extractor should tolerate both shapes.

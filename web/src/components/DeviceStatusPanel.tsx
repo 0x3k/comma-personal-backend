@@ -324,14 +324,20 @@ export function DeviceStatusPanel({ dongleId }: DeviceStatusPanelProps) {
               <div className="flex justify-between sm:block">
                 <dt className="text-[var(--text-secondary)]">Thermal</dt>
                 <dd>
-                  <Badge variant={thermal.variant === "neutral" ? "neutral" : thermal.variant}>
-                    {thermal.label}
-                  </Badge>
-                  {maxTemp != null && (
-                    <span className="ml-2 text-xs text-[var(--text-secondary)] tabular-nums">
+                  {status.thermal_status != null && (
+                    <Badge variant={thermal.variant === "neutral" ? "neutral" : thermal.variant}>
+                      {thermal.label}
+                    </Badge>
+                  )}
+                  {maxTemp != null ? (
+                    <span
+                      className={`text-xs text-[var(--text-secondary)] tabular-nums ${status.thermal_status != null ? "ml-2" : ""}`}
+                    >
                       {maxTemp.toFixed(0)}&deg;C
                     </span>
-                  )}
+                  ) : status.thermal_status == null ? (
+                    <span className="text-[var(--text-secondary)]">-</span>
+                  ) : null}
                 </dd>
               </div>
               <div className="flex justify-between sm:block">
@@ -349,7 +355,11 @@ export function DeviceStatusPanel({ dongleId }: DeviceStatusPanelProps) {
               <div className="flex justify-between sm:block">
                 <dt className="text-[var(--text-secondary)]">Power draw</dt>
                 <dd className="text-[var(--text-primary)] tabular-nums">
-                  {power == null ? "-" : `${power.toFixed(1)} W`}
+                  {power == null || power <= 0 ? (
+                    <span className="text-[var(--text-secondary)]">-</span>
+                  ) : (
+                    `${power.toFixed(1)} W`
+                  )}
                 </dd>
               </div>
               <div className="flex justify-between sm:block">
