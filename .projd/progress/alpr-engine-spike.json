@@ -1,10 +1,11 @@
 {
   "id": "alpr-engine-spike",
   "name": "ALPR engine evaluation spike (decision document)",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 1,
   "blocked_by": [],
-  "branch": "",
+  "branch": "agent/alpr-engine-spike",
+  "base_branch": "feat/alpr",
   "summary": "Time-boxed empirical evaluation of ALPR engines on the user's actual fcamera footage. Every implementation feature in this batch depends on a concrete engine choice, but the right answer is empirical: detection rate, OCR exact-match, and inference cost vary dramatically by engine and by the lighting/region of the user's footage. Output is a written decision in docs/ALPR-ENGINE-DECISION.md plus benchmark numbers, NOT production code. Spike code stays under tools/alpr-spike/ and is git-ignored after the decision lands. The feature ends with a chosen engine + a recommended hardware profile (CPU-only acceptable vs GPU recommended) that the rest of the plan can build on.",
   "acceptance_criteria": [
     "Hand-curate a sample of ~50 fcamera frames spanning day/night, highway/city, clear/dirty plates, and label ground-truth plate text for each. Frames live under tools/alpr-spike/samples/ (git-ignored).",
