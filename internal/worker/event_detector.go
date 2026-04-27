@@ -155,7 +155,16 @@ func (d *EventDetector) processRoute(ctx context.Context, c db.ListRoutesNeeding
 		return fmt.Errorf("extract signals: %w", err)
 	}
 	events := DetectEvents(signals, d.Thresholds)
+	// The detector populates DetectedEvent.OccurredAt from the log's
+	// monotonic clock (see cereal.SignalExtractor), which is meaningless as
+	// a wall-clock timestamp. Re-derive it from the route's wall-clock
+	// start_time + route_offset_seconds before persisting.
 	for _, e := range events {
+		if c.StartTime.Valid {
+			e.OccurredAt = c.StartTime.Time.Add(time.Duration(e.RouteOffsetSeconds * float64(time.Second))).UTC()
+		} else {
+			e.OccurredAt = time.Time{}
+		}
 		if err := d.insertEvent(ctx, c.ID, e); err != nil {
 			return fmt.Errorf("insert event: %w", err)
 		}

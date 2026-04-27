@@ -13,20 +13,19 @@ import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Button } from "@/components/ui/Button";
 
-// Known event types the detector can emit. Sourced from the
-// event-detector-worker so the filter bar is self-documenting -- the
-// backend still filters by exact string match so unknown types the
-// detector emits in future will pass through as "other" chips.
+// Known event types the detector can emit. Must match the EventType*
+// constants in internal/worker/event_detector.go -- the backend filters by
+// exact string match, so a mismatch silently returns zero rows.
 const KNOWN_EVENT_TYPES = [
   "hard_brake",
-  "disengagement",
+  "disengage",
   "fcw",
-  "alert",
+  "alert_warning",
 ] as const;
 
-// Severities the detector stamps on events. The backend treats severity as
-// a free-form string but the UI sticks to this short set for the filter.
-const KNOWN_SEVERITIES = ["info", "warning", "error"] as const;
+// Severities the detector stamps on events. Must match the EventSeverity*
+// constants in internal/worker/event_detector.go.
+const KNOWN_SEVERITIES = ["info", "warn"] as const;
 type Severity = (typeof KNOWN_SEVERITIES)[number];
 
 // Paginated page sizes offered in the filter bar. Keep in sync with the
@@ -44,6 +43,7 @@ function severityBadgeVariant(severity: string): BadgeVariant {
   switch (severity) {
     case "error":
       return "error";
+    case "warn":
     case "warning":
       return "warning";
     case "info":
@@ -58,11 +58,11 @@ function typeBadgeVariant(type: string): BadgeVariant {
   switch (type) {
     case "hard_brake":
       return "error";
-    case "disengagement":
+    case "disengage":
       return "warning";
     case "fcw":
       return "error";
-    case "alert":
+    case "alert_warning":
       return "info";
     default:
       return "neutral";
