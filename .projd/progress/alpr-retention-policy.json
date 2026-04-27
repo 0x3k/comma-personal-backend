@@ -1,0 +1,19 @@
+{
+  "id": "alpr-retention-policy",
+  "name": "Tiered retention cleanup for ALPR data",
+  "status": "pending",
+  "priority": 6,
+  "blocked_by": ["alpr-stalking-heuristic"],
+  "branch": "",
+  "summary": "Tiered cleanup so plate_detections doesn't grow forever. Unflagged detections auto-purge after ALPR_RETENTION_DAYS_UNFLAGGED (default 30); detections tied to flagged plates persist to ALPR_RETENTION_DAYS_FLAGGED (default 365). Whitelisted plates' detections drop to unflagged retention since the user already classified them as harmless. Honors the existing DELETE_DRY_RUN flag for safety -- mirrors the cleanup-worker pattern in internal/worker/cleanup.go; check that file for the pattern.",
+  "acceptance_criteria": [
+    "New worker internal/worker/alpr_cleanup.go. Started from cmd/server/workers.go when alpr_enabled=true AND CLEANUP_ENABLED=true. Runs once per day (cron-like 24h interval; align with existing cleanup-worker schedule).",
+    "Honors DELETE_DRY_RUN env var -- when true, logs intent (counts + sample plate_hash_b64 list) but makes no changes. This is the same flag the existing cleanup-worker honors; share the helper that reads it.",
+    "Algorithm per pass (single transaction or per-table batched transactions; document choice): (1) Identify flagged plate_hashes: SELECT plate_hash FROM plate_watchlist WHERE kind='alerted' AND (acked_at IS NULL OR severity >= 4). Acked low-severity alerts (severity 2-3) demote to unflagged retention -- the user said it's fine. (2) DELETE FROM plate_detections WHERE frame_ts < now() - interval (ALPR_RETENTION_DAYS_UNFLAGGED days) AND plate_hash NOT IN (flagged set). (3) DELETE FROM plate_detections WHERE frame_ts < now() - interval (ALPR_RETENTION_DAYS_FLAGGED days). Absolute ceiling regardless of flag. (4) Orphan cleanup: DELETE FROM plate_encounters WHERE NOT EXISTS (SELECT 1 FROM plate_detections WHERE detections match the encounter's window/plate). (5) DELETE FROM plate_alert_events WHERE plate_hash NOT IN (SELECT plate_hash FROM plate_watchlist) AND computed_at < now() - interval '90 days' (90 days for alert events keeps history for review). (6) NEVER deletes plate_watchlist rows -- user-curated state stays. (7) NEVER deletes vehicle_signatures -- small table, useful as long-term identity index.",
+    "Per-pass metrics: alpr_cleanup_deleted_detections_total{tier=unflagged|flagged}, alpr_cleanup_deleted_encounters_total, alpr_cleanup_deleted_alert_events_total, alpr_cleanup_run_seconds.",
+    "Tests with synthetic data: rows of mixed ages and flag states; assert the correct delete sets in dry-run; once dry-run off, identical sets actually disappear; whitelisted-plate detections fall under the unflagged retention tier; alerted-and-acked detections fall under the unflagged tier when severity < 4.",
+    "Run on enable transition: when the user flips alpr_enabled true, do NOT immediately run a cleanup; that would surprise them by deleting old data they may want backfilled. The first cleanup pass occurs at the next scheduled tick.",
+    "Run on disable transition: when alpr_enabled flips false, the cleanup worker stops scheduling new runs (matches the always-runtime-flag-respected pattern). In-flight pass completes."
+  ],
+  "notes": ""
+}

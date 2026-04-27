@@ -1,0 +1,21 @@
+{
+  "id": "alpr-disclaimer-gate",
+  "name": "ALPR first-enable disclaimer + jurisdictional ack",
+  "status": "pending",
+  "priority": 2,
+  "blocked_by": ["alpr-config"],
+  "branch": "",
+  "summary": "Backend half of the first-time-enable disclaimer flow. The frontend (alpr-settings-onboarding-ui) shows the modal; this feature owns the recorded acknowledgement and refuses to set alpr_enabled=true without it. The disclaimer is jurisdictional because ALPR data has different legal status in different places (Illinois BIPA, EU GDPR, UK DPA, etc.) -- the user picks their jurisdiction so the ack captures their declared context for audit. Bumping the disclaimer version (a constant in code) re-prompts on next enable; prior acks are preserved as audit trail but do not satisfy the gate at the new version.",
+  "acceptance_criteria": [
+    "New settings keys: alpr_disclaimer_version (text), alpr_disclaimer_acked_at (timestamptz null), alpr_disclaimer_acked_jurisdiction (text null). Use existing internal/settings store.",
+    "internal/api/settings (or wherever the alpr settings handlers live from alpr-config) defines a const CurrentDisclaimerVersion = \"2026-04-v1\" (use today's date for v1; bump format and constant on material legal updates).",
+    "New endpoint POST /v1/settings/alpr/disclaimer/ack (session-only): body {jurisdiction: string in {us,eu,uk,ca,au,other}, version: string}. Server validates version == CurrentDisclaimerVersion (else 409 Conflict with {error: 'disclaimer_version_mismatch', current_version}). Persists ack with now(); records jurisdiction.",
+    "PUT /v1/settings/alpr (from alpr-config) refuses enabled=true with 412 when alpr_disclaimer_acked_at is null OR alpr_disclaimer_version != CurrentDisclaimerVersion. Error body: {error: 'alpr_disclaimer_required', current_version: '<v>'}.",
+    "GET /v1/settings/alpr (from alpr-config) is amended to include disclaimer_required (bool, true if version mismatch or never acked), disclaimer_version, disclaimer_acked_at, disclaimer_acked_jurisdiction.",
+    "Disclaimer text content is owned by the UI feature (alpr-settings-onboarding-ui) and the docs feature (alpr-docs); this feature only stores the ack metadata. Do NOT hardcode the text in Go.",
+    "Bumping CurrentDisclaimerVersion preserves prior alpr_disclaimer_acked_at as an audit trail in alpr_audit_log (action='disclaimer_ack_superseded'), but the runtime treats the user as not-acked at the new version. The UI re-prompt is therefore implicit -- no migration logic needed.",
+    "Backend tests: ack with mismatched version => 409; PUT enabled=true without ack => 412; PUT enabled=true with stale version after constant bump => 412; happy path (ack then enable) => 200; unack via setting alpr_enabled=false does NOT clear the ack (user shouldn't be re-prompted on toggle off/on within a version).",
+    "alpr_audit_log records action='alpr_disclaimer_ack' with payload {jurisdiction, version} on every successful ack."
+  ],
+  "notes": ""
+}

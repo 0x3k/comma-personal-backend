@@ -1,0 +1,22 @@
+{
+  "id": "alpr-tuning-ui",
+  "name": "Heuristic tuning UI + re-evaluate-history endpoint",
+  "status": "pending",
+  "priority": 9,
+  "blocked_by": ["alpr-watchlist-page"],
+  "branch": "",
+  "summary": "Power-user tuning surface for the heuristic. Lets the user adjust thresholds at runtime without touching env vars or restarting. Mostly relevant after a few weeks of operation when they have data to calibrate against (own car triggering false alerts, real stalking patterns missed at default thresholds, etc.). Includes a 'Re-evaluate alerts' action that re-runs the heuristic over recent history so the user can see threshold changes applied to known data.",
+  "acceptance_criteria": [
+    "New section in the ALPR settings card (or a sub-page if it grows large) titled 'Tuning'. Reachable from alpr-settings-onboarding-ui Advanced collapsible.",
+    "Editable controls (each with current value, default value, 'Reset to default' link, brief explanation): frame_rate (slider 0.5-4 fps), confidence_min (slider 0.5-0.95), encounter_gap_seconds (slider 15-300), alpr_heuristic_turns_min (1-8), alpr_heuristic_persistence_minutes_min (3-30), alpr_heuristic_distinct_routes_min (2-10), alpr_heuristic_distinct_areas_min (1-5), alpr_heuristic_area_cell_km (1-20), severity bucket boundaries (4 number inputs for the lower edges of severities 2/3/4/5; validated as monotonically increasing), notify_min_severity (2-5).",
+    "Save flow: client submits the entire current set as a single PUT call. Backend validates the whole config in one shot -- e.g. severity-bucket boundaries must be monotonic; values must lie in the allowed ranges. On any validation failure: 422 with {field_errors: {...}} so the UI can mark each bad field. On success: the new values land in internal/settings and take effect immediately for new evaluations.",
+    "New endpoint POST /v1/alpr/heuristic/reevaluate (session-only) body {days_back: int (default 30, max 365), dry_run: bool (default false)}: enqueues a background re-run of the heuristic over all encounters in the window. Returns {accepted: true, eta_seconds, jobs_enqueued}. Worker iterates affected (dongle_id, plate_hash) pairs and runs heuristic.Run for each. dry_run=true computes new severities without writing watchlist updates and returns a summary count by severity.",
+    "Re-evaluate UI: 'Re-evaluate last N days' button + dry-run toggle + days slider. On dry-run completion, show a side-by-side count: 'Current: X severity-3 alerts, Y severity-4 alerts. After change: A severity-3, B severity-4.' so the user can preview the impact. On 'Apply', re-issue the call with dry_run=false.",
+    "Audit trail: each save writes an alpr_audit_log row with action='tuning_change' and payload={changed_keys: {key: {from, to}}}. UI section 'Recent tuning changes': last 10 entries from alpr_audit_log filtered by action='tuning_change', shown as a small table.",
+    "Per-knob explanations: each control has a tooltip with the rationale, e.g. 'Higher distinct_routes_min reduces false positives from common neighbors. Default 3 catches stalkers seen on at least 3 separate trips.' Source the text from docs/ALPR.md (alpr-docs feature) so the tooltips and docs stay in sync.",
+    "Reset-all action: button at the bottom of the section resets every knob to its default in a single PUT call. Confirmation modal (this is destructive of the user's tuning history; they may have invested time calibrating).",
+    "Tests: monotonic-validation rejection, full-shape happy path, reset-all happy path, re-evaluate dry-run returns counts, re-evaluate live triggers heuristic and updates watchlist (verified via DB inspection in test).",
+    "Lint, type-check pass; manual verification: nudge distinct_routes_min from 3 to 4, dry-run, see expected reduction in alert count, apply, observe watchlist counts on /alerts page reflect the change."
+  ],
+  "notes": ""
+}

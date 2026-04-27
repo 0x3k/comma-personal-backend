@@ -1,0 +1,22 @@
+{
+  "id": "alpr-watchlist-page",
+  "name": "Alert center page (open / acked / whitelist tabs)",
+  "status": "pending",
+  "priority": 6,
+  "blocked_by": ["alpr-watchlist-api"],
+  "branch": "",
+  "summary": "Alert center: a single page listing all currently-open alerts with ack flow + filters, plus tabs for previously-acknowledged and the whitelist. This is what the user actually sees first when 'something might be wrong,' so prioritize density + clear severity sorting over decorative chrome. Virtualized to keep paint times tight -- mirror the log viewer pattern (web/src/components/logs/* uses TanStack Virtual already).",
+  "acceptance_criteria": [
+    "New route web/src/app/alerts/page.tsx. Behind useAlprSettings() feature flag.",
+    "Top-level tabs: Open (default), Acknowledged, Whitelist.",
+    "Open + Acknowledged tab content: virtualized list (TanStack Virtual via the existing pattern in components/logs). Columns: severity badge (color-coded), plate (monospace), vehicle badge, last_alert_at relative + absolute on hover, distinct routes count, evidence_summary (one line, ellipsis on overflow), ack/unack button. Each row links to the plate detail page on full-row click.",
+    "Filters bar: severity (multi-select chips), dongle_id selector (when user has more than one device), date range (from-to). URL-querystring synced (matches existing route-list filter pattern).",
+    "Bulk-ack: row checkboxes + 'Ack selected' CTA -> calls POST /v1/alpr/alerts/:hash/ack for each (parallel, with progress toast). On error: highlight failed rows red, keep successful as acked. Optimistic UI with rollback on full failure.",
+    "Whitelist tab: simple list (non-virtualized, expected size <100). Columns: plate, label, created_at, Remove button. Add-form at the top: plate text input + label input + Add button (calls POST /v1/alpr/whitelist). Form clears on success.",
+    "Empty states: open=zero -> 'No open alerts' with explanation 'Alerts trigger when the same vehicle appears across multiple trips in suspicious patterns.' acked=zero -> 'No acknowledged alerts yet.' whitelist=zero -> 'No whitelisted plates.'",
+    "All actions go through the alpr-watchlist-api endpoints; optimistic UI with rollback on error.",
+    "Lint, type-check, tests pass. Tests: tab switching, filter querystring sync (load + back-button), bulk ack happy + partial-failure paths, whitelist add validation, empty states.",
+    "Manual verification with mixed-severity alerts in dev: ensure visual severity contrast is strong (red is unmistakable next to amber)."
+  ],
+  "notes": ""
+}

@@ -1,0 +1,22 @@
+{
+  "id": "alpr-vehicle-signature-schema",
+  "name": "Vehicle signature schema (make/model/color/body type)",
+  "status": "pending",
+  "priority": 2,
+  "blocked_by": ["alpr-schema"],
+  "branch": "",
+  "summary": "Schema for vehicle make/model/color/body-type signatures. Stored separately from plate detections so a single physical vehicle (one signature) can be linked to multiple plates over time -- this is what enables plate-swap detection in alpr-signature-fusion-heuristic. plate_detections gets denormalized columns plus a signature_id FK; plate_encounters gets a signature_id FK so encounters carry a single canonical signature derived from the mode of their detections. Adds a small follow-up migration on top of alpr-schema.",
+  "acceptance_criteria": [
+    "New migration sql/migrations/NNNN_alpr_vehicle_signatures.up.sql + .down.sql, sequenced after the alpr-schema migration.",
+    "Table vehicle_signatures: id BIGSERIAL PK, signature_key TEXT NOT NULL UNIQUE (canonical low-cardinality fingerprint, e.g. 'toyota|camry|silver|sedan' with missing fields elided), make TEXT, model TEXT, year_min INT NULL, year_max INT NULL, color TEXT, body_type TEXT NULL CHECK (body_type IS NULL OR body_type IN ('sedan','suv','truck','hatchback','coupe','van','wagon','motorcycle','other')), confidence REAL NULL, sample_count INT DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(). Indexes: (signature_key) UNIQUE, (make, model).",
+    "ALTER plate_detections ADD COLUMN signature_id BIGINT NULL REFERENCES vehicle_signatures(id) ON DELETE SET NULL, ADD COLUMN det_make TEXT NULL, ADD COLUMN det_model TEXT NULL, ADD COLUMN det_color TEXT NULL, ADD COLUMN det_body_type TEXT NULL, ADD COLUMN det_attr_confidence REAL NULL. Denormalized columns let queries filter by color/body_type without joining; the FK lets fusion-heuristic group rows.",
+    "ALTER plate_encounters ADD COLUMN signature_id BIGINT NULL REFERENCES vehicle_signatures(id) ON DELETE SET NULL. The encounter's canonical signature is the mode of its detections (the encounter aggregator computes this).",
+    "ALTER plate_watchlist ADD COLUMN signature_id BIGINT NULL REFERENCES vehicle_signatures(id) ON DELETE SET NULL. Used by signature-fusion alerts where the watchlist row keys on signature rather than plate (plate-swap case).",
+    "sqlc queries in sql/queries/vehicle_signatures.sql: UpsertSignatureByKey (returns id, increments sample_count, updates make/model/color/body_type if currently null), GetSignature, ListSignaturesForPlate (joins via plate_detections), ListPlatesForSignature (returns distinct plate_hash list), UpdateEncounterSignature.",
+    "sqlc queries in alpr_detections.sql gain UpdateDetectionSignature(id, signature_id, attrs).",
+    "make sqlc regenerates clean; verify Go function signatures match expected names.",
+    "Down migration drops added columns + the table cleanly.",
+    "Backfill is NOT done here. Existing detections (none should exist when this migration runs since alpr-schema and this land before alpr-detection-worker) keep signature_id=NULL until reprocessed."
+  ],
+  "notes": ""
+}

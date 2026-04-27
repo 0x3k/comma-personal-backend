@@ -1,0 +1,23 @@
+{
+  "id": "alpr-notification-channels",
+  "name": "Email + webhook notifications for high-severity alerts",
+  "status": "pending",
+  "priority": 7,
+  "blocked_by": ["alpr-stalking-heuristic"],
+  "branch": "",
+  "summary": "When a stalking alert triggers above a configured severity, optionally notify the user out-of-band via email (SMTP) or generic webhook. Per the threat model: if someone is following you across trips, you might not be reading the dashboard daily. Intentionally lightweight and ALPR-scoped -- a project-wide notifications system is out of scope for this round. Per-plate de-duplication so a single ongoing situation doesn't spam.",
+  "acceptance_criteria": [
+    "New env vars: ALPR_NOTIFY_EMAIL_TO, ALPR_NOTIFY_SMTP_HOST, ALPR_NOTIFY_SMTP_PORT (default 587), ALPR_NOTIFY_SMTP_USER, ALPR_NOTIFY_SMTP_PASS, ALPR_NOTIFY_SMTP_FROM, ALPR_NOTIFY_SMTP_TLS (default starttls; allow plain or implicit), ALPR_NOTIFY_WEBHOOK_URL, ALPR_NOTIFY_MIN_SEVERITY (default 4), ALPR_NOTIFY_DEDUP_HOURS (default 12), ALPR_DASHBOARD_URL (base URL to construct deep links into the user's deployment).",
+    "New package internal/alpr/notify with: Sender interface { Send(ctx, alert AlertPayload) error }; an EmailSender implementing it via net/smtp; a WebhookSender implementing it via net/http POST with timeout 10s.",
+    "AlertPayload struct: Severity, Plate (decrypted), PlateHashB64, Vehicle *VehicleAttributes, Evidence []Component, Route, DongleID, DashboardURL (constructed from ALPR_DASHBOARD_URL + plate hash).",
+    "Subscriber: subscribe to AlertCreated events from alpr-stalking-heuristic and alpr-signature-fusion-heuristic. Filter: severity >= ALPR_NOTIFY_MIN_SEVERITY. Per-plate dedup: skip if the same plate_hash was notified within ALPR_NOTIFY_DEDUP_HOURS (track in a small alpr_notifications_sent table keyed on plate_hash with last_sent_at; create migration in this feature).",
+    "Dispatch: parallel calls to all configured senders (each with its own 10s timeout). Sender failures logged at warn but do NOT block other senders or the heuristic worker.",
+    "Email body (text + HTML): subject 'ALPR alert: severity N - <plate>', body has severity, plate (decrypted -- this is the user's own outbound channel), vehicle badge in text form ('Silver Toyota Camry' or 'Vehicle attributes unknown'), one-line evidence summary, full evidence list, latest route info, deep link to plate detail page. Include a footer 'You are receiving this because ALPR notifications are enabled. Configure or disable in Settings.'",
+    "Webhook payload: JSON {type: 'alpr_alert', version: '1', severity, plate_hash_b64, plate, vehicle, evidence, route, dongle_id, dashboard_url, sent_at}. The same plate-text-in-payload caveat applies: webhook URL is user-provided and the user is trusted to choose a safe destination. Document this in docs/ALPR.md.",
+    "Endpoint POST /v1/alpr/notify/test (session-only): sends a synthetic alert through every configured sender for setup validation. Response: {results: [{sender: 'email'|'webhook', ok: bool, error: string|null}]}.",
+    "Whitelist suppression: an AlertCreated for a plate that is already on plate_watchlist with kind='whitelist' is filtered out before dispatch (defense in depth -- the heuristic should already suppress whitelisted plates).",
+    "Tests: severity threshold filter, dedup window across two consecutive alerts for same plate, webhook + email senders dispatched in parallel (assert both called once each), partial failure handling (email fails, webhook succeeds, alert event still recorded), no-config no-op (zero senders configured -> no dispatch attempt).",
+    "Document the SMTP connection security choices and the webhook payload schema in docs/ALPR.md (alpr-docs feature consumes these notes)."
+  ],
+  "notes": ""
+}

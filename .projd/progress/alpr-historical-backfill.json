@@ -1,0 +1,25 @@
+{
+  "id": "alpr-historical-backfill",
+  "name": "Opt-in resumable ALPR backfill of existing routes",
+  "status": "pending",
+  "priority": 8,
+  "blocked_by": ["alpr-encounter-aggregator"],
+  "branch": "",
+  "summary": "When the user enables ALPR after months of accumulated routes, they want their existing data analyzed. Provides an opt-in, resumable backfill that funnels existing fcamera segments through the same extractor + detector + aggregator pipeline at a throttled rate so live ingest isn't starved. Single concurrent job at a time (DB row backed) so two parallel backfills can't fight. Crash-resumable so a server restart picks up where it left off.",
+  "acceptance_criteria": [
+    "New migration adding alpr_backfill_jobs: id BIGSERIAL PK, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ NULL, state TEXT NOT NULL CHECK (state IN ('queued','running','paused','done','failed')), filters_json JSONB, total_routes INT, processed_routes INT DEFAULT 0, last_processed_route TEXT NULL, error TEXT NULL, started_by TEXT NULL (session user). Only one row in 'running' state at a time -- enforced by a partial unique index.",
+    "POST /v1/alpr/backfill/start (session-only) body {from_date?: ISO8601, to_date?: ISO8601, dongle_id?: string, max_routes?: int}. Returns {job_id} or 409 if a job is already running. Inserts a job row with state='running' and the filter set; the worker picks it up immediately.",
+    "GET /v1/alpr/backfill/status returns the latest job row plus computed eta_seconds (using observed throughput). Shape: {job_id, started_at, finished_at, state, total_routes, processed_routes, last_processed_route, eta_seconds, error}.",
+    "POST /v1/alpr/backfill/pause and POST /v1/alpr/backfill/resume update state. Pause is cooperative -- the worker checks state at every route boundary and returns to idle when paused. Resume flips back to 'running'.",
+    "POST /v1/alpr/backfill/cancel sets state='failed' with error='cancelled by user' so a fresh job can be started.",
+    "Worker internal/worker/alpr_backfill.go runs as a singleton goroutine; on startup, loads any state='running' job and resumes from last_processed_route. Iterates routes filtered by the job's filters_json in chronological order (oldest first by default; allow newest-first via filter knob).",
+    "Throttling: ALPR_BACKFILL_FPS_BUDGET env (default 0.5 -- half a frame per second of real time on the engine, i.e. 30 frames/min). Implementation: token-bucket. The backfill worker shares the same engine queue as live ingest but at a lower priority -- if the live extractor is enqueueing frames, backfill stalls until the live queue drains.",
+    "Per-route processing: enqueue all of the route's fcamera segments into the same extraction pipeline alpr-frame-extractor uses. Mark alpr_segment_progress as processed when complete. Update job.processed_routes++ and job.last_processed_route after each route.",
+    "Skip routes already fully processed (no new detection rows created if every segment has alpr_segment_progress.processed_at_detector). This means re-running the backfill on a partially-complete dataset converges instead of duplicating work.",
+    "ETA computation: throughput_routes_per_minute = processed_routes / (now - started_at) minutes; eta_seconds = (total_routes - processed_routes) / throughput_routes_per_minute * 60. Cap at 999999 to avoid overflow display.",
+    "Settings UI integration: alpr-settings-onboarding-ui Advanced section gets a 'Backfill historical routes' button + progress bar + pause/resume controls + ETA. Implementation note for that feature: this is an enhancement to alpr-settings-onboarding-ui, NOT a blocking dependency -- the UI can ship without backfill controls and add them when this lands.",
+    "Tests: start -> running -> done state transitions; pause + resume preserves last_processed_route; cancel sets failed; restart-resume from a 'running' row picks up correctly; throttling keeps engine queue under budget (verified by counting frames-per-second pushed to the channel); idempotent re-run produces no duplicate detections; second start while running returns 409.",
+    "When alpr_enabled flips to false during backfill: the job pauses (state -> 'paused'), preserving last_processed_route. When the user re-enables, they can resume from the same point."
+  ],
+  "notes": ""
+}

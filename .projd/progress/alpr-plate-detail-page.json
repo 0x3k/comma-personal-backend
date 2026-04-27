@@ -1,0 +1,20 @@
+{
+  "id": "alpr-plate-detail-page",
+  "name": "Per-plate cross-route detail page",
+  "status": "pending",
+  "priority": 6,
+  "blocked_by": ["alpr-encounters-api", "alpr-manual-correction-api"],
+  "branch": "",
+  "summary": "Per-plate page accessible from any encounter on the route timeline or from any alert in the watchlist. Shows the plate's full history: a timeline of routes, a Leaflet map with sighting points, the vehicle signature, watchlist controls, and links into each contributing route's detail page. This is the surface where the user makes the call: 'is this somebody I should worry about?' Lean on density and clear evidence over decoration.",
+  "acceptance_criteria": [
+    "New route web/src/app/plates/[hash]/page.tsx. Behind useAlprSettings() feature flag (renders a 'feature disabled' shell when off, since users may have shared links into this page).",
+    "Sections (top to bottom): (1) Header: plate text (large, monospace), vehicle badge (dot in the actual color + 'Make Model' label if known), watchlist status pill ('Open alert sev 4', 'Acknowledged', 'Whitelisted', or 'No alerts'), action buttons: Acknowledge / Unacknowledge, Add to whitelist / Remove from whitelist, Edit plate (opens correction modal), Merge into another plate (opens merge modal). (2) Stats card: distinct_routes_30d, distinct_areas_30d, total_detections, first_ever_seen, last_seen. (3) Map: Leaflet via web/src/components/map/* showing first_seen location for each encounter, points colored by severity (gray/amber/red), clustered when zoomed out. (4) Encounter list: chronological table -- date, route (linked to existing route detail), duration (formatDuration helper), turn count, severity badge, 'Open route' button. (5) Evidence accordion: expand to show each Component from the heuristic with its evidence map rendered as a friendly bullet list (e.g. 'Seen on 5 distinct routes in 30 days', 'Followed through 4 turns on Tuesday's drive'). Sourced from /v1/plates/:hash response.",
+    "Edit plate modal: pick a representative detection (the most recent), show the current plate, allow edit, calls PATCH /v1/alpr/detections/:id. On 200: refetch the page; if the response includes a hint.match_hash_b64, show a follow-up toast 'This plate now matches another in your history -- merge?' with a one-click merge button.",
+    "Merge modal: input 'merge into hash (paste from another plate URL)' OR a plate-search field that looks up by plate text and resolves to hash. Calls POST /v1/alpr/plates/merge then redirects to the destination plate's page.",
+    "Empty/loading/404 states all handled. 404 = 'plate not found in your history' with a link back to /alerts.",
+    "Feature-flag-off state: render the shell with an explanation 'ALPR is disabled. Enable in Settings to view plate history.'",
+    "Lint, type-check pass; tests for header rendering with each watchlist status, map cluster mode, edit modal happy + hint paths, merge happy path, 404 state.",
+    "Manual verification on a plate with >=3 routes and an open alert: header shows correct severity pill, map shows clustered points colored correctly, evidence accordion expands and reads naturally."
+  ],
+  "notes": ""
+}

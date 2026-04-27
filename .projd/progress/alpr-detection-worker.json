@@ -1,0 +1,24 @@
+{
+  "id": "alpr-detection-worker",
+  "name": "ALPR detection worker (engine call + GPS join + DB write)",
+  "status": "pending",
+  "priority": 3,
+  "blocked_by": ["alpr-frame-extractor", "alpr-vehicle-signature-schema", "alpr-encryption-at-rest"],
+  "branch": "",
+  "summary": "Consumer half of the ALPR pipeline. Reads frames from the extractor's channel, calls the engine sidecar for plate + vehicle detections, joins each detection to GPS via the route's per-vertex timestamps (introduced in PR #79), encrypts plate text and computes the stable hash via internal/alpr/crypto, upserts vehicle_signatures, and writes plate_detections rows. Emits a RouteAlprDetectionsComplete event when a route's last segment is processed so the encounter aggregator can run.",
+  "acceptance_criteria": [
+    "New worker internal/worker/alpr_detector.go. Started from cmd/server/workers.go after alpr-frame-extractor.",
+    "Honors runtime alpr_enabled flag with the same ~30 s toggle responsiveness as the extractor.",
+    "Per-frame pipeline: call alpr.Client.Detect(jpeg) with a per-call timeout (5 s default, override via ALPR_DETECT_TIMEOUT). Engine errors classified as ErrEngineUnreachable or ErrEngineTimeout are logged at warn (rate-limited via internal/metrics or a small token bucket) and the frame is dropped; the worker does NOT crash on engine errors. Above the configured confidence_min, each detection proceeds to the join-and-store step.",
+    "GPS join: compute frame_ts = segment_start_ts + frame_offset_ms. segment_start_ts comes from the existing route metadata (route-metadata-from-qlog populates this). For frame_ts, query the route's geometry vertices for the nearest vertex within 2 s; if no vertex within 2 s, drop the detection (log debug; we cannot localize it). Use the vertex timestamps the live-position feature added (PR #79).",
+    "Compute heading from two neighboring vertices: bearing(prev, next) using haversine + atan2, store on detection.gps_heading_deg.",
+    "Hash + encrypt plate: use internal/alpr/crypto.Hash(plate_text) -> 32 bytes; Encrypt(plate_text) -> []byte. Normalization (uppercase, strip whitespace/dashes/dots) lives in the crypto package and is invoked by Hash so callers cannot accidentally bypass it.",
+    "Vehicle signature: if detection.Vehicle is non-nil, call queries.UpsertSignatureByKey(signature_key, attrs) which returns an id, increments sample_count, and updates fields that were previously null. Use returned id for the detection row.",
+    "Write plate_detections row in a single transaction with the signature upsert; partial failures must roll back so we never have a detection pointing at a half-written signature.",
+    "Per-route emission: track per-route segment counts; when the LAST segment for a route has been fully processed (alpr_segment_progress.processed_at_detector set for every segment), emit RouteAlprDetectionsComplete{dongle_id, route, total_detections}. Wire emission via the existing internal pub/sub or a simple typed channel exposed from cmd/server/deps.go.",
+    "Concurrency: ALPR_DETECTOR_CONCURRENCY env (default 2). Engine calls go through a semaphore of that size so a slow engine doesn't queue unbounded frames in goroutines.",
+    "Metrics: alpr_frames_processed_total{result=detected|empty|dropped_no_gps|engine_error}, alpr_detections_total, alpr_engine_latency_seconds histogram, alpr_engine_errors_total{type}, alpr_detector_queue_depth gauge.",
+    "Tests: stub the alpr.Client interface; feed canned frames + a fake GPS timeline; assert correct DB rows, hash determinism (same input -> same hash), the no-GPS-skip path, the encryption path stores ciphertext (not plaintext) in plate_ciphertext, signature upsert path increments sample_count, RouteAlprDetectionsComplete fires exactly once per route."
+  ],
+  "notes": ""
+}

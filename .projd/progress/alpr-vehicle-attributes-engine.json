@@ -1,0 +1,22 @@
+{
+  "id": "alpr-vehicle-attributes-engine",
+  "name": "Vehicle make/model/color extension to engine + client",
+  "status": "pending",
+  "priority": 3,
+  "blocked_by": ["alpr-engine-service"],
+  "branch": "",
+  "summary": "Extend the engine sidecar to emit make/model/color/body_type alongside each plate detection, and update the Go client + Detection struct to carry them. The classifier runs on the same crop or full frame as the plate detector. This feature is intentionally a single unit because the engine response shape and the Go client struct must agree -- splitting introduces premature contract instability. The engine choice from alpr-engine-spike documents whether attribute classification comes natively or requires a bolt-on classifier.",
+  "acceptance_criteria": [
+    "Engine POST /v1/detect response gains a vehicle field per detection: {make: string|null, model: string|null, year_min: int|null, year_max: int|null, color: string|null, body_type: 'sedan'|'suv'|'truck'|'hatchback'|'coupe'|'van'|'wagon'|'motorcycle'|'other'|null, confidence: float|null}. Each field individually nullable -- low-confidence per-attribute results drop to null rather than guess (downstream relies on null-vs-present, not high-vs-low confidence).",
+    "Engine emits a stable signature_key string per detection: lowercased, pipe-separated, missing fields elided -- e.g. 'toyota|camry|silver|sedan' or 'silver|sedan' if make/model dropped to null. This avoids whitespace/case/order skew when fusion-heuristic groups across detections. Write the canonicalization rules in docs/ALPR.md so future engine swaps preserve the semantics.",
+    "Engine config supports an env var ALPR_ATTRIBUTES_ENABLED (in the container, default true). When false: vehicle: null on every detection, classifier skipped, latency drops back to plate-only. Document this as the compute-savings escape hatch.",
+    "Engine GET /health response includes supports_attributes: bool (set from the same toggle).",
+    "internal/alpr.Detection.Vehicle (forward-declared in alpr-engine-service) is fully implemented: make/model/year_min/year_max/color/body_type/confidence/signature_key fields; pointer-to-struct so absent attributes are unambiguously detectable.",
+    "internal/alpr.Client.Detect parses the new fields; absent vehicle key in JSON => Vehicle remains nil.",
+    "Determinism check: identical input frame produces identical signature_key across two engine runs (verified by integration test using a fixed sample frame).",
+    "Latency budget: document attribute-extraction overhead in docs/ALPR.md based on benchmarks. Target: <=30 ms/frame on CPU, <=10 ms on GPU. Flag clearly in the doc if the chosen engine exceeds these.",
+    "No DB writes happen here. alpr-detection-worker handles the DB side of upserting vehicle_signatures.",
+    "Tests: Go-side unit tests with canned engine responses covering full-attributes, partial-attributes (e.g. make+color but no model), all-null, missing-vehicle-key. Determinism test runs the engine container against a fixture image and asserts stable signature_key (skip in CI if Docker not available)."
+  ],
+  "notes": ""
+}

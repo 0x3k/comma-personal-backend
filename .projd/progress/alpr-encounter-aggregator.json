@@ -1,0 +1,22 @@
+{
+  "id": "alpr-encounter-aggregator",
+  "name": "Group raw detections into per-route encounters",
+  "status": "pending",
+  "priority": 4,
+  "blocked_by": ["alpr-detection-worker"],
+  "branch": "",
+  "summary": "Groups consecutive raw detections of the same plate within a single route into 'encounters.' A plate seen 30 times in a 2-minute window with no detection gaps over 30 s is one encounter, not 30 detection points. Encounters are what the stalking heuristic and the UI consume. Triggered by RouteAlprDetectionsComplete from the detection worker. Idempotent -- re-running on the same route replaces prior encounters in a transaction so we can reprocess after manual corrections or threshold tuning.",
+  "acceptance_criteria": [
+    "New worker internal/worker/alpr_aggregator.go. Started from cmd/server/workers.go, gated on runtime alpr_enabled.",
+    "Trigger: subscribes to the RouteAlprDetectionsComplete event emitted by alpr-detection-worker.",
+    "Per-route algorithm: for each distinct (dongle_id, route, plate_hash) sort detections by frame_ts. Walk the sorted list: a new encounter begins when the gap to the previous detection exceeds ENCOUNTER_GAP_SECONDS (default 60 s, env + settings tunable). In practice plates stay in frame for seconds, then disappear when the lead car turns or accelerates away; a >60 s gap means 'they came back.'",
+    "Per encounter aggregate: first_seen_ts, last_seen_ts, detection_count, max_internal_gap_seconds, signature_id (mode of detection.signature_id ignoring nulls; null if no detection had a signature), bbox_first, bbox_last.",
+    "Compute turn_count: SELECT COUNT(*) FROM route_turns WHERE dongle_id=? AND route=? AND turn_ts BETWEEN first_seen_ts AND last_seen_ts. If route_turns has not yet been populated for the route (turn-detector might race), treat as 0 and re-trigger when turn-detector emits its own completion signal -- OR run inside a transaction that takes a route-level advisory lock. Pick whichever simpler approach the project's existing event ordering supports; document choice.",
+    "Idempotency: per-route, in a single transaction, DELETE FROM plate_encounters WHERE dongle_id=? AND route=?, then INSERT all freshly-computed encounters. The UNIQUE constraint on (dongle_id, route, plate_hash, first_seen_ts) backs this up.",
+    "After insertion, emit EncountersUpdated{dongle_id, route, plate_hashes_affected []hash} so alpr-stalking-heuristic runs only on what changed.",
+    "Concurrency: process at most one route at a time per worker (default 1 worker; env ALPR_AGGREGATOR_CONCURRENCY for users with parallel routes).",
+    "Metrics: alpr_encounters_total, alpr_encounter_compute_seconds histogram, alpr_encounters_per_route histogram.",
+    "Tests: detection sequences crafted to exercise -- single encounter (no gap), two encounters split by 90s gap, plate seen across many turns, signature mode tie-breaker (two signatures at equal counts -> deterministic pick by signature_id ascending), idempotent re-run produces identical state."
+  ],
+  "notes": ""
+}

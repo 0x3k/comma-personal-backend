@@ -1,0 +1,19 @@
+{
+  "id": "alpr-manual-correction-api",
+  "name": "Manual OCR correction + plate-hash merge endpoints",
+  "status": "pending",
+  "priority": 7,
+  "blocked_by": ["alpr-watchlist-api"],
+  "branch": "",
+  "summary": "OCR is imperfect; the user needs an escape hatch when '0CR123' should be 'OCR123', or when two encounters with hashes A and B are clearly the same physical plate (the engine read 'O' as '0' on different days). Two endpoints: edit a single detection's plate text (which re-hashes and triggers re-aggregation + re-evaluation), and merge two plate hashes into one. Both are destructive in the sense that they rewrite history -- audit-logged, transactional, no half-states.",
+  "acceptance_criteria": [
+    "PATCH /v1/alpr/detections/:id (session-only, requireAlprEnabled) body {plate: string}: in a single transaction -- (1) compute new ciphertext + hash via internal/alpr/crypto, (2) UPDATE plate_detections SET plate_ciphertext=?, plate_hash=?, ocr_corrected=true WHERE id=?, (3) re-trigger encounter aggregation for that detection's route (delete + reinsert encounters), (4) trigger heuristic re-evaluation for BOTH the old plate_hash AND the new plate_hash. 400 on empty plate after normalization, 404 on unknown id, 403 on cross-device (load detection.dongle_id then checkDongleAccess).",
+    "POST /v1/alpr/plates/merge (session-only, requireAlprEnabled) body {from_hash_b64, to_hash_b64}: in a single transaction -- (1) UPDATE plate_detections SET plate_hash=to WHERE plate_hash=from, (2) UPDATE plate_encounters SET plate_hash=to WHERE plate_hash=from, (3) for plate_watchlist: if to row exists, merge (preserve max severity, earliest first_alert_at, latest last_alert_at, concatenate notes with separator, preserve to.acked_at if to was acked, clear if either was unacked); if from row exists alone, simply UPDATE plate_hash=to. (4) Insert audit row with from_hash, to_hash. (5) Re-trigger aggregator + heuristic for every (dongle_id, route) touched (compute the affected set inside the transaction). 400 if from==to or either malformed, 404 if neither hash has any rows.",
+    "Encryption rule: re-hashing must use the same crypto.Hash function as the worker (no parallel implementation). Test that an edit + re-hash followed by uploading a new clean detection of the same plate produces the same hash (i.e. detections still match across the boundary).",
+    "Audit log: every edit and every merge writes an alpr_audit_log row with action='plate_edit'|'plate_merge' and payload {detection_id|from_hash, to_hash, before_value (hash only -- never log plaintext), after_value}.",
+    "Re-evaluation may take seconds for routes with many detections -- run the re-trigger steps as enqueues to the existing worker channels, not synchronously in the request. The handler returns 200 immediately with {accepted: true, affected_routes: int}.",
+    "Tests: edit propagates new hash through encounters (verified by re-fetching the route's plates list), edit on already-corrected detection works (idempotency), merge consolidates two histories with correct max-severity preservation, merge with one watchlist row preserves it, cross-device 403, malformed hash 400.",
+    "If the new plate text matches an existing different plate_hash in the user's data, the edit handler should hint at the merge endpoint in its response: {accepted: true, hint: 'A different plate already has hash X -- consider merging.', match_hash_b64}. UX nicety; the user can call merge if desired."
+  ],
+  "notes": ""
+}
