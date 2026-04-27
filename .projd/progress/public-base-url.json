@@ -11,9 +11,9 @@
     "go build, go vet, gofmt all pass; smoke.sh passes"
   ],
   "priority": 5,
-  "status": "in_progress",
+  "status": "complete",
   "branch": "agent/public-base-url",
   "base_branch": "main",
   "blocked_by": [],
-  "notes": ""
+  "notes": "Merged via PR #80 (commit 1c3a671)."
 }
