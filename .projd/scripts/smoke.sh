@@ -75,6 +75,11 @@ fi
 run_check "vet" go vet ./...
 run_check "fmt" bash -c 'test -z "$(gofmt -l .)"'
 
+# Migration up/down + plate_hash CHECK constraint test. The test auto-skips
+# when DATABASE_URL is unset or unreachable, so this is safe to leave in
+# the always-on smoke run -- it only exercises the DB when one is wired up.
+run_check "alpr-schema" go test -count=1 -run 'TestALPRSchema_' ./internal/db/...
+
 # --- Summary ---
 echo ""
 echo "=== smoke.sh: $PASS passed, $FAIL failed ==="
