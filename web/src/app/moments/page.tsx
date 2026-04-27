@@ -1,11 +1,15 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { apiFetch } from "@/lib/api";
-import type { MomentEvent, MomentsListResponse } from "@/lib/types";
+import type {
+  MomentEvent,
+  MomentRoute,
+  MomentRoutesResponse,
+  MomentsListResponse,
+} from "@/lib/types";
 import { PageWrapper } from "@/components/layout/PageWrapper";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { Badge, type BadgeVariant } from "@/components/ui/Badge";
@@ -28,12 +32,16 @@ const KNOWN_EVENT_TYPES = [
 const KNOWN_SEVERITIES = ["info", "warn"] as const;
 type Severity = (typeof KNOWN_SEVERITIES)[number];
 
-// Paginated page sizes offered in the filter bar. Keep in sync with the
-// backend's maxEventsLimit (500) in internal/api/events.go.
-const LIMIT_OPTIONS = [25, 50, 100, 200] as const;
-const DEFAULT_LIMIT = 50;
+// Page sizes for the route list. The backend's max is 500
+// (internal/api/events.go) but listing routes is cheap so we don't need to
+// expose the upper end.
+const LIMIT_OPTIONS = [10, 25, 50, 100] as const;
+const DEFAULT_LIMIT = 25;
 
-const ROW_HEIGHT = 44;
+// Cap on events fetched per expanded route. Most routes have well under
+// this; the few outliers (thousands of alert_warnings) get truncated and a
+// "... and N more" footer renders so users can drill into the route page.
+const EVENTS_PER_ROUTE_LIMIT = 100;
 
 interface Device {
   dongleId: string;
@@ -77,17 +85,46 @@ function formatOffset(seconds: number): string {
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
-function formatOccurredAt(iso: string | null): string {
+function formatDateTime(iso: string | null): string {
   if (!iso) return "Unknown";
   const d = new Date(iso);
-  return d.toLocaleDateString(undefined, {
+  return d.toLocaleString(undefined, {
     year: "numeric",
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit",
   });
+}
+
+function formatRouteTimeRange(
+  start: string | null,
+  end: string | null,
+): string {
+  if (!start) return "Unknown time";
+  const s = new Date(start);
+  const startStr = s.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  if (!end) return startStr;
+  const e = new Date(end);
+  const sameDay =
+    s.getFullYear() === e.getFullYear() &&
+    s.getMonth() === e.getMonth() &&
+    s.getDate() === e.getDate();
+  const endStr = sameDay
+    ? e.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : e.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+  return `${startStr} -- ${endStr}`;
 }
 
 function summarizePayload(payload: unknown): string {
@@ -95,8 +132,6 @@ function summarizePayload(payload: unknown): string {
   if (typeof payload !== "object") return String(payload);
   const entries = Object.entries(payload as Record<string, unknown>);
   if (entries.length === 0) return "";
-  // Render the first two key/value pairs on the row; users can click through
-  // for the full rlog context.
   return entries
     .slice(0, 2)
     .map(([k, v]) => `${k}=${formatPayloadValue(v)}`)
@@ -114,6 +149,13 @@ function formatPayloadValue(v: unknown): string {
   return JSON.stringify(v);
 }
 
+interface RouteEventsState {
+  events: MomentEvent[];
+  total: number;
+  loading: boolean;
+  error: string | null;
+}
+
 function MomentsPageInner() {
   const router = useRouter();
   const params = useSearchParams();
@@ -127,18 +169,13 @@ function MomentsPageInner() {
   const urlDongle = params.get("device") ?? "";
   const [selectedDongle, setSelectedDongle] = useState<string>(urlDongle);
 
-  // Filter state. Types is a multi-select so the user can pick any subset;
-  // the backend only supports a single `type=` param, so we hit it
-  // multiple times when more than one is selected and merge the results.
   // Drop URL values that don't match the current detector vocabulary --
-  // older shareable links sent `disengagement` / `alert` / `warning`,
-  // which no event row carries and which would otherwise show up as
-  // invisible filters that hide every event.
+  // older shareable links sent disengagement / alert / warning, which no
+  // event row carries and which would otherwise show up as invisible
+  // filters that hide every event.
   const urlTypes = params
     .getAll("type")
-    .filter((t): t is (typeof KNOWN_EVENT_TYPES)[number] =>
-      (KNOWN_EVENT_TYPES as readonly string[]).includes(t),
-    );
+    .filter((t) => (KNOWN_EVENT_TYPES as readonly string[]).includes(t));
   const rawSeverity = params.get("severity") ?? "";
   const urlSeverity = (KNOWN_SEVERITIES as readonly string[]).includes(rawSeverity)
     ? (rawSeverity as Severity)
@@ -155,14 +192,18 @@ function MomentsPageInner() {
   const [limit, setLimit] = useState<number>(urlLimit);
   const [offset, setOffset] = useState<number>(urlOffset);
 
-  const [events, setEvents] = useState<MomentEvent[]>([]);
+  const [routes, setRoutes] = useState<MomentRoute[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Per-route expansion state and a cache of fetched events keyed by
+  // route_name. We keep results around so collapsing then re-expanding is
+  // instant.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [routeEvents, setRouteEvents] = useState<Record<string, RouteEventsState>>({});
+
   // Fetch the device list so the user can pick which device to browse.
-  // On first load we also auto-select the only device when there's just
-  // one, or fall back to the NEXT_PUBLIC_DONGLE_ID if set.
   useEffect(() => {
     let cancelled = false;
     async function loadDevices() {
@@ -193,13 +234,10 @@ function MomentsPageInner() {
     return () => {
       cancelled = true;
     };
-    // Intentionally empty deps: we want this to run exactly once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Sync filter state to the URL so the view is shareable. We use
-  // router.replace so the browser history isn't polluted with a new entry
-  // for every filter tweak.
+  // Sync filter state to the URL so the view is shareable.
   useEffect(() => {
     const sp = new URLSearchParams();
     if (selectedDongle) sp.set("device", selectedDongle);
@@ -211,13 +249,15 @@ function MomentsPageInner() {
     router.replace(query ? `/moments?${query}` : "/moments", { scroll: false });
   }, [selectedDongle, selectedTypes, selectedSeverity, limit, offset, router]);
 
-  // Fetch events. When multiple type filters are active we dispatch one
-  // request per type and merge client-side; the backend filter supports a
-  // single exact-match type, and splitting the server logic for set
-  // filters would require another schema change.
-  const fetchEvents = useCallback(async () => {
+  // Fetch the routes-with-events list. When multiple type filters are
+  // active we dispatch one request per type and merge client-side; the
+  // backend filter supports a single exact-match type. Routes shared
+  // across multiple type filters are deduped on route_name and their
+  // event_count / type_counts are summed so the user sees "this route has
+  // N events across the selected types".
+  const fetchRoutes = useCallback(async () => {
     if (!selectedDongle) {
-      setEvents([]);
+      setRoutes([]);
       setTotal(0);
       return;
     }
@@ -231,45 +271,55 @@ function MomentsPageInner() {
 
       if (selectedTypes.length <= 1) {
         if (selectedTypes.length === 1) baseQuery.set("type", selectedTypes[0]);
-        const data = await apiFetch<MomentsListResponse>(
-          `/v1/devices/${encodeURIComponent(selectedDongle)}/events?${baseQuery.toString()}`,
+        const data = await apiFetch<MomentRoutesResponse>(
+          `/v1/devices/${encodeURIComponent(selectedDongle)}/event-routes?${baseQuery.toString()}`,
         );
-        setEvents(data.events);
+        setRoutes(data.routes);
         setTotal(data.total);
       } else {
-        // Multiple types: fetch each, merge, dedupe, sort by occurred_at desc.
-        // Each request returns up to `limit` rows per type; callers who need
-        // deeper pagination across a multi-type filter should narrow the
-        // type filter.
         const perType = await Promise.all(
           selectedTypes.map(async (t) => {
             const q = new URLSearchParams(baseQuery);
             q.set("type", t);
-            return apiFetch<MomentsListResponse>(
-              `/v1/devices/${encodeURIComponent(selectedDongle)}/events?${q.toString()}`,
+            return apiFetch<MomentRoutesResponse>(
+              `/v1/devices/${encodeURIComponent(selectedDongle)}/event-routes?${q.toString()}`,
             );
           }),
         );
-        const merged: MomentEvent[] = [];
-        const seen = new Set<number>();
+        const byName = new Map<string, MomentRoute>();
         let totalCount = 0;
         for (const page of perType) {
           totalCount += page.total;
-          for (const e of page.events) {
-            if (!seen.has(e.id)) {
-              seen.add(e.id);
-              merged.push(e);
+          for (const r of page.routes) {
+            const existing = byName.get(r.route_name);
+            if (!existing) {
+              byName.set(r.route_name, { ...r, type_counts: { ...r.type_counts } });
+            } else {
+              existing.event_count += r.event_count;
+              for (const [k, v] of Object.entries(r.type_counts)) {
+                existing.type_counts[k] = (existing.type_counts[k] ?? 0) + v;
+              }
+              if (
+                r.last_event_at &&
+                (!existing.last_event_at ||
+                  new Date(r.last_event_at).getTime() >
+                    new Date(existing.last_event_at).getTime())
+              ) {
+                existing.last_event_at = r.last_event_at;
+              }
             }
           }
         }
-        merged.sort((a, b) => {
-          const at = a.occurred_at ? new Date(a.occurred_at).getTime() : 0;
-          const bt = b.occurred_at ? new Date(b.occurred_at).getTime() : 0;
-          if (bt !== at) return bt - at;
-          return b.id - a.id;
+        const merged = Array.from(byName.values()).sort((a, b) => {
+          const at = a.last_event_at ? new Date(a.last_event_at).getTime() : 0;
+          const bt = b.last_event_at ? new Date(b.last_event_at).getTime() : 0;
+          return bt - at;
         });
-        setEvents(merged.slice(0, limit));
-        setTotal(totalCount);
+        setRoutes(merged.slice(0, limit));
+        // totalCount across types overcounts shared routes; use the
+        // deduped length as a lower bound. This matches what the user
+        // sees rather than the sum of per-type totals.
+        setTotal(Math.max(merged.length, totalCount));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load events");
@@ -279,14 +329,16 @@ function MomentsPageInner() {
   }, [selectedDongle, selectedTypes, selectedSeverity, limit, offset]);
 
   useEffect(() => {
-    void fetchEvents();
-  }, [fetchEvents]);
+    void fetchRoutes();
+  }, [fetchRoutes]);
 
-  // Reset offset whenever the filters change so the user isn't stuck on
-  // page 3 of a now-empty result set.
+  // Reset offset and clear the per-route cache whenever filters change so
+  // we don't leave stale event lists behind.
   useEffect(() => {
     setOffset(0);
-  }, [selectedDongle, selectedTypes, selectedSeverity, limit]);
+    setExpanded(new Set());
+    setRouteEvents({});
+  }, [selectedDongle, selectedTypes, selectedSeverity]);
 
   const toggleType = useCallback((type: string) => {
     setSelectedTypes((prev) =>
@@ -301,20 +353,118 @@ function MomentsPageInner() {
     setOffset(0);
   }, []);
 
-  // Virtualizer for the events list. Falls back to rendering an empty
-  // container until the parent ref is attached.
-  const parentRef = useRef<HTMLDivElement>(null);
-  const virtualizer = useVirtualizer({
-    count: events.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 10,
-  });
+  const fetchRouteEvents = useCallback(
+    async (routeName: string) => {
+      if (!selectedDongle) return;
+      setRouteEvents((prev) => ({
+        ...prev,
+        [routeName]: {
+          events: prev[routeName]?.events ?? [],
+          total: prev[routeName]?.total ?? 0,
+          loading: true,
+          error: null,
+        },
+      }));
+      try {
+        const q = new URLSearchParams();
+        q.set("limit", String(EVENTS_PER_ROUTE_LIMIT));
+        q.set("route_name", routeName);
+        if (selectedSeverity) q.set("severity", selectedSeverity);
+        // For multi-type, fetch each and merge; same dance as the routes
+        // list. Single-type or no-type uses one request.
+        if (selectedTypes.length <= 1) {
+          if (selectedTypes.length === 1) q.set("type", selectedTypes[0]);
+          const data = await apiFetch<MomentsListResponse>(
+            `/v1/devices/${encodeURIComponent(selectedDongle)}/events?${q.toString()}`,
+          );
+          setRouteEvents((prev) => ({
+            ...prev,
+            [routeName]: {
+              events: data.events,
+              total: data.total,
+              loading: false,
+              error: null,
+            },
+          }));
+        } else {
+          const perType = await Promise.all(
+            selectedTypes.map(async (t) => {
+              const qq = new URLSearchParams(q);
+              qq.set("type", t);
+              return apiFetch<MomentsListResponse>(
+                `/v1/devices/${encodeURIComponent(selectedDongle)}/events?${qq.toString()}`,
+              );
+            }),
+          );
+          const merged: MomentEvent[] = [];
+          const seen = new Set<number>();
+          let tot = 0;
+          for (const page of perType) {
+            tot += page.total;
+            for (const e of page.events) {
+              if (!seen.has(e.id)) {
+                seen.add(e.id);
+                merged.push(e);
+              }
+            }
+          }
+          merged.sort((a, b) => {
+            const at = a.occurred_at ? new Date(a.occurred_at).getTime() : 0;
+            const bt = b.occurred_at ? new Date(b.occurred_at).getTime() : 0;
+            if (bt !== at) return bt - at;
+            return b.id - a.id;
+          });
+          setRouteEvents((prev) => ({
+            ...prev,
+            [routeName]: {
+              events: merged.slice(0, EVENTS_PER_ROUTE_LIMIT),
+              total: tot,
+              loading: false,
+              error: null,
+            },
+          }));
+        }
+      } catch (err) {
+        setRouteEvents((prev) => ({
+          ...prev,
+          [routeName]: {
+            events: prev[routeName]?.events ?? [],
+            total: prev[routeName]?.total ?? 0,
+            loading: false,
+            error:
+              err instanceof Error ? err.message : "Failed to load events",
+          },
+        }));
+      }
+    },
+    [selectedDongle, selectedTypes, selectedSeverity],
+  );
+
+  const toggleRoute = useCallback(
+    (routeName: string) => {
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (next.has(routeName)) {
+          next.delete(routeName);
+        } else {
+          next.add(routeName);
+          // Lazy-fetch if we don't have events for this route yet (or if
+          // the cached entry has an error so the user can retry).
+          const cached = routeEvents[routeName];
+          if (!cached || cached.error) {
+            void fetchRouteEvents(routeName);
+          }
+        }
+        return next;
+      });
+    },
+    [routeEvents, fetchRouteEvents],
+  );
 
   const pageStart = total === 0 ? 0 : offset + 1;
-  const pageEnd = Math.min(offset + events.length, offset + limit);
+  const pageEnd = Math.min(offset + routes.length, offset + limit);
   const hasPrev = offset > 0;
-  const hasNext = offset + events.length < total;
+  const hasNext = offset + routes.length < total;
 
   const goPrev = useCallback(() => {
     setOffset((o) => Math.max(0, o - limit));
@@ -328,7 +478,7 @@ function MomentsPageInner() {
   return (
     <PageWrapper
       title="Moments"
-      description="Events detected across all of your routes -- hard brakes, disengagements, forward-collision warnings, and alerts."
+      description="Events detected across all of your routes -- hard brakes, disengagements, forward-collision warnings, and alerts. Click a route to see its events."
     >
       {/* Device picker -- only shown when multi-device */}
       {devicesLoaded && showDevicePicker && (
@@ -377,7 +527,6 @@ function MomentsPageInner() {
         </CardHeader>
         <CardBody>
           <div className="flex flex-col gap-3">
-            {/* Type multi-select (chip checkboxes) */}
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-[var(--text-secondary)]">Type</span>
               {KNOWN_EVENT_TYPES.map((t) => {
@@ -401,7 +550,6 @@ function MomentsPageInner() {
               })}
             </div>
 
-            {/* Severity + limit on one row */}
             <div className="flex flex-wrap items-center gap-4">
               <div className="flex items-center gap-2">
                 <label
@@ -431,7 +579,7 @@ function MomentsPageInner() {
                   htmlFor="limit-select"
                   className="text-xs text-[var(--text-secondary)]"
                 >
-                  Per page
+                  Routes per page
                 </label>
                 <select
                   id="limit-select"
@@ -454,7 +602,7 @@ function MomentsPageInner() {
       {/* Results */}
       {loading && (
         <div className="flex items-center justify-center py-16">
-          <Spinner size="lg" label="Loading events" />
+          <Spinner size="lg" label="Loading routes" />
         </div>
       )}
 
@@ -462,37 +610,41 @@ function MomentsPageInner() {
         <ErrorMessage
           title="Failed to load events"
           message={error}
-          retry={fetchEvents}
+          retry={fetchRoutes}
         />
       )}
 
-      {!loading && !error && devicesLoaded && !selectedDongle && devices.length === 0 && (
+      {!loading &&
+        !error &&
+        devicesLoaded &&
+        !selectedDongle &&
+        devices.length === 0 && (
+          <Card>
+            <CardBody>
+              <p className="py-8 text-center text-caption">
+                No devices registered. Register a device to start collecting
+                events.
+              </p>
+            </CardBody>
+          </Card>
+        )}
+
+      {!loading && !error && selectedDongle && routes.length === 0 && (
         <Card>
           <CardBody>
             <p className="py-8 text-center text-caption">
-              No devices registered. Register a device to start collecting
-              events.
+              No routes have events matching these filters.
             </p>
           </CardBody>
         </Card>
       )}
 
-      {!loading && !error && selectedDongle && events.length === 0 && (
-        <Card>
-          <CardBody>
-            <p className="py-8 text-center text-caption">
-              No events match these filters.
-            </p>
-          </CardBody>
-        </Card>
-      )}
-
-      {!loading && !error && events.length > 0 && (
+      {!loading && !error && routes.length > 0 && (
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm text-[var(--text-secondary)]">
-                {pageStart}&ndash;{pageEnd} of {total}
+                {pageStart}&ndash;{pageEnd} of {total} routes
               </span>
               <div className="flex items-center gap-2">
                 <Button
@@ -514,80 +666,180 @@ function MomentsPageInner() {
               </div>
             </div>
           </CardHeader>
-          <div
-            ref={parentRef}
-            className="overflow-auto"
-            style={{ height: "clamp(360px, 60vh, 720px)" }}
-          >
-            {/* Column headers */}
-            <div className="sticky top-0 z-10 grid grid-cols-[6rem_8rem_1fr_5rem_1fr] gap-3 border-b border-[var(--border-primary)] bg-[var(--bg-surface)] px-4 py-2 text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
-              <span>Severity</span>
-              <span>Type</span>
-              <span>Route</span>
-              <span>Offset</span>
-              <span>When / Detail</span>
-            </div>
-            <div
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                width: "100%",
-                position: "relative",
-              }}
-            >
-              {virtualizer.getVirtualItems().map((vr) => {
-                const e = events[vr.index];
-                const href = `/routes/${encodeURIComponent(selectedDongle)}/${encodeURIComponent(e.route_name)}?t=${encodeURIComponent(e.route_offset_seconds.toFixed(3))}`;
-                return (
-                  <Link
-                    key={e.id}
-                    href={href}
-                    data-index={vr.index}
-                    ref={virtualizer.measureElement}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "100%",
-                      transform: `translateY(${vr.start}px)`,
-                    }}
-                    className="grid grid-cols-[6rem_8rem_1fr_5rem_1fr] items-center gap-3 border-b border-[var(--border-primary)] px-4 py-2 text-sm transition-colors hover:bg-[var(--bg-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring-focus)]"
-                  >
-                    <span>
-                      <Badge variant={severityBadgeVariant(e.severity)}>
-                        {e.severity}
-                      </Badge>
-                    </span>
-                    <span>
-                      <Badge variant={typeBadgeVariant(e.type)}>{e.type}</Badge>
-                    </span>
-                    <span
-                      className="truncate font-mono text-xs text-[var(--text-primary)]"
-                      title={e.route_name}
-                    >
-                      {e.route_name}
-                    </span>
-                    <span className="tabular-nums text-xs text-[var(--text-secondary)]">
-                      {formatOffset(e.route_offset_seconds)}
-                    </span>
-                    <span className="flex flex-col overflow-hidden">
-                      <span className="truncate text-xs text-[var(--text-primary)]">
-                        {formatOccurredAt(e.occurred_at)}
-                      </span>
-                      <span
-                        className="truncate font-mono text-[10px] text-[var(--text-tertiary)]"
-                        title={JSON.stringify(e.payload)}
-                      >
-                        {summarizePayload(e.payload)}
-                      </span>
-                    </span>
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
+          <ul className="divide-y divide-[var(--border-primary)]">
+            {routes.map((r) => {
+              const isOpen = expanded.has(r.route_name);
+              const events = routeEvents[r.route_name];
+              return (
+                <li key={r.route_name}>
+                  <RouteRow
+                    route={r}
+                    open={isOpen}
+                    onToggle={() => toggleRoute(r.route_name)}
+                  />
+                  {isOpen && (
+                    <RouteEvents
+                      dongleId={selectedDongle}
+                      routeName={r.route_name}
+                      state={events}
+                      onRetry={() => fetchRouteEvents(r.route_name)}
+                    />
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </Card>
       )}
     </PageWrapper>
+  );
+}
+
+interface RouteRowProps {
+  route: MomentRoute;
+  open: boolean;
+  onToggle: () => void;
+}
+
+function RouteRow({ route, open, onToggle }: RouteRowProps) {
+  // Order the type chips by descending count so the most common event
+  // type for the route is the leftmost chip.
+  const typeEntries = Object.entries(route.type_counts).sort(
+    ([, a], [, b]) => b - a,
+  );
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--bg-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring-focus)]"
+    >
+      <span
+        aria-hidden="true"
+        className={[
+          "inline-block w-3 text-xs text-[var(--text-secondary)] transition-transform",
+          open ? "rotate-90" : "",
+        ].join(" ")}
+      >
+        &#9656;
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center gap-2">
+          <span
+            className="truncate font-mono text-sm text-[var(--text-primary)]"
+            title={route.route_name}
+          >
+            {route.route_name}
+          </span>
+          <span className="rounded-full bg-[var(--bg-tertiary)] px-2 py-0.5 text-[10px] font-medium tabular-nums text-[var(--text-secondary)]">
+            {route.event_count} {route.event_count === 1 ? "event" : "events"}
+          </span>
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-secondary)]">
+          <span>{formatRouteTimeRange(route.start_time, route.end_time)}</span>
+          {typeEntries.length > 0 && (
+            <span className="flex flex-wrap items-center gap-1">
+              {typeEntries.map(([type, count]) => (
+                <span
+                  key={type}
+                  className="inline-flex items-center gap-1"
+                  title={`${count} ${type} event${count === 1 ? "" : "s"}`}
+                >
+                  <Badge variant={typeBadgeVariant(type)}>{type}</Badge>
+                  <span className="tabular-nums text-[10px] text-[var(--text-secondary)]">
+                    &times;{count}
+                  </span>
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+interface RouteEventsProps {
+  dongleId: string;
+  routeName: string;
+  state: RouteEventsState | undefined;
+  onRetry: () => void;
+}
+
+function RouteEvents({ dongleId, routeName, state, onRetry }: RouteEventsProps) {
+  if (!state || state.loading) {
+    return (
+      <div className="flex items-center justify-center px-4 py-6">
+        <Spinner size="sm" label="Loading events" />
+      </div>
+    );
+  }
+  if (state.error) {
+    return (
+      <div className="px-4 py-3">
+        <ErrorMessage
+          title="Failed to load events"
+          message={state.error}
+          retry={onRetry}
+        />
+      </div>
+    );
+  }
+  if (state.events.length === 0) {
+    return (
+      <p className="px-4 py-3 text-xs text-[var(--text-secondary)]">
+        No events on this route match the active filters.
+      </p>
+    );
+  }
+  const truncated = state.total > state.events.length;
+  return (
+    <div className="bg-[var(--bg-primary)]">
+      <div className="grid grid-cols-[5rem_8rem_4rem_1fr_8rem] items-center gap-3 border-b border-[var(--border-primary)] px-4 py-2 text-[10px] font-medium uppercase tracking-wide text-[var(--text-secondary)]">
+        <span>Severity</span>
+        <span>Type</span>
+        <span>Offset</span>
+        <span>Detail</span>
+        <span>When</span>
+      </div>
+      <ul>
+        {state.events.map((e) => (
+          <li key={e.id}>
+            <Link
+              href={`/routes/${encodeURIComponent(dongleId)}/${encodeURIComponent(routeName)}?t=${encodeURIComponent(e.route_offset_seconds.toFixed(3))}`}
+              className="grid grid-cols-[5rem_8rem_4rem_1fr_8rem] items-center gap-3 border-b border-[var(--border-primary)] px-4 py-2 text-xs transition-colors hover:bg-[var(--bg-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring-focus)]"
+            >
+              <span>
+                <Badge variant={severityBadgeVariant(e.severity)}>
+                  {e.severity}
+                </Badge>
+              </span>
+              <span>
+                <Badge variant={typeBadgeVariant(e.type)}>{e.type}</Badge>
+              </span>
+              <span className="tabular-nums text-xs text-[var(--text-secondary)]">
+                {formatOffset(e.route_offset_seconds)}
+              </span>
+              <span
+                className="truncate font-mono text-[10px] text-[var(--text-tertiary)]"
+                title={JSON.stringify(e.payload)}
+              >
+                {summarizePayload(e.payload)}
+              </span>
+              <span className="truncate text-xs text-[var(--text-primary)]">
+                {formatDateTime(e.occurred_at)}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+      {truncated && (
+        <p className="px-4 py-2 text-[10px] text-[var(--text-secondary)]">
+          Showing the first {state.events.length} of {state.total} events on
+          this route. Open the route page for the full list.
+        </p>
+      )}
+    </div>
   );
 }
 

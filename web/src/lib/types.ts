@@ -219,6 +219,28 @@ export interface MomentsListResponse {
 }
 
 /**
+ * One row in the moments-page collapsed-by-route view.
+ * Only routes with at least one matching event are returned, so an empty
+ * routes array under an active filter means "no events match".
+ */
+export interface MomentRoute {
+  route_name: string;
+  start_time: string | null;
+  end_time: string | null;
+  last_event_at: string | null;
+  event_count: number;
+  type_counts: Record<string, number>;
+}
+
+/** Paginated response from GET /v1/devices/:dongle_id/event-routes. */
+export interface MomentRoutesResponse {
+  routes: MomentRoute[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
  * A crash record persisted by the Sentry envelope relay
  * (POST /api/:project_id/envelope/). Tags and exception are decoded JSONB
  * so the dashboard can drill into them without a second fetch.

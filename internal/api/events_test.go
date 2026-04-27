@@ -49,7 +49,10 @@ func (m *eventsMockDB) Query(_ context.Context, sql string, args ...interface{})
 	if !strings.Contains(sql, "FROM events e") {
 		return nil, fmt.Errorf("unexpected Query: %s", sql)
 	}
-	if len(args) >= 5 {
+	// ListEventsByDongleID args (after the route_name_filter addition):
+	//   $1 dongle_id, $2 type_filter, $3 severity_filter,
+	//   $4 route_name_filter, $5 offset, $6 limit
+	if len(args) >= 6 {
 		if s, ok := args[0].(string); ok {
 			m.lastListDongleID = s
 		}
@@ -59,10 +62,10 @@ func (m *eventsMockDB) Query(_ context.Context, sql string, args ...interface{})
 		if t, ok := args[2].(pgtype.Text); ok {
 			m.lastListSeverity = t
 		}
-		if o, ok := args[3].(int32); ok {
+		if o, ok := args[4].(int32); ok {
 			m.lastListOffset = o
 		}
-		if l, ok := args[4].(int32); ok {
+		if l, ok := args[5].(int32); ok {
 			m.lastListLimit = l
 		}
 	}
@@ -74,7 +77,9 @@ func (m *eventsMockDB) Query(_ context.Context, sql string, args ...interface{})
 
 func (m *eventsMockDB) QueryRow(_ context.Context, sql string, args ...interface{}) pgx.Row {
 	if strings.Contains(sql, "COUNT(*)") && strings.Contains(sql, "FROM events e") {
-		if len(args) >= 3 {
+		// CountEventsByDongleID args: $1 dongle_id, $2 type_filter,
+		// $3 severity_filter, $4 route_name_filter.
+		if len(args) >= 4 {
 			if s, ok := args[0].(string); ok {
 				m.lastCountDongleID = s
 			}
