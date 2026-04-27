@@ -47,6 +47,10 @@ type Metrics struct {
 	thumbnailGenerationsTotal  *prometheus.CounterVec
 	thumbnailGenerationSeconds prometheus.Histogram
 	thumbnailQueueDepth        prometheus.Gauge
+
+	turnDetectorRunsTotal    *prometheus.CounterVec
+	turnDetectorTurnsEmitted prometheus.Counter
+	turnDetectorRunSeconds   prometheus.Histogram
 }
 
 // New creates a Metrics backed by a fresh registry. Use NewWithRegistry to
@@ -148,6 +152,27 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 				Help: "Current number of routes queued for thumbnail generation.",
 			},
 		),
+
+		turnDetectorRunsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "turn_detector_runs_total",
+				Help: "Total number of turn-detector route processing runs, labeled by result (emitted|empty|skipped|error).",
+			},
+			[]string{"result"},
+		),
+		turnDetectorTurnsEmitted: prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "turn_detector_turns_emitted_total",
+				Help: "Total number of turns persisted by the turn-detector worker across all routes.",
+			},
+		),
+		turnDetectorRunSeconds: prometheus.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "turn_detector_run_seconds",
+				Help:    "Wall-clock duration of a single turn-detector route processing run.",
+				Buckets: defaultDurationBuckets,
+			},
+		),
 	}
 
 	reg.MustRegister(
@@ -162,6 +187,9 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 		m.thumbnailGenerationsTotal,
 		m.thumbnailGenerationSeconds,
 		m.thumbnailQueueDepth,
+		m.turnDetectorRunsTotal,
+		m.turnDetectorTurnsEmitted,
+		m.turnDetectorRunSeconds,
 	)
 
 	return m
@@ -274,4 +302,33 @@ func (m *Metrics) SetThumbnailQueueDepth(n int) {
 		return
 	}
 	m.thumbnailQueueDepth.Set(float64(n))
+}
+
+// IncTurnDetectorRun increments the per-run counter labeled by result.
+// Valid values: "emitted", "empty", "skipped", "error". Anything else
+// is still recorded -- Prometheus will simply expose a new label value.
+func (m *Metrics) IncTurnDetectorRun(result string) {
+	if m == nil {
+		return
+	}
+	m.turnDetectorRunsTotal.WithLabelValues(result).Inc()
+}
+
+// AddTurnDetectorTurnsEmitted increments the cumulative count of turns
+// the worker has persisted. n may be zero (a no-op call) so callers
+// don't need to special-case empty results.
+func (m *Metrics) AddTurnDetectorTurnsEmitted(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.turnDetectorTurnsEmitted.Add(float64(n))
+}
+
+// ObserveTurnDetectorRun records the wall-clock duration of a single
+// route's turn-detection run.
+func (m *Metrics) ObserveTurnDetectorRun(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.turnDetectorRunSeconds.Observe(d.Seconds())
 }

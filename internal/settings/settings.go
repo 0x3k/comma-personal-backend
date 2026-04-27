@@ -27,6 +27,24 @@ const (
 	// before the cleanup worker deletes them. A value of 0 means
 	// "never delete".
 	KeyRetentionDays = "retention_days"
+
+	// KeyTurnWindowSeconds is the sliding-window duration the turn
+	// detector uses to compute (bearing_after - bearing_before). Larger
+	// values smooth out GPS jitter at the cost of merging tightly spaced
+	// turns; the default of 4s is a good balance for urban routes.
+	KeyTurnWindowSeconds = "turn_window_seconds"
+
+	// KeyTurnDeltaDegMin is the minimum absolute heading change (in
+	// degrees) required to emit a turn. Larger values suppress sweeping
+	// curves; the default of 35 degrees catches typical 90-degree
+	// intersections without firing on highway lane changes.
+	KeyTurnDeltaDegMin = "turn_delta_deg_min"
+
+	// KeyTurnDedupSeconds is the suppression window after a turn fires
+	// during which subsequent above-threshold deltas are ignored. The
+	// default of 5s prevents a roundabout from emitting one turn per
+	// vertex.
+	KeyTurnDedupSeconds = "turn_dedup_seconds"
 )
 
 // ErrNotFound is returned when the requested key does not exist in the
@@ -94,6 +112,41 @@ func (s *Store) Set(ctx context.Context, key, value string) error {
 // SetInt writes the integer value for key.
 func (s *Store) SetInt(ctx context.Context, key string, value int) error {
 	return s.Set(ctx, key, strconv.Itoa(value))
+}
+
+// GetFloat returns the float64 value for the given key. If the stored
+// value does not parse cleanly the error wraps strconv.ErrSyntax. If the
+// key is not present it returns ErrNotFound.
+func (s *Store) GetFloat(ctx context.Context, key string) (float64, error) {
+	raw, err := s.Get(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	f, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("settings: value for %q is not a float: %w", key, err)
+	}
+	return f, nil
+}
+
+// SetFloat writes the float64 value for key. The value is stored using
+// strconv.FormatFloat with 'g' formatting and -1 precision so the round
+// trip is lossless.
+func (s *Store) SetFloat(ctx context.Context, key string, value float64) error {
+	return s.Set(ctx, key, strconv.FormatFloat(value, 'g', -1, 64))
+}
+
+// SeedFloatIfMissing inserts value for key only if no row exists yet.
+// Used at startup to push an env-var default into the database so a later
+// runtime override via the API does not require a restart to take effect.
+func (s *Store) SeedFloatIfMissing(ctx context.Context, key string, value float64) error {
+	if err := s.q.InsertSettingIfMissing(ctx, db.InsertSettingIfMissingParams{
+		Key:   key,
+		Value: strconv.FormatFloat(value, 'g', -1, 64),
+	}); err != nil {
+		return fmt.Errorf("settings: seed %q: %w", key, err)
+	}
+	return nil
 }
 
 // SeedIntIfMissing inserts value for key only if no row exists yet. Used at
