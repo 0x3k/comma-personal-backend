@@ -1,7 +1,7 @@
 {
   "id": "alpr-encounters-api",
   "name": "REST endpoints: route plates + plate cross-route history",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 4,
   "blocked_by": ["alpr-encounter-aggregator"],
   "branch": "agent/alpr-encounters-api",
@@ -18,5 +18,5 @@
     "Tests: route-plates with mixed alerted/unalerted, missing-signature path, pagination correctness on /v1/plates, 404 on unknown hash, 403 on cross-device access via checkDongleAccess, 503 when alpr_enabled=false.",
     "OpenAPI / docs note: list these endpoints in the README API table once alpr-docs lands; cross-reference here so the docs feature picks them up."
   ],
-  "notes": ""
+  "notes": "Routes register unconditionally via the alprEncountersHandler.RequireEnabled() middleware factory; 503 returned when alpr_enabled=false or the keyring is unconfigured. Plate text decrypted only inside the handler from each encounter's matching detection ciphertext. /v1/plates/:hash_b64 accepts both URL-safe and standard base64 (with or without padding) for resilience; pagination defaults to limit=50, capped at 200. area_cluster_label uses trips.start_address when available, falling back to lat/lng rounded to 2dp. distinct_routes_30d is computed in-memory across the encounter set so no schema changes are required (criterion-5 / aggregator hint in the brief)."
 }
