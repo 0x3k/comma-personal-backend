@@ -54,7 +54,7 @@ func main() {
 	// across restarts. logALPRStartup emits a single info line summarising
 	// the merged settings only when ALPR is currently enabled, so the
 	// expected default (off) produces no log noise.
-	verifyALPRKeyring(cfg.ALPR)
+	alprKeyring := verifyALPRKeyring(cfg.ALPR)
 	seedALPRDefaults(settingsStore, cfg.ALPR)
 	logALPRStartup(settingsStore, cfg.ALPR)
 
@@ -73,6 +73,7 @@ func main() {
 		hub:           ws.NewHubWithMetrics(m),
 		rpcCaller:     ws.NewRPCCallerWithMetrics(m),
 		sessionSecret: []byte(cfg.SessionSecret),
+		alprKeyring:   alprKeyring,
 	}
 
 	e := echo.New()

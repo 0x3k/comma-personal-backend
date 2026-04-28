@@ -1,10 +1,11 @@
 {
   "id": "alpr-detection-worker",
   "name": "ALPR detection worker (engine call + GPS join + DB write)",
-  "status": "pending",
+  "status": "complete",
   "priority": 3,
   "blocked_by": ["alpr-frame-extractor", "alpr-vehicle-signature-schema", "alpr-encryption-at-rest"],
-  "branch": "",
+  "branch": "agent/alpr-detection-worker",
+  "base_branch": "feat/alpr",
   "summary": "Consumer half of the ALPR pipeline. Reads frames from the extractor's channel, calls the engine sidecar for plate + vehicle detections, joins each detection to GPS via the route's per-vertex timestamps (introduced in PR #79), encrypts plate text and computes the stable hash via internal/alpr/crypto, upserts vehicle_signatures, and writes plate_detections rows. Emits a RouteAlprDetectionsComplete event when a route's last segment is processed so the encounter aggregator can run.",
   "acceptance_criteria": [
     "New worker internal/worker/alpr_detector.go. Started from cmd/server/workers.go after alpr-frame-extractor.",

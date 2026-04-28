@@ -55,6 +55,12 @@ type Metrics struct {
 	alprFramesExtractedTotal *prometheus.CounterVec
 	alprExtractorSegmentSecs prometheus.Histogram
 	alprExtractorQueueDepth  prometheus.Gauge
+
+	alprFramesProcessedTotal *prometheus.CounterVec
+	alprDetectionsTotal      prometheus.Counter
+	alprEngineLatencySeconds prometheus.Histogram
+	alprEngineErrorsTotal    *prometheus.CounterVec
+	alprDetectorQueueDepth   prometheus.Gauge
 }
 
 // New creates a Metrics backed by a fresh registry. Use NewWithRegistry to
@@ -198,6 +204,40 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 				Help: "Current depth of the ALPR extractor->detector frame channel.",
 			},
 		),
+
+		alprFramesProcessedTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "alpr_frames_processed_total",
+				Help: "Total number of frames the ALPR detection worker processed, labeled by result (detected|empty|dropped_no_gps|dropped_disabled|engine_error).",
+			},
+			[]string{"result"},
+		),
+		alprDetectionsTotal: prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "alpr_detections_total",
+				Help: "Total number of plate_detections rows persisted by the ALPR detection worker.",
+			},
+		),
+		alprEngineLatencySeconds: prometheus.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "alpr_engine_latency_seconds",
+				Help:    "Wall-clock duration of a single ALPR engine /v1/detect call.",
+				Buckets: defaultDurationBuckets,
+			},
+		),
+		alprEngineErrorsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "alpr_engine_errors_total",
+				Help: "Total number of ALPR engine call failures, labeled by type (unreachable|timeout|bad_response).",
+			},
+			[]string{"type"},
+		),
+		alprDetectorQueueDepth: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "alpr_detector_queue_depth",
+				Help: "Instantaneous depth of the extractor->detector frame channel as observed by the detection worker.",
+			},
+		),
 	}
 
 	reg.MustRegister(
@@ -218,6 +258,11 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 		m.alprFramesExtractedTotal,
 		m.alprExtractorSegmentSecs,
 		m.alprExtractorQueueDepth,
+		m.alprFramesProcessedTotal,
+		m.alprDetectionsTotal,
+		m.alprEngineLatencySeconds,
+		m.alprEngineErrorsTotal,
+		m.alprDetectorQueueDepth,
 	)
 
 	return m
@@ -396,4 +441,56 @@ func (m *Metrics) SetALPRExtractorQueueDepth(n int) {
 		return
 	}
 	m.alprExtractorQueueDepth.Set(float64(n))
+}
+
+// IncALPRFrameProcessed increments the per-frame outcome counter for
+// the detection worker. result is one of "detected", "empty",
+// "dropped_no_gps", "dropped_disabled", or "engine_error" -- any other
+// string still records, surfacing as a new label value in Prometheus.
+func (m *Metrics) IncALPRFrameProcessed(result string) {
+	if m == nil {
+		return
+	}
+	m.alprFramesProcessedTotal.WithLabelValues(result).Inc()
+}
+
+// IncALPRDetection bumps the cumulative count of plate_detections
+// rows persisted by the detection worker. Called once per row
+// successfully committed.
+func (m *Metrics) IncALPRDetection() {
+	if m == nil {
+		return
+	}
+	m.alprDetectionsTotal.Inc()
+}
+
+// ObserveALPREngineLatency records the wall-clock duration of one
+// engine.Detect call. Called from both the success and the error
+// paths so a stuck engine still produces observable latency tails.
+func (m *Metrics) ObserveALPREngineLatency(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.alprEngineLatencySeconds.Observe(d.Seconds())
+}
+
+// IncALPREngineError increments the typed engine-error counter.
+// kind is one of "unreachable", "timeout", or "bad_response" --
+// matches the alpr.ErrEngine* sentinel set.
+func (m *Metrics) IncALPREngineError(kind string) {
+	if m == nil {
+		return
+	}
+	m.alprEngineErrorsTotal.WithLabelValues(kind).Inc()
+}
+
+// SetALPRDetectorQueueDepth publishes the instantaneous depth of the
+// extractor->detector frame channel as observed by the detection
+// worker. Sampled at a low rate so the metric is observable but
+// cheap.
+func (m *Metrics) SetALPRDetectorQueueDepth(n int) {
+	if m == nil {
+		return
+	}
+	m.alprDetectorQueueDepth.Set(float64(n))
 }

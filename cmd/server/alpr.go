@@ -60,22 +60,46 @@ func seedALPRDefaults(store *settings.Store, cfg *config.ALPRConfig) {
 // Split out from verifyALPRKeyring so the error path is unit-testable
 // without invoking os.Exit via log.Fatalf.
 func checkALPRKeyring(cfg *config.ALPRConfig) error {
+	_, err := loadALPRKeyring(cfg)
+	return err
+}
+
+// loadALPRKeyring decodes and verifies the keyring carried on cfg and
+// returns it. Returns (nil, nil) when ALPR_ENCRYPTION_KEY is unset --
+// this is the "ALPR not configured" case and is not an error. Returns
+// a non-nil error only when the operator opted in (set the env var)
+// but the value is malformed or fails the round-trip probe; the caller
+// is expected to escalate that to a fatal at startup.
+//
+// Splitting load-vs-check from the bootstrap call site lets the
+// detection worker keep the decoded *Keyring for the lifetime of the
+// process without paying the HKDF derivation a second time.
+func loadALPRKeyring(cfg *config.ALPRConfig) (*alprcrypto.Keyring, error) {
 	if cfg == nil || cfg.EncryptionKeyB64 == "" {
-		return nil
+		return nil, nil
 	}
 	k, err := alprcrypto.LoadKeyring(cfg.EncryptionKeyB64)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return alprcrypto.VerifyRoundtrip(k)
+	if err := alprcrypto.VerifyRoundtrip(k); err != nil {
+		return nil, err
+	}
+	return k, nil
 }
 
 // verifyALPRKeyring runs at startup, before any handler or worker reads
-// or writes plate ciphertext. Aborts the process on any error.
-func verifyALPRKeyring(cfg *config.ALPRConfig) {
-	if err := checkALPRKeyring(cfg); err != nil {
+// or writes plate ciphertext. Aborts the process on any error. Returns
+// the loaded keyring (or nil when ALPR_ENCRYPTION_KEY is unset) so the
+// bootstrap can hand it to the detection worker via deps without paying
+// HKDF again. Existing callers that only care about validation can
+// ignore the return value.
+func verifyALPRKeyring(cfg *config.ALPRConfig) *alprcrypto.Keyring {
+	k, err := loadALPRKeyring(cfg)
+	if err != nil {
 		log.Fatalf("ALPR_ENCRYPTION_KEY self-check failed: %v", err)
 	}
+	return k
 }
 
 // logALPRStartup emits one info line summarising the active ALPR config
