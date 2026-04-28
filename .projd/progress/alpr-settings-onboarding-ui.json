@@ -1,7 +1,7 @@
 {
   "id": "alpr-settings-onboarding-ui",
   "name": "Settings: Optional services -> ALPR card (the on-ramp)",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 6,
   "blocked_by": ["alpr-watchlist-api", "alpr-disclaimer-gate"],
   "branch": "agent/alpr-settings-onboarding-ui",
@@ -20,5 +20,5 @@
     "Tests: each of the 4 states render correctly given mocked /v1/settings/alpr responses; ack + enable flow end-to-end with msw; encryption-key-missing path; jurisdiction selection persisted to ack body.",
     "Lint, type-check pass. Manual verification: walk through enable from cold-start, ack disclaimer, see engine-offline state, run make alpr-up in a terminal, watch state transition to engine-online within 10 s."
   ],
-  "notes": ""
+  "notes": "Implemented as web/src/components/alpr/AlprSettingsCard.tsx and wired into web/src/app/settings/page.tsx. Tests at web/src/components/alpr/AlprSettingsCard.test.tsx cover all 4 states, ack+enable flow with jurisdiction persistence, and encryption-key-missing path. Lint, type-check, and full vitest suite (23 tests) pass; smoke is green."
 }
