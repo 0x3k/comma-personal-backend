@@ -358,6 +358,102 @@ func (q *Queries) UpsertWatchlistAlerted(ctx context.Context, arg UpsertWatchlis
 	return i, err
 }
 
+const upsertWatchlistAlertedPreserveAck = `-- name: UpsertWatchlistAlertedPreserveAck :one
+INSERT INTO plate_watchlist (
+    plate_hash,
+    label_ciphertext,
+    kind,
+    severity,
+    first_alert_at,
+    last_alert_at,
+    notes
+)
+VALUES ($1, $2, 'alerted', $3, $5, $5, $4)
+ON CONFLICT (plate_hash) DO UPDATE
+SET kind             = 'alerted',
+    severity         = GREATEST(COALESCE(plate_watchlist.severity, 0::SMALLINT),
+                                 EXCLUDED.severity),
+    label_ciphertext = COALESCE(EXCLUDED.label_ciphertext,
+                                plate_watchlist.label_ciphertext),
+    first_alert_at   = COALESCE(plate_watchlist.first_alert_at,
+                                EXCLUDED.first_alert_at),
+    last_alert_at    = EXCLUDED.last_alert_at,
+    -- acked_at intentionally preserved -- callers use the
+    -- ack-clearing variant only on a strict severity upgrade.
+    acked_at         = plate_watchlist.acked_at,
+    notes            = COALESCE(EXCLUDED.notes, plate_watchlist.notes),
+    updated_at       = now()
+RETURNING id, plate_hash, label_ciphertext, kind, severity,
+          first_alert_at, last_alert_at, acked_at, notes,
+          created_at, updated_at
+`
+
+type UpsertWatchlistAlertedPreserveAckParams struct {
+	PlateHash       []byte             `json:"plateHash"`
+	LabelCiphertext []byte             `json:"labelCiphertext"`
+	Severity        pgtype.Int2        `json:"severity"`
+	Notes           pgtype.Text        `json:"notes"`
+	AlertAt         pgtype.Timestamptz `json:"alertAt"`
+}
+
+type UpsertWatchlistAlertedPreserveAckRow struct {
+	ID              int64              `json:"id"`
+	PlateHash       []byte             `json:"plateHash"`
+	LabelCiphertext []byte             `json:"labelCiphertext"`
+	Kind            string             `json:"kind"`
+	Severity        pgtype.Int2        `json:"severity"`
+	FirstAlertAt    pgtype.Timestamptz `json:"firstAlertAt"`
+	LastAlertAt     pgtype.Timestamptz `json:"lastAlertAt"`
+	AckedAt         pgtype.Timestamptz `json:"ackedAt"`
+	Notes           pgtype.Text        `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt       pgtype.Timestamptz `json:"updatedAt"`
+}
+
+// Variant of UpsertWatchlistAlerted used by the stalking heuristic on
+// re-evaluation. The behavioural difference is that acked_at is
+// preserved rather than cleared:
+//
+//   - On INSERT (no prior row): acked_at is left NULL by the column
+//     default. There is nothing to preserve.
+//   - On UPDATE: acked_at is set to plate_watchlist.acked_at (i.e.
+//     itself), which is a no-op write that preserves whatever the
+//     operator's last ack state was. This matters because re-running
+//     the heuristic on the same plate after the user has acked the
+//     alert should NOT silently re-arm the alert. The worker uses the
+//     other variant (UpsertWatchlistAlerted) only when severity
+//     strictly increased, in which case the user genuinely needs to
+//     re-see the upgraded alert.
+//
+// Severity uses GREATEST(existing, computed) so a re-evaluation with
+// a lower computed severity never demotes the row. The heuristic
+// never wants to "unalert" a plate; whitelisting is a separate
+// explicit operator action.
+func (q *Queries) UpsertWatchlistAlertedPreserveAck(ctx context.Context, arg UpsertWatchlistAlertedPreserveAckParams) (UpsertWatchlistAlertedPreserveAckRow, error) {
+	row := q.db.QueryRow(ctx, upsertWatchlistAlertedPreserveAck,
+		arg.PlateHash,
+		arg.LabelCiphertext,
+		arg.Severity,
+		arg.Notes,
+		arg.AlertAt,
+	)
+	var i UpsertWatchlistAlertedPreserveAckRow
+	err := row.Scan(
+		&i.ID,
+		&i.PlateHash,
+		&i.LabelCiphertext,
+		&i.Kind,
+		&i.Severity,
+		&i.FirstAlertAt,
+		&i.LastAlertAt,
+		&i.AckedAt,
+		&i.Notes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertWatchlistWhitelist = `-- name: UpsertWatchlistWhitelist :one
 INSERT INTO plate_watchlist (
     plate_hash,
