@@ -228,6 +228,17 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	alprSettingsHandler.RegisterReadRoutes(v1ConfigRead)
 	alprSettingsHandler.RegisterMutationRoutes(v1ConfigWrite)
 
+	// ALPR historical backfill operator endpoints. All five routes
+	// (start/status/pause/resume/cancel) are session-only -- a device
+	// JWT must never start, pause, or cancel a backfill on the
+	// operator's behalf. The trigger interface lets a successful start
+	// wake the worker immediately rather than wait for its periodic
+	// re-check.
+	if d.cfg.UIAuthEnabled() {
+		alprBackfillHandler := api.NewALPRBackfillHandler(d.queries, d.alprBackfill)
+		alprBackfillHandler.RegisterRoutes(v1ConfigWrite)
+	}
+
 	// Per-device trip stats live at /v1/devices/:dongle_id/stats, so they
 	// accept either a session cookie or a device JWT via the shared read group.
 	tripHandler.RegisterStatsRoute(v1ConfigRead)
