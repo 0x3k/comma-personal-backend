@@ -1,10 +1,11 @@
 {
   "id": "alpr-historical-backfill",
   "name": "Opt-in resumable ALPR backfill of existing routes",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 8,
   "blocked_by": ["alpr-encounter-aggregator"],
-  "branch": "",
+  "branch": "agent/alpr-historical-backfill",
+  "base_branch": "feat/alpr",
   "summary": "When the user enables ALPR after months of accumulated routes, they want their existing data analyzed. Provides an opt-in, resumable backfill that funnels existing fcamera segments through the same extractor + detector + aggregator pipeline at a throttled rate so live ingest isn't starved. Single concurrent job at a time (DB row backed) so two parallel backfills can't fight. Crash-resumable so a server restart picks up where it left off.",
   "acceptance_criteria": [
     "New migration adding alpr_backfill_jobs: id BIGSERIAL PK, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ NULL, state TEXT NOT NULL CHECK (state IN ('queued','running','paused','done','failed')), filters_json JSONB, total_routes INT, processed_routes INT DEFAULT 0, last_processed_route TEXT NULL, error TEXT NULL, started_by TEXT NULL (session user). Only one row in 'running' state at a time -- enforced by a partial unique index.",
