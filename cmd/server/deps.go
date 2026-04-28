@@ -94,6 +94,16 @@ type deps struct {
 	// poll).
 	alprAlertCreated chan heuristic.AlertCreated
 
+	// alprAlertSuppressed is the inverse of alprAlertCreated: emitted
+	// when an operator action (currently: whitelisting an alerted
+	// plate) takes a watchlist row out of the open-alerts bucket.
+	// Notification subsystems subscribe so the dashboard alert badge
+	// counter can decrement without polling. Buffered so a slow
+	// consumer does not stall the API handler; the watchlist row
+	// itself is the authoritative record so a dropped event only
+	// delays the badge refresh.
+	alprAlertSuppressed chan heuristic.AlertSuppressed
+
 	// redactionBuilder is the on-demand worker that renders the
 	// cached qcamera-redacted HLS variant when a redacted-share link
 	// triggers it. Started during workers wiring; the share handler
