@@ -67,6 +67,86 @@ const (
 	// clamps to a sensible minimum so a misconfigured zero cannot collapse
 	// every detection into one encounter.
 	KeyALPREncounterGapSeconds = "alpr_encounter_gap_seconds"
+
+	// Stalking-detection heuristic tunables. The heuristic worker
+	// reads these via *Or() helpers so a missing row falls back to
+	// the package defaults in internal/alpr/heuristic. Each key maps
+	// 1:1 to a field on the heuristic.Thresholds struct; see the
+	// constants in that package for the rule semantics.
+	//
+	// The heuristic version itself is intentionally NOT a setting --
+	// it is a code constant (heuristic.HeuristicVersion) tied to a
+	// deploy so two replicas cannot disagree on what "v1.0.0" means.
+
+	// KeyALPRHeuristicLookbackDays is the encounter-history window
+	// (in days) the worker pulls when scoring a plate. Default 30.
+	KeyALPRHeuristicLookbackDays = "alpr_heuristic_lookback_days"
+
+	// KeyALPRHeuristicTurnsMin is the per-encounter turn count above
+	// which within_route_turns starts to score. Default 2.
+	KeyALPRHeuristicTurnsMin = "alpr_heuristic_turns_min"
+
+	// KeyALPRHeuristicTurnsPointsCap caps the within_route_turns
+	// component so a single chaotic route cannot saturate severity.
+	// Default 4.0.
+	KeyALPRHeuristicTurnsPointsCap = "alpr_heuristic_turns_points_cap"
+
+	// KeyALPRHeuristicPersistenceMinutesMid is the duration (in
+	// minutes) at which within_route_persistence first awards
+	// points. Default 8.
+	KeyALPRHeuristicPersistenceMinutesMid = "alpr_heuristic_persistence_minutes_mid"
+
+	// KeyALPRHeuristicPersistenceMinutesHigh is the duration (in
+	// minutes) at which within_route_persistence promotes to the
+	// high tier. Default 15.
+	KeyALPRHeuristicPersistenceMinutesHigh = "alpr_heuristic_persistence_minutes_high"
+
+	// KeyALPRHeuristicPersistenceMidPoints is the points awarded for
+	// the mid tier of within_route_persistence. Default 1.0.
+	KeyALPRHeuristicPersistenceMidPoints = "alpr_heuristic_persistence_mid_points"
+
+	// KeyALPRHeuristicPersistenceHighPoints is the points awarded
+	// for the high tier (replaces, does not add to, the mid tier).
+	// Default 1.5.
+	KeyALPRHeuristicPersistenceHighPoints = "alpr_heuristic_persistence_high_points"
+
+	// KeyALPRHeuristicDistinctRoutesMid is the route count at which
+	// cross_route_count first awards points. Default 3.
+	KeyALPRHeuristicDistinctRoutesMid = "alpr_heuristic_distinct_routes_min"
+
+	// KeyALPRHeuristicDistinctRoutesMidPoints is the points for the
+	// cross_route_count mid tier. Default 1.5.
+	KeyALPRHeuristicDistinctRoutesMidPoints = "alpr_heuristic_distinct_routes_mid_points"
+
+	// KeyALPRHeuristicDistinctRoutesHigh is the route count at which
+	// cross_route_count promotes to the high tier (which stacks on
+	// top of the mid tier). Default 5.
+	KeyALPRHeuristicDistinctRoutesHigh = "alpr_heuristic_distinct_routes_high"
+
+	// KeyALPRHeuristicDistinctRoutesHighPoints is the additional
+	// points for the cross_route_count high tier. Default 1.0.
+	KeyALPRHeuristicDistinctRoutesHighPoints = "alpr_heuristic_distinct_routes_high_points"
+
+	// KeyALPRHeuristicDistinctAreasMin is the minimum number of
+	// distinct geo cells required for cross_route_geo_spread to
+	// fire. Default 2.
+	KeyALPRHeuristicDistinctAreasMin = "alpr_heuristic_distinct_areas_min"
+
+	// KeyALPRHeuristicDistinctAreasPoints is the points awarded
+	// when the distinct-areas threshold is met. Default 2.0.
+	KeyALPRHeuristicDistinctAreasPoints = "alpr_heuristic_distinct_areas_points"
+
+	// KeyALPRHeuristicAreaCellKm is the side length (in km) of the
+	// geo grid cell used by cross_route_geo_spread. Default 5.0.
+	KeyALPRHeuristicAreaCellKm = "alpr_heuristic_area_cell_km"
+
+	// KeyALPRHeuristicTimingWindowHours is the time window (in
+	// hours) used by cross_route_timing. Default 24.0.
+	KeyALPRHeuristicTimingWindowHours = "alpr_heuristic_timing_window_hours"
+
+	// KeyALPRHeuristicTimingPoints is the points awarded when the
+	// timing window threshold is met. Default 1.0.
+	KeyALPRHeuristicTimingPoints = "alpr_heuristic_timing_points"
 )
 
 // GetBool returns the boolean value for the given key. Stored values are

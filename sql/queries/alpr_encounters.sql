@@ -82,6 +82,39 @@ WHERE plate_hash    = $1
   AND first_seen_ts <= $3
 ORDER BY last_seen_ts DESC, id DESC;
 
+-- name: ListEncountersForPlateInWindowWithStartGPS :many
+-- Same window scan as ListEncountersForPlateInWindow but joined with the
+-- plate's first-detection GPS for that encounter. The stalking heuristic
+-- needs the start coordinates of each encounter to bucket them into geo
+-- cells (cross_route_geo_spread); without the join it would have to
+-- issue one detection lookup per encounter.
+--
+-- LEFT JOIN: an encounter without a matching detection at first_seen_ts
+-- (extremely rare, but possible after a manual correction or partial
+-- delete) still appears with NULL gps fields; the heuristic treats those
+-- as "no GPS" rather than dropping the encounter.
+SELECT pe.id, pe.dongle_id, pe.route, pe.plate_hash,
+       pe.first_seen_ts, pe.last_seen_ts,
+       pe.detection_count, pe.turn_count, pe.max_internal_gap_seconds,
+       pe.signature_id, pe.status, pe.bbox_first, pe.bbox_last,
+       pe.created_at, pe.updated_at,
+       pd.gps_lat AS start_lat,
+       pd.gps_lng AS start_lng
+FROM plate_encounters pe
+LEFT JOIN LATERAL (
+    SELECT gps_lat, gps_lng
+    FROM plate_detections d
+    WHERE d.dongle_id  = pe.dongle_id
+      AND d.route      = pe.route
+      AND d.plate_hash = pe.plate_hash
+      AND d.frame_ts   = pe.first_seen_ts
+    LIMIT 1
+) pd ON TRUE
+WHERE pe.plate_hash    = $1
+  AND pe.last_seen_ts >= $2
+  AND pe.first_seen_ts <= $3
+ORDER BY pe.last_seen_ts DESC, pe.id DESC;
+
 -- name: ListEncountersForSignatureInArea :many
 -- Encounters linked to a vehicle signature whose first detection lies
 -- inside a lat/lng bounding box. Used by the signature-fusion heuristic
