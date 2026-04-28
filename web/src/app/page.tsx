@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import type { DeviceStats, Trip } from "@/lib/types";
@@ -10,9 +11,24 @@ import {
   formatEngagementPct,
   formatTotalDuration,
 } from "@/lib/format";
+import { useAlprSettings } from "@/lib/useAlprSettings";
+import { useAlertSummary } from "@/lib/useAlertSummary";
 import { PageWrapper } from "@/components/layout/PageWrapper";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
+import { AlertBadge } from "@/components/alpr/AlertBadge";
+
+// Lazy-load the recent-alerts widget so it does not block the home
+// page's initial paint. The widget's GET /v1/alpr/alerts call is
+// significantly more expensive than the summary endpoint that gates
+// it; deferring keeps the >50ms-paint-regression budget in budget 6.
+const RecentAlertsWidget = dynamic(
+  () =>
+    import("@/components/alpr/RecentAlertsWidget").then(
+      (mod) => mod.RecentAlertsWidget,
+    ),
+  { ssr: false },
+);
 
 /**
  * Device list shape as returned by GET /v1/devices. Kept local to the
@@ -158,6 +174,16 @@ export default function Home() {
   const [statsLoading, setStatsLoading] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
 
+  // ALPR badge + widget are runtime-gated on the master flag. When
+  // the flag is loading or false, the alert-summary hook stays idle
+  // (no fetch) and the badge / widget render nothing.
+  const { enabled: alprEnabled } = useAlprSettings();
+  const alprActive = alprEnabled === true;
+  const { summary: alertSummary } = useAlertSummary(alprActive);
+  const showAlprBadge =
+    alprActive && (alertSummary?.open_count ?? 0) > 0;
+  const showRecentAlerts = showAlprBadge;
+
   const fetchDevices = useCallback(async () => {
     setDevicesLoading(true);
     setDevicesError(null);
@@ -238,6 +264,17 @@ export default function Home() {
 
   return (
     <PageWrapper title="Dashboard" description={deviceDescription}>
+      {/* ALPR open-alerts badge. Sits at the top of the dashboard so
+          a freshly-opened tab surfaces an active alert before the
+          user even reads the lifetime stats. The badge is responsive
+          on its own (the underlying pill flexes), so no extra mobile
+          styling is needed at this level. */}
+      {showAlprBadge && (
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          <AlertBadge summary={alertSummary} />
+        </div>
+      )}
+
       {showMultipleDevices && (
         <div className="mb-5 flex flex-wrap items-center gap-2">
           <label
@@ -294,6 +331,17 @@ export default function Home() {
           loading={totalsLoading}
         />
       </div>
+
+      {/* Recent open alerts. Lazy-loaded (next/dynamic) so the
+          chunk does not cost the home page's first paint. The
+          summary endpoint already gates the badge above; we mount
+          the widget on the same condition so it never fetches the
+          (more expensive) full alerts list when there are none. */}
+      {showRecentAlerts && (
+        <div className="mb-6">
+          <RecentAlertsWidget />
+        </div>
+      )}
 
       {/* Recent drives */}
       <Card>
