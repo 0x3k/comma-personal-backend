@@ -1,10 +1,11 @@
 {
   "id": "alpr-notification-channels",
   "name": "Email + webhook notifications for high-severity alerts",
-  "status": "pending",
+  "status": "complete",
   "priority": 7,
   "blocked_by": ["alpr-stalking-heuristic"],
-  "branch": "",
+  "branch": "agent/alpr-notification-channels",
+  "base_branch": "feat/alpr",
   "summary": "When a stalking alert triggers above a configured severity, optionally notify the user out-of-band via email (SMTP) or generic webhook. Per the threat model: if someone is following you across trips, you might not be reading the dashboard daily. Intentionally lightweight and ALPR-scoped -- a project-wide notifications system is out of scope for this round. Per-plate de-duplication so a single ongoing situation doesn't spam.",
   "acceptance_criteria": [
     "New env vars: ALPR_NOTIFY_EMAIL_TO, ALPR_NOTIFY_SMTP_HOST, ALPR_NOTIFY_SMTP_PORT (default 587), ALPR_NOTIFY_SMTP_USER, ALPR_NOTIFY_SMTP_PASS, ALPR_NOTIFY_SMTP_FROM, ALPR_NOTIFY_SMTP_TLS (default starttls; allow plain or implicit), ALPR_NOTIFY_WEBHOOK_URL, ALPR_NOTIFY_MIN_SEVERITY (default 4), ALPR_NOTIFY_DEDUP_HOURS (default 12), ALPR_DASHBOARD_URL (base URL to construct deep links into the user's deployment).",
@@ -19,5 +20,5 @@
     "Tests: severity threshold filter, dedup window across two consecutive alerts for same plate, webhook + email senders dispatched in parallel (assert both called once each), partial failure handling (email fails, webhook succeeds, alert event still recorded), no-config no-op (zero senders configured -> no dispatch attempt).",
     "Document the SMTP connection security choices and the webhook payload schema in docs/ALPR.md (alpr-docs feature consumes these notes)."
   ],
-  "notes": ""
+  "notes": "Implemented internal/alpr/notify (Sender / EmailSender via net/smtp with starttls / implicit / plain TLS modes / WebhookSender via net/http POST with 10s timeout). Added migration 018 (alpr_notifications_sent dedup ledger) plus sqlc queries (UpsertNotificationSent / GetLastNotificationSent). Dispatcher applies severity threshold + per-plate dedup + whitelist suppression and fans out senders in parallel. Subscriber goroutine drains heuristic.AlertCreated. Session-only POST /v1/alpr/notify/test endpoint sends a synthetic payload through every configured sender. New env vars loaded by config.LoadALPR: ALPR_NOTIFY_EMAIL_TO, ALPR_NOTIFY_SMTP_*, ALPR_NOTIFY_WEBHOOK_URL, ALPR_NOTIFY_DEDUP_HOURS, ALPR_DASHBOARD_URL. The legacy ALPR_NOTIFY_EMAIL / ALPR_NOTIFY_WEBHOOK env vars are honoured as fallbacks."
 }

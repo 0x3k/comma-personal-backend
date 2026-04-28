@@ -127,3 +127,20 @@ SET signature_id        = sqlc.narg('signature_id'),
     det_body_type       = sqlc.narg('det_body_type'),
     det_attr_confidence = sqlc.narg('det_attr_confidence')
 WHERE id = sqlc.arg('id');
+
+-- name: CountDetectionsBySignatureForPlate :many
+-- Group every detection of a given plate_hash by signature_id and
+-- return (signature_id, detection_count). NULL signature_id collapses
+-- into its own row so the fusion heuristic can compute "share of
+-- detections that have ANY signature linked" before deciding whether
+-- to score signature_consistent / signature_inconsistent.
+--
+-- Ordered by detection_count DESC so the dominant signature is first;
+-- the heuristic looks at the top entry to decide consistency and at
+-- the full list to decide inconsistency.
+SELECT signature_id,
+       COUNT(*)::BIGINT AS detection_count
+FROM plate_detections
+WHERE plate_hash = $1
+GROUP BY signature_id
+ORDER BY detection_count DESC, signature_id ASC NULLS LAST;

@@ -29,6 +29,11 @@ type AlprBackfillJob struct {
 	StartedBy          pgtype.Text        `json:"startedBy"`
 }
 
+type AlprNotificationsSent struct {
+	PlateHash  []byte             `json:"plateHash"`
+	LastSentAt pgtype.Timestamptz `json:"lastSentAt"`
+}
+
 type AlprSegmentProgress struct {
 	DongleID             string             `json:"dongleId"`
 	Route                string             `json:"route"`

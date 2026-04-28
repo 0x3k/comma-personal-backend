@@ -15,7 +15,7 @@ INSERT INTO plate_watchlist (
     notes
 )
 VALUES ($1, $2, 'alerted', $3, sqlc.arg('alert_at'), sqlc.arg('alert_at'), $4)
-ON CONFLICT (plate_hash) DO UPDATE
+ON CONFLICT (plate_hash) WHERE plate_hash IS NOT NULL DO UPDATE
 SET kind             = 'alerted',
     severity         = EXCLUDED.severity,
     label_ciphertext = COALESCE(EXCLUDED.label_ciphertext,
@@ -63,7 +63,7 @@ INSERT INTO plate_watchlist (
     notes
 )
 VALUES ($1, $2, 'alerted', $3, sqlc.arg('alert_at'), sqlc.arg('alert_at'), $4)
-ON CONFLICT (plate_hash) DO UPDATE
+ON CONFLICT (plate_hash) WHERE plate_hash IS NOT NULL DO UPDATE
 SET kind             = 'alerted',
     severity         = GREATEST(COALESCE(plate_watchlist.severity, 0::SMALLINT),
                                  EXCLUDED.severity),
@@ -93,7 +93,7 @@ INSERT INTO plate_watchlist (
     notes
 )
 VALUES ($1, $2, 'whitelist', $3)
-ON CONFLICT (plate_hash) DO UPDATE
+ON CONFLICT (plate_hash) WHERE plate_hash IS NOT NULL DO UPDATE
 SET kind             = 'whitelist',
     label_ciphertext = COALESCE(EXCLUDED.label_ciphertext,
                                 plate_watchlist.label_ciphertext),
@@ -216,3 +216,119 @@ SELECT plate_hash
 FROM plate_watchlist
 WHERE kind = 'alerted'
   AND (acked_at IS NULL OR severity >= 4);
+
+-- name: GetWatchlistSignatureSwap :one
+-- Look up the signature-keyed plate-swap alert (if any) for a given
+-- signature_id. Returns pgx.ErrNoRows when no signature-swap row exists.
+-- Used by the signature-fusion heuristic on re-evaluation: when a new
+-- encounter lands for any plate that shares this signature, the worker
+-- needs to know whether to refresh the existing alert (UPSERT path) or
+-- raise a brand-new one. The query is keyed on signature_id with
+-- plate_hash IS NULL because that is exactly what distinguishes a
+-- signature-swap row from a plate row that happens to have a signature
+-- linked.
+SELECT id, plate_hash, label_ciphertext, kind, severity,
+       first_alert_at, last_alert_at, acked_at, notes,
+       created_at, updated_at, signature_id
+FROM plate_watchlist
+WHERE signature_id = sqlc.arg('signature_id')
+  AND plate_hash IS NULL;
+
+-- name: UpsertWatchlistSignatureSwap :one
+-- Insert-or-update a signature-keyed plate-swap alert. The row is
+-- distinguished from plate-keyed rows by plate_hash IS NULL and a
+-- non-NULL signature_id; the partial unique index
+-- uq_plate_watchlist_signature_swap (see migration 018) enforces "at
+-- most one row per signature" so this UPSERT is well-defined.
+--
+-- Note that PostgreSQL's ON CONFLICT clause requires referencing the
+-- conflict target by either constraint name or by a matching index
+-- expression. We use the explicit (signature_id) WHERE clause form so
+-- the planner can match the partial unique index regardless of how
+-- pgx binds the parameters. The same predicate as the index is
+-- repeated verbatim so we get the predicate-aware match.
+INSERT INTO plate_watchlist (
+    plate_hash,
+    signature_id,
+    kind,
+    severity,
+    first_alert_at,
+    last_alert_at,
+    notes
+)
+VALUES (
+    NULL,
+    sqlc.arg('signature_id'),
+    'alerted',
+    sqlc.arg('severity'),
+    sqlc.arg('alert_at'),
+    sqlc.arg('alert_at'),
+    sqlc.narg('notes')
+)
+ON CONFLICT (signature_id) WHERE plate_hash IS NULL AND signature_id IS NOT NULL
+DO UPDATE
+SET kind             = 'alerted',
+    severity         = GREATEST(COALESCE(plate_watchlist.severity, 0::SMALLINT),
+                                EXCLUDED.severity),
+    -- first_alert_at sticks: an existing signature-swap alert keeps
+    -- its initial fire time even on subsequent re-fires.
+    first_alert_at   = COALESCE(plate_watchlist.first_alert_at,
+                                EXCLUDED.first_alert_at),
+    last_alert_at    = EXCLUDED.last_alert_at,
+    -- acked_at preserved: re-fires of the same signature alert do
+    -- NOT clear an operator ack. A strict severity upgrade is the
+    -- only path that should re-raise the alert UI; the worker layer
+    -- enforces that by deciding whether to call this UPSERT vs. a
+    -- separate ack-clearing variant when severity strictly increases.
+    -- For the first version of the heuristic we keep the simpler
+    -- always-preserve-ack semantics here.
+    acked_at         = plate_watchlist.acked_at,
+    notes            = COALESCE(EXCLUDED.notes, plate_watchlist.notes),
+    updated_at       = now()
+RETURNING id, plate_hash, label_ciphertext, kind, severity,
+          first_alert_at, last_alert_at, acked_at, notes,
+          created_at, updated_at, signature_id;
+
+-- name: ListPlateHashesForSignatureInWindow :many
+-- For a given signature_id, return one row per (plate_hash,
+-- area_cell_lat, area_cell_lng) pair counted across encounters whose
+-- last_seen_ts falls inside the provided window. The geographic cell is
+-- computed by floor()-bucketing the encounter's first-detection GPS at
+-- the caller-supplied cell size in degrees. The fusion heuristic then
+-- groups the rows by area cell and counts distinct plate_hashes; if any
+-- cell has >=3 distinct hashes the signature-swap alert fires.
+--
+-- We compute the cell lat/lng inside SQL (rather than in Go) so the
+-- bucketing happens once per row in the database, keeping the result
+-- set small (a few thousand rows even on a busy install). Encounters
+-- without first-detection GPS (LEFT JOIN miss) are dropped: the
+-- signature-swap alert is geographically scoped, so an encounter
+-- without coordinates cannot contribute.
+--
+-- The lat/lng cell sizes differ because longitude degrees shrink with
+-- cosine of latitude. Callers compute both from a single km-scale cell
+-- size (the fusion heuristic uses 5 km, matching the stalking
+-- heuristic's cross_route_geo_spread bucketing) by passing
+-- cell_lat_deg = km / 111.32 and cell_lng_deg = cell_lat_deg /
+-- max(cos(lat_radians_at_query_time), 1e-6). An exact match with the
+-- Go geoCellKey helper is not required because the SQL-side bucketing
+-- is purely an internal grouping for the COUNT query, never compared
+-- across the SQL/Go boundary.
+SELECT pe.plate_hash,
+       FLOOR(pd.gps_lat / sqlc.arg('cell_lat_deg'))::BIGINT  AS cell_lat,
+       FLOOR(pd.gps_lng / sqlc.arg('cell_lng_deg'))::BIGINT  AS cell_lng,
+       pe.id            AS encounter_id,
+       pe.last_seen_ts  AS last_seen_ts,
+       pd.gps_lat       AS gps_lat,
+       pd.gps_lng       AS gps_lng
+FROM plate_encounters pe
+JOIN plate_detections pd ON pd.dongle_id  = pe.dongle_id
+                        AND pd.route      = pe.route
+                        AND pd.plate_hash = pe.plate_hash
+                        AND pd.frame_ts   = pe.first_seen_ts
+WHERE pe.signature_id = sqlc.arg('signature_id')
+  AND pe.last_seen_ts >= sqlc.arg('window_start')
+  AND pe.first_seen_ts <= sqlc.arg('window_end')
+  AND pd.gps_lat IS NOT NULL
+  AND pd.gps_lng IS NOT NULL
+ORDER BY pe.last_seen_ts DESC, pe.id DESC;

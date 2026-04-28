@@ -450,6 +450,13 @@ func startWorkers(ctx context.Context, d *deps) {
 		log.Printf("alpr cleanup worker: disabled via CLEANUP_ENABLED=false")
 	}
 
+	// ALPR notification subscriber: drains heuristic.AlertCreated
+	// events into the notify.Dispatcher (email + webhook fan-out).
+	// Always started so the channel has exactly one consumer. When no
+	// senders are configured the dispatcher's Dispatch is a no-op, so
+	// this still drains the channel cleanly.
+	go runALPRNotifySubscriber(ctx, d.alprNotify, d.alprAlertCreated)
+
 	// Redaction builder: on-demand worker that renders the cached
 	// qcamera-redacted HLS variant for a route the moment a redacted
 	// share-link tries to play it. The builder is constructed in

@@ -11,6 +11,49 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countDetectionsBySignatureForPlate = `-- name: CountDetectionsBySignatureForPlate :many
+SELECT signature_id,
+       COUNT(*)::BIGINT AS detection_count
+FROM plate_detections
+WHERE plate_hash = $1
+GROUP BY signature_id
+ORDER BY detection_count DESC, signature_id ASC NULLS LAST
+`
+
+type CountDetectionsBySignatureForPlateRow struct {
+	SignatureID    pgtype.Int8 `json:"signatureId"`
+	DetectionCount int64       `json:"detectionCount"`
+}
+
+// Group every detection of a given plate_hash by signature_id and
+// return (signature_id, detection_count). NULL signature_id collapses
+// into its own row so the fusion heuristic can compute "share of
+// detections that have ANY signature linked" before deciding whether
+// to score signature_consistent / signature_inconsistent.
+//
+// Ordered by detection_count DESC so the dominant signature is first;
+// the heuristic looks at the top entry to decide consistency and at
+// the full list to decide inconsistency.
+func (q *Queries) CountDetectionsBySignatureForPlate(ctx context.Context, plateHash []byte) ([]CountDetectionsBySignatureForPlateRow, error) {
+	rows, err := q.db.Query(ctx, countDetectionsBySignatureForPlate, plateHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountDetectionsBySignatureForPlateRow
+	for rows.Next() {
+		var i CountDetectionsBySignatureForPlateRow
+		if err := rows.Scan(&i.SignatureID, &i.DetectionCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteDetectionsOlderThan = `-- name: DeleteDetectionsOlderThan :execrows
 DELETE FROM plate_detections
 WHERE frame_ts < $1

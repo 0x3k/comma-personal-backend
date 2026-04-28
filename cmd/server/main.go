@@ -75,6 +75,14 @@ func main() {
 	concurrency := envInt("REDACTION_BUILDER_CONCURRENCY", 1)
 	redactionBuilder := worker.NewRedactionBuilder(queries, store, concurrency)
 
+	// ALPR notify dispatcher: constructed up-front so setupRoutes can
+	// register the operator-facing test endpoint and startWorkers can
+	// spawn the AlertCreated subscriber goroutine. The dispatcher is
+	// non-nil even when no ALPR_NOTIFY_* env vars are configured -- in
+	// that case it has zero senders and Dispatch / Test are no-ops, so
+	// the test endpoint reports "configured: false" cleanly.
+	alprNotifyDispatcher := buildALPRNotifyDispatcher(cfg.ALPR, queries, alprKeyring)
+
 	d := &deps{
 		cfg:              cfg,
 		pool:             pool,
@@ -87,6 +95,7 @@ func main() {
 		sessionSecret:    []byte(cfg.SessionSecret),
 		alprKeyring:      alprKeyring,
 		redactionBuilder: redactionBuilder,
+		alprNotify:       alprNotifyDispatcher,
 	}
 
 	e := echo.New()
