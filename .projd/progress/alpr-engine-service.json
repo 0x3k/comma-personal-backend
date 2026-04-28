@@ -1,10 +1,11 @@
 {
   "id": "alpr-engine-service",
   "name": "ALPR engine sidecar (Docker) + Makefile targets + Go client",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 2,
   "blocked_by": ["alpr-engine-spike"],
-  "branch": "",
+  "branch": "agent/alpr-engine-service",
+  "base_branch": "feat/alpr",
   "summary": "Containerized ALPR engine running as a separate Docker service under a 'profiles: [alpr]' guard so it never starts unless the user explicitly opts in. The Go backend is a pure HTTP client of the engine -- image bytes in, plate detections out. This feature also ships the Makefile targets that make enabling ALPR a single command (make alpr-up) and matches the existing 'as simple as the postgres container' deployment pattern. The engine choice (FastALPR / OpenALPR-OSS / DIY) was decided in alpr-engine-spike; follow that decision document.",
   "acceptance_criteria": [
     "New directory docker/alpr/ containing: Dockerfile for the chosen engine (CPU-friendly default; document GPU variant in docs/ALPR.md), an entrypoint script if the engine doesn't ship one, a small wrapper service exposing the HTTP API below if the chosen engine doesn't expose one natively. The Dockerfile pins all model files and Python deps to specific versions so the build is reproducible.",
