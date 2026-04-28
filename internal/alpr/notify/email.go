@@ -214,9 +214,14 @@ func splitRecipients(to string) []string {
 func buildEmailMessage(from string, to []string, alert AlertPayload) []byte {
 	const boundary = "alpr-notify-boundary"
 
+	sanitizedTo := make([]string, len(to))
+	for i, addr := range to {
+		sanitizedTo[i] = sanitizeHeaderValue(addr)
+	}
+
 	var b bytes.Buffer
-	b.WriteString("From: " + from + "\r\n")
-	b.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
+	b.WriteString("From: " + sanitizeHeaderValue(from) + "\r\n")
+	b.WriteString("To: " + strings.Join(sanitizedTo, ", ") + "\r\n")
 	b.WriteString("Subject: " + buildSubject(alert) + "\r\n")
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: multipart/alternative; boundary=\"" + boundary + "\"\r\n")
@@ -243,8 +248,30 @@ func buildEmailMessage(from string, to []string, alert AlertPayload) []byte {
 // buildSubject is the canonical subject line; the dispatcher's test
 // endpoint reuses this format so a synthetic alert is visually
 // indistinguishable from a real one (apart from the plate text).
+//
+// Plate text is sanitized before concatenation: it reaches us from the
+// engine's OCR JSON or the manual-correction endpoint, neither of
+// which strips CR/LF, so a raw concat would let an attacker inject
+// extra SMTP headers (Bcc, From override, body splitting). Subjects
+// are header-position, not body-position.
 func buildSubject(alert AlertPayload) string {
-	return "ALPR alert: severity " + strconv.Itoa(alert.Severity) + " - " + alert.Plate
+	return "ALPR alert: severity " + strconv.Itoa(alert.Severity) + " - " + sanitizeHeaderValue(alert.Plate)
+}
+
+// sanitizeHeaderValue replaces CR/LF and NUL with spaces so a value
+// concatenated into an SMTP header cannot terminate the header or
+// inject additional ones. Replacement (rather than rejection) keeps
+// the sender from silently dropping notifications when an OCR run
+// emits a malformed plate string; the body / dashboard link remain
+// the source of truth for the operator and an unusual subject is a
+// visible signal worth investigating.
+func sanitizeHeaderValue(s string) string {
+	r := strings.NewReplacer(
+		"\r", " ",
+		"\n", " ",
+		"\x00", " ",
+	)
+	return r.Replace(s)
 }
 
 // buildTextBody is the text/plain alternative. Plain text fields are

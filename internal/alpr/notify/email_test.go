@@ -119,6 +119,72 @@ func TestSplitRecipients_HandlesMultiple(t *testing.T) {
 	}
 }
 
+func TestBuildEmailMessage_StripsCRLFFromHeaders(t *testing.T) {
+	// A plate string carrying CR/LF must not break out of the Subject
+	// header. normalizePlateForCheck (the manual-correction validator)
+	// only uppercases and strips space/dash/dot/tab, so a malicious or
+	// compromised engine can submit "AAA\r\nBcc: attacker@x" and have
+	// it round-trip to here. The sanitizer collapses CR/LF to spaces
+	// so the Subject stays on a single line and no header injection
+	// is possible.
+	alert := AlertPayload{
+		Severity: 5,
+		Plate:    "AAA\r\nBcc: attacker@example.com",
+	}
+	msg := string(buildEmailMessage(
+		"alerts@example.com\r\nBcc: from-attacker@example.com",
+		[]string{"user@example.com\r\nBcc: to-attacker@example.com"},
+		alert,
+	))
+
+	headers, _, ok := strings.Cut(msg, "\r\n\r\n")
+	if !ok {
+		t.Fatalf("no header/body separator in:\n%s", msg)
+	}
+
+	// What we care about: the attacker's text MUST NOT appear as a
+	// standalone header line. After sanitization the literal substring
+	// "Bcc: ..." can still appear inside the From / To / Subject value
+	// (because we replace CR/LF with space rather than drop the rest
+	// of the string), but no SMTP relay will treat it as a header.
+	for line := range strings.SplitSeq(headers, "\r\n") {
+		if strings.HasPrefix(line, "Bcc:") || strings.HasPrefix(line, "bcc:") {
+			t.Errorf("header injection: standalone Bcc line in header section:\n%s", headers)
+		}
+	}
+
+	// Subject / From / To must each be exactly one line (i.e. contain
+	// no embedded CR/LF). This is the load-bearing invariant for
+	// header-injection prevention.
+	for line := range strings.SplitSeq(headers, "\r\n") {
+		switch {
+		case strings.HasPrefix(line, "Subject:"),
+			strings.HasPrefix(line, "From:"),
+			strings.HasPrefix(line, "To:"):
+			if strings.ContainsAny(line, "\r\n") {
+				t.Errorf("header line contains CR/LF: %q", line)
+			}
+		}
+	}
+}
+
+func TestSanitizeHeaderValue(t *testing.T) {
+	cases := map[string]string{
+		"plain":               "plain",
+		"with\rcr":            "with cr",
+		"with\nlf":            "with lf",
+		"with\r\ncrlf":        "with  crlf",
+		"with\x00nul":         "with nul",
+		"AAA\r\nBcc: x@y.com": "AAA  Bcc: x@y.com",
+		"":                    "",
+	}
+	for in, want := range cases {
+		if got := sanitizeHeaderValue(in); got != want {
+			t.Errorf("sanitizeHeaderValue(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestVehicleBadge_PartialFields(t *testing.T) {
 	cases := []struct {
 		name string

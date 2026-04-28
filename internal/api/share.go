@@ -360,8 +360,18 @@ func (h *ShareHandler) GetShare(c echo.Context) error {
 // It streams the requested file from disk after verifying the token scopes
 // to the right route. Used for top-level segment artifacts such as the
 // qcamera.ts preview.
+//
+// Redaction gate: a token minted with redact_plates=true must not let a
+// viewer fetch the unredacted top-level qcamera.ts preview while ALPR
+// is enabled. The redactor only emits an HLS variant under
+// qcamera-redacted/, so there is no segment-level qcamera.ts to swap
+// in -- 404 here forces the player onto the per-camera HLS path
+// (GetShareCameraMedia) which does serve from the redacted variant. If
+// ALPR is disabled the redact_plates flag is a no-op (no detections
+// exist), so the unredacted source is served, matching
+// GetShareCameraMedia's fallthrough.
 func (h *ShareHandler) GetShareMedia(c echo.Context) error {
-	routeID, _, handlerErr := h.consumeToken(c.Param("token"))
+	parsed, handlerErr := h.consumeTokenFull(c.Param("token"))
 	if handlerErr != nil {
 		return writeShareTokenError(c, handlerErr)
 	}
@@ -382,7 +392,14 @@ func (h *ShareHandler) GetShareMedia(c echo.Context) error {
 		})
 	}
 
-	route, routeErr := h.routeByID(c.Request().Context(), routeID)
+	if parsed.RedactPlates && file == "qcamera.ts" && h.alprEnabled(c.Request().Context()) {
+		return c.JSON(http.StatusNotFound, errorResponse{
+			Error: "file not found",
+			Code:  http.StatusNotFound,
+		})
+	}
+
+	route, routeErr := h.routeByID(c.Request().Context(), parsed.RouteID)
 	if routeErr != nil {
 		return writeShareTokenError(c, routeErr)
 	}

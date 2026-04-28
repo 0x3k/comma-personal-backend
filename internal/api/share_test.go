@@ -1021,6 +1021,173 @@ func TestShareCameraMediaRedactFalseTokenServesUnredacted(t *testing.T) {
 	}
 }
 
+// TestShareMediaQcameraTsRefusedOnRedactedToken pins the segment-level
+// qcamera.ts privacy gate. A token minted with redact_plates=true must
+// not allow fetching the unredacted top-level qcamera.ts mpeg-ts
+// preview when ALPR is enabled, since no segment-level redacted
+// variant of that file exists -- the redactor only emits HLS under
+// qcamera-redacted/. The viewer is expected to fall back to the
+// per-camera HLS endpoint (GetShareCameraMedia), which does serve
+// from the redacted variant.
+func TestShareMediaQcameraTsRefusedOnRedactedToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	qcamera := filepath.Join(tmpDir, "d", "r", "0", "qcamera.ts")
+	if err := os.MkdirAll(filepath.Dir(qcamera), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(qcamera, []byte("UNREDACTED-TS"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	mock := &shareRedactMockDB{
+		shareMockDB: shareMockDB{route: newShareTestRoute(1, "d", "r")},
+		settings:    map[string]string{"alpr_enabled": "true"},
+	}
+	queries := db.New(mock)
+	store := storage.New(tmpDir)
+	settingsStore := settings.New(queries)
+
+	h := NewShareHandler(queries, store, "secret").
+		WithRedaction(settingsStore, &fakeRedactionTrigger{}, tmpDir)
+	frozen := time.Unix(1_700_000_000, 0)
+	h.now = func() time.Time { return frozen }
+
+	tok, err := share.SignWithOptions([]byte("secret"), 1, frozen.Add(1*time.Hour),
+		share.Options{RedactPlates: true})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/share/"+tok+"/segments/0/qcamera.ts", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("token", "segment_num", "file")
+	c.SetParamValues(tok, "0", "qcamera.ts")
+
+	if err := h.GetShareMedia(c); err != nil {
+		t.Fatalf("GetShareMedia error: %v", err)
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (redacted token must not get unredacted ts); body=%s",
+			rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "UNREDACTED-TS") {
+		t.Errorf("response leaked unredacted ts content: %q", rec.Body.String())
+	}
+}
+
+// TestShareMediaQcameraTsServedWhenALPRDisabled verifies the symmetry
+// fallthrough: a token with redact_plates=true that lands on a server
+// where ALPR is disabled is treated as if the flag were unset (no
+// detections exist to redact, no variant will ever be generated). The
+// unredacted source is served, matching the camera-media handler's
+// behaviour for the same case.
+func TestShareMediaQcameraTsServedWhenALPRDisabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	qcamera := filepath.Join(tmpDir, "d", "r", "0", "qcamera.ts")
+	if err := os.MkdirAll(filepath.Dir(qcamera), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(qcamera, []byte("PLAIN-TS"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	mock := &shareRedactMockDB{
+		shareMockDB: shareMockDB{route: newShareTestRoute(1, "d", "r")},
+		settings:    map[string]string{"alpr_enabled": "false"},
+	}
+	queries := db.New(mock)
+	store := storage.New(tmpDir)
+	settingsStore := settings.New(queries)
+
+	h := NewShareHandler(queries, store, "secret").
+		WithRedaction(settingsStore, &fakeRedactionTrigger{}, tmpDir)
+	frozen := time.Unix(1_700_000_000, 0)
+	h.now = func() time.Time { return frozen }
+
+	tok, err := share.SignWithOptions([]byte("secret"), 1, frozen.Add(1*time.Hour),
+		share.Options{RedactPlates: true})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/share/"+tok+"/segments/0/qcamera.ts", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("token", "segment_num", "file")
+	c.SetParamValues(tok, "0", "qcamera.ts")
+
+	if err := h.GetShareMedia(c); err != nil {
+		t.Fatalf("GetShareMedia error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (alpr off, fallthrough); body=%s",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "PLAIN-TS") {
+		t.Errorf("expected plain ts content, got %q", rec.Body.String())
+	}
+}
+
+// TestShareMediaQcameraTsServedOnUnredactedToken verifies that the
+// existing unredacted path is preserved: a redact_plates=false token
+// (the non-default opt-out) gets the original qcamera.ts even when
+// ALPR is enabled. This is the case the original cross-route test
+// covered; we keep it explicit here to lock the gate to the
+// (RedactPlates && file=="qcamera.ts" && alprEnabled) triple.
+func TestShareMediaQcameraTsServedOnUnredactedToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	qcamera := filepath.Join(tmpDir, "d", "r", "0", "qcamera.ts")
+	if err := os.MkdirAll(filepath.Dir(qcamera), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(qcamera, []byte("PLAIN-TS"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	mock := &shareRedactMockDB{
+		shareMockDB: shareMockDB{route: newShareTestRoute(1, "d", "r")},
+		settings:    map[string]string{"alpr_enabled": "true"},
+	}
+	queries := db.New(mock)
+	store := storage.New(tmpDir)
+	settingsStore := settings.New(queries)
+
+	h := NewShareHandler(queries, store, "secret").
+		WithRedaction(settingsStore, &fakeRedactionTrigger{}, tmpDir)
+	frozen := time.Unix(1_700_000_000, 0)
+	h.now = func() time.Time { return frozen }
+
+	tok, err := share.SignWithOptions([]byte("secret"), 1, frozen.Add(1*time.Hour),
+		share.Options{RedactPlates: false})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/share/"+tok+"/segments/0/qcamera.ts", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("token", "segment_num", "file")
+	c.SetParamValues(tok, "0", "qcamera.ts")
+
+	if err := h.GetShareMedia(c); err != nil {
+		t.Fatalf("GetShareMedia error: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (token opted out); body=%s",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "PLAIN-TS") {
+		t.Errorf("expected plain ts content, got %q", rec.Body.String())
+	}
+}
+
 func TestIsAllowedShareMediaFile(t *testing.T) {
 	cases := map[string]bool{
 		"qcamera.ts":   true,
