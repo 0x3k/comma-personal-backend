@@ -302,7 +302,74 @@ To wire it up:
 2. In Grafana, add the Prometheus server as a datasource (Configuration -> Data sources -> Add -> Prometheus).
 3. Import the dashboard: Dashboards -> New -> Import -> Upload JSON file -> select `docs/grafana-dashboard.json`. When prompted, pick the Prometheus datasource from step 2 for the `$datasource` variable. Panels will populate once Prometheus has a few scrape intervals of data.
 
-## 11. Firewall
+## 11. ALPR sidecar
+
+The ALPR (license-plate stalking detection) feature ships as an
+opt-in Docker container, `comma-alpr`, gated by the `alpr` Compose
+profile. It is **off by default**: bare `docker compose up` and
+`make prod-up` do not start it. End-user setup, the threat model,
+the privacy and legal posture, and the data wipe procedure live in
+[`ALPR.md`](ALPR.md). This section covers only the deployment
+specifics.
+
+### Network isolation
+
+The default `docker-compose.yml` does **not** publish the engine port
+(`8081`) to the host. The Go backend reaches the engine over the
+Compose network at `alpr:8081`, and that is the only thing that
+should ever talk to it. **Do not publish `8081` in production.** It
+is a local-only service with no auth; exposing it gives anyone who
+can reach the host the ability to run plate detection against
+arbitrary images. If you need to curl the engine for debugging,
+either `docker compose exec` into the backend container, or add a
+temporary `ports` line to a non-prod compose file.
+
+### GPU passthrough
+
+The engine runs on CPU by default. If you want GPU acceleration
+(only useful when backfilling historical routes -- the production
+sample rate of ~1-2 fps is well within CPU budget; see the engine
+decision doc for benchmarks):
+
+1. Switch the base image in `docker/alpr/Dockerfile` to a
+   CUDA-enabled ONNX Runtime image (`onnxruntime-gpu` or a CUDA
+   Python base). The wrapper service is unchanged.
+2. Uncomment the `deploy.resources.reservations.devices` block in
+   the `alpr` service definition in `docker-compose.yml`.
+3. Install
+   [`nvidia-container-toolkit`](https://github.com/NVIDIA/nvidia-container-toolkit)
+   on the host. Without it the container will start but ONNX
+   Runtime silently falls back to the CPU execution provider.
+4. Rebuild and restart: `make alpr-build && make alpr-down && make alpr-up`.
+5. Verify: hit the engine `/health` endpoint (from inside the
+   backend container). The startup log should mention
+   `CUDAExecutionProvider`. If it does not, the toolkit step did
+   not take effect.
+
+### Encryption key backup
+
+`ALPR_ENCRYPTION_KEY` is the single key from which every plate
+ciphertext and every plate hash in the database is derived. **Treat
+it like a database password.**
+
+- If the key is lost, every plate text and plate hash on disk
+  becomes unreadable. There is no recovery and no fallback.
+- If the key is compromised, every plate the system has ever
+  recorded should be considered exposed. Rotate the key (which
+  invalidates all prior plate data, by design) and consider running
+  the data wipe SQL from [`ALPR.md`](ALPR.md).
+- Back the key up the same way you back up the database password:
+  password manager, secrets vault, sealed secret in your config
+  store. Do **not** commit it to git. Do **not** rely on the value
+  baked into a running container -- if the host disk dies and the
+  key is only in `.env` on that disk, the data was never recoverable.
+
+The Postgres backup procedure in section 8 above is unchanged when
+ALPR is enabled. ALPR data lives in the same database, so a normal
+`pg_dump` includes the encrypted plate rows. Without the encryption
+key, those rows are not useful.
+
+## 12. Firewall
 
 Only port 443 (HTTPS) needs to be exposed to the internet. PostgreSQL (5432) and the Go server (8080) should only listen on localhost.
 

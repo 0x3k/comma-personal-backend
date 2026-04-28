@@ -23,6 +23,7 @@
 - **Web dashboard** -- home page with lifetime stats and recent drives, route browser with multi-camera HLS playback, Leaflet/OpenStreetMap GPS tracks, virtualized log viewer, moments/events listing, upload-queue monitor, device control center, and storage/retention settings
 - **Shareable read-only links** -- signed, time-limited tokens grant unauthenticated access to a single route's video and map with no write access and no leakage of other routes
 - **Retention and cleanup** -- per-route preserve flag, configurable retention window, and a cleanup worker that deletes old non-preserved routes (dry-run by default for safety)
+- **Optional license-plate stalking detection** -- opt-in feature that processes dashcam frames locally to warn when the same vehicle appears across multiple trips. Off by default. See [docs/ALPR.md](docs/ALPR.md).
 - **Observability** -- Prometheus `/metrics` endpoint for request rate and latency, upload throughput, transcode timing, RPC latency, connected device count, and worker health, plus an importable Grafana dashboard
 
 ## Architecture
@@ -112,6 +113,14 @@ cp .env.example .env
 | `RETENTION_DAYS` | no | `0` | Default retention window (in days) for non-preserved routes before the cleanup worker deletes them; `0` means never delete. Seeds the `retention_days` row in the `settings` table on first boot; overridable at runtime via `PUT /v1/settings/retention`. |
 | `CLEANUP_ENABLED` | no | `true` | When `true`, runs the background cleanup worker that deletes non-preserved routes older than the effective retention window. Set to `false` to disable the worker (e.g. in replica deployments). |
 | `DELETE_DRY_RUN` | no | `true` | When `true` (the default, for safety), the cleanup worker logs what it would delete but does not touch the filesystem or the database. Set to `false` to enable real deletion. |
+| `ALPR_ENCRYPTION_KEY` | no | -- | Base64-encoded 32-byte AES-256 key used to encrypt plate text and derive the keyed plate hash. ALPR cannot be enabled without it. Generate with `go run ./cmd/alpr-keygen`. Treat like a database password -- losing it means losing all plate data. See [docs/ALPR.md](docs/ALPR.md). |
+| `ALPR_ENGINE_URL` | no | `http://alpr:8081` | Base URL of the ALPR engine sidecar. The default targets the `alpr` service on the Compose network and does not need to change in the docker stack. See [docs/ALPR.md](docs/ALPR.md). |
+| `ALPR_REGION` | no | `us` | Country/jurisdiction-specific plate-format model. One of `us`, `eu`, `uk`, `other`. See [docs/ALPR.md](docs/ALPR.md). |
+| `ALPR_FPS` | no | `2` | Frame-extractor sampling rate, in frames per second. Runtime overrides accepted in `[0.5, 4]`. See [docs/ALPR.md](docs/ALPR.md). |
+| `ALPR_CONFIDENCE_MIN` | no | `0.75` | Minimum OCR confidence to retain a plate read. Runtime overrides accepted in `[0.5, 0.95]`. See [docs/ALPR.md](docs/ALPR.md). |
+| `ALPR_RETENTION_DAYS_UNFLAGGED` | no | `30` | Retention window for plate reads not tied to a flagged event. `0` means never delete (not recommended). See [docs/ALPR.md](docs/ALPR.md). |
+| `ALPR_RETENTION_DAYS_FLAGGED` | no | `365` | Retention window for plate reads tied to a flagged event. `0` means never delete. See [docs/ALPR.md](docs/ALPR.md). |
+| `ALPR_NOTIFY_MIN_SEVERITY` | no | `4` | Minimum alert severity (1..5) that triggers an external notification (email/webhook). See [docs/ALPR.md](docs/ALPR.md). |
 
 **4. Start the backend**
 
@@ -130,12 +139,17 @@ The API server runs on `:8080` and the frontend dev server on `:3000` by default
 
 ## Optional services
 
-**ALPR (license plate recognition)** is opt-in. It runs as a separate
-Docker container (`comma-alpr`) gated by the `alpr` Compose profile, so
-bare `docker compose up` and `make prod-up` do not start it. Bring it up
-with `make alpr-up` only if you accept the privacy and legal trade-offs
-of recording plate text. See [docs/ALPR.md](docs/ALPR.md) for the engine
-sidecar setup, GPU activation, and pin policy.
+**ALPR (license-plate stalking detection)** is **off by default** and
+must be opted into explicitly. It runs as a separate Docker container
+(`comma-alpr`) gated by the `alpr` Compose profile, so bare
+`docker compose up` and `make prod-up` do not start it. Enabling it
+requires three independent steps: setting `ALPR_ENCRYPTION_KEY` in
+`.env`, acknowledging the in-UI disclaimer at Settings -> Optional
+services -> ALPR, and bringing the engine sidecar up with
+`make alpr-up`. **Read [docs/ALPR.md](docs/ALPR.md) before enabling
+this -- it covers the threat model, privacy and legal posture
+(including jurisdictional notes for Illinois, EU, UK, and Canada),
+hardware requirements, the data wipe procedure, and the FAQ.**
 
 ## Pointing your device at this server
 
@@ -244,6 +258,36 @@ Endpoints are grouped by auth mode:
 | GET | `/ws/v2/:dongle_id` | JWT | Persistent device channel (JSON-RPC over WebSocket) |
 
 Supported RPC methods (server-initiated calls to the device): `uploadFileToUrl`, `uploadFilesToUrls`, `getNetworkType`, `getNetworkMetered`, `getNetworks`, `getSimInfo`, `getMessage`, `setNavDestination`, `setParam`, `deleteParam`, `listDataDirectory`, `takeSnapshot`, `listUploadQueue`, `cancelUpload`, `setRouteViewed`, `getVersion`, `getPublicKey`, `getSshAuthorizedKeys`, `getGithubUsername`.
+
+### ALPR (optional)
+
+The ALPR feature is off by default and must be enabled per [docs/ALPR.md](docs/ALPR.md). When the `alpr_enabled` setting is off, mutation paths return `503` and read paths return the off state; when no `ALPR_ENCRYPTION_KEY` is configured the `PUT /v1/settings/alpr` enable path is rejected with `409`. Endpoints currently registered on this branch:
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/v1/settings/alpr` | session-or-JWT | Read effective ALPR settings (merged env defaults + DB overrides), engine reachability, encryption-key configured flag, current disclaimer version (`2026-04-v1`), and whether re-ack is required |
+| PUT | `/v1/settings/alpr` | session | Update runtime overrides (`alpr_enabled`, region, fps, confidence, retention, notify severity). Enabling requires both `ALPR_ENCRYPTION_KEY` set and the current disclaimer acked; `409` otherwise |
+| POST | `/v1/settings/alpr/disclaimer/ack` | session | Acknowledge the current disclaimer (`version` must equal `2026-04-v1`); records the ack timestamp and selected jurisdiction |
+
+#### Planned (not yet implemented)
+
+The following ALPR endpoints are described by the broader ALPR feature
+batch but are not yet present on this branch. They are listed here so the
+table reflects the eventual surface; they will be filled in as their
+implementation features land:
+
+- `GET /v1/routes/:dongle_id/:route_name/turns` -- per-route turn-signal events used by the stalking heuristic
+- `GET /v1/routes/:dongle_id/:route_name/plates` -- per-route plate detections (decrypted server-side)
+- `GET /v1/plates/:hash` -- detail view for a single plate (encounters, alerts)
+- `GET`, `POST /v1/alpr/alerts` -- list and create alert events
+- `POST /v1/alpr/alerts/:hash/ack`, `unack`, `note` -- alert workflow
+- `GET`, `POST`, `DELETE /v1/alpr/whitelist` -- whitelist management
+- `GET /v1/alpr/alerts/summary` -- aggregate counts for the dashboard
+- `PATCH /v1/alpr/detections/:id` -- correct or annotate a detection
+- `POST /v1/alpr/plates/merge` -- merge OCR-near-duplicate plate hashes
+- `GET`, `POST /v1/alpr/backfill/*` -- historical-route backfill control
+- `POST /v1/alpr/heuristic/reevaluate` -- re-score existing encounters
+- `POST /v1/alpr/notify/test` -- send a test notification
 
 ### Health and observability
 | Method | Path | Auth | Description |
