@@ -1,7 +1,7 @@
 {
   "id": "alpr-stalking-heuristic",
   "name": "Stalking detection heuristic + alert generation",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 5,
   "blocked_by": ["alpr-encounter-aggregator", "alpr-turn-detector"],
   "branch": "agent/alpr-stalking-heuristic",
@@ -21,5 +21,5 @@
     "Tests: each component in isolation with hand-crafted ScoringInputs; combined-score boundary cases (2.0, 3.99, 4.0, 6.0, 8.0); whitelist suppression overrides everything; bearing-cell bucketing handles equator/180-deg edge; ack preservation on re-trigger; severity-upgrade clears ack.",
     "Heuristic version constant -- bumping this is a deliberate act and should require a manual code change (do NOT make it a settings value). Document the change process in code comments."
   ],
-  "notes": ""
+  "notes": "Implemented in three commits: pure scoring function with full unit-test coverage of every component and severity boundary; sqlc additions (ListEncountersForPlateInWindowWithStartGPS LATERAL-join query for cell bucketing + UpsertWatchlistAlertedPreserveAck for ack preservation on re-eval) and alpr_heuristic_* settings keys; worker layer wired into cmd/server/workers.go after the aggregator with a small EncountersUpdated bridge so the heuristic package stays decoupled from internal/worker. Heuristic version constant is heuristic.HeuristicVersion (v1.0.0) -- a code-level decision tied to a deploy, not a setting."
 }
