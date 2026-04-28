@@ -146,6 +146,13 @@ export interface CreateShareResponse {
   url: string;
   token: string;
   expires_at: string;
+  /**
+   * Whether the minted token has the plate-redaction flag set. Echoed
+   * back from the server so the modal can render a "plates blurred"
+   * confirmation hint. Read-only at view time -- the flag is signed
+   * into the token, so recipients cannot bypass it client-side.
+   */
+  redact_plates: boolean;
 }
 
 

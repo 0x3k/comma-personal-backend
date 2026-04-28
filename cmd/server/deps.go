@@ -80,6 +80,13 @@ type deps struct {
 	// simultaneous route completions; the aggregator falls back to
 	// dropping the event with a warn when full.
 	alprEncountersUpdated chan worker.EncountersUpdated
+
+	// redactionBuilder is the on-demand worker that renders the
+	// cached qcamera-redacted HLS variant when a redacted-share link
+	// triggers it. Started during workers wiring; the share handler
+	// holds a (RedactionTrigger interface) reference to it so 503 +
+	// Retry-After responses kick off a build.
+	redactionBuilder *worker.RedactionBuilder
 }
 
 // alprClientTimeout is the per-request budget the ALPR client applies on

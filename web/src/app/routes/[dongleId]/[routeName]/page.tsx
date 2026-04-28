@@ -25,6 +25,7 @@ import { ShareButton } from "@/components/ShareButton";
 import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
 import { RouteAnnotations } from "@/components/routes/RouteAnnotations";
 import { FullDataRequestControl } from "@/components/routes/FullDataRequestControl";
+import { ExportMP4Menu } from "@/components/routes/ExportMP4Menu";
 import { formatDurationBetween } from "@/lib/format";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
@@ -225,6 +226,10 @@ export default function RouteDetailPage() {
                     dongleId={route.dongleId}
                     routeName={route.routeName}
                     onComplete={fetchRoute}
+                  />
+                  <ExportMP4Menu
+                    dongleId={route.dongleId}
+                    routeName={route.routeName}
                   />
                   <ShareButton
                     dongleId={route.dongleId}

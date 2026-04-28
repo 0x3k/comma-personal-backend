@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 
 	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/share"
 	"comma-personal-backend/internal/storage"
 )
@@ -631,6 +633,391 @@ func TestIsAllowedHLSFile(t *testing.T) {
 		if got := isAllowedHLSFile(name); got != want {
 			t.Errorf("isAllowedHLSFile(%q) = %v, want %v", name, got, want)
 		}
+	}
+}
+
+// shareRedactMockDB extends the basic shareMockDB with the GetSetting /
+// UpsertSetting / InsertSettingIfMissing routing the settings store
+// performs. We multiplex on the SQL string so a single shareMockDB can
+// stand in for both routes/segments queries AND settings queries.
+type shareRedactMockDB struct {
+	shareMockDB
+	settings map[string]string
+}
+
+func (m *shareRedactMockDB) Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error) {
+	return m.shareMockDB.Query(ctx, sql, args...)
+}
+
+func (m *shareRedactMockDB) QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row {
+	if strings.Contains(sql, "FROM settings") {
+		key, _ := args[0].(string)
+		v, ok := m.settings[key]
+		if !ok {
+			return &mockRouteRow{err: pgx.ErrNoRows}
+		}
+		return &settingsScanRow{value: v}
+	}
+	return m.shareMockDB.QueryRow(ctx, sql, args...)
+}
+
+func (m *shareRedactMockDB) Exec(ctx context.Context, sql string, args ...interface{}) (pgconn.CommandTag, error) {
+	return m.shareMockDB.Exec(ctx, sql, args...)
+}
+
+// settingsScanRow returns a single db.Setting populated from the in-memory
+// map. Mirrors what sqlc-generated GetSetting expects on Scan.
+type settingsScanRow struct {
+	value string
+}
+
+func (r *settingsScanRow) Scan(dest ...interface{}) error {
+	if len(dest) < 3 {
+		return fmt.Errorf("expected 3 scan dests, got %d", len(dest))
+	}
+	if k, ok := dest[0].(*string); ok {
+		*k = "alpr_enabled"
+	}
+	if v, ok := dest[1].(*string); ok {
+		*v = r.value
+	}
+	if ts, ok := dest[2].(*pgtype.Timestamptz); ok {
+		*ts = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	}
+	return nil
+}
+
+// fakeRedactionTrigger records every Trigger call so tests can assert
+// on the queue interaction without spinning a real worker pool.
+type fakeRedactionTrigger struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (f *fakeRedactionTrigger) Trigger(dongleID, route string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, dongleID+"|"+route)
+	return true
+}
+
+func (f *fakeRedactionTrigger) Calls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+func TestShareCreateDefaultsRedactPlatesTrue(t *testing.T) {
+	route := newShareTestRoute(42, "d", "r")
+	mock := &shareMockDB{route: route}
+	queries := db.New(mock)
+	h := NewShareHandler(queries, nil, "secret")
+	frozen := time.Unix(1_700_000_000, 0)
+	h.now = func() time.Time { return frozen }
+
+	// Body omits redact_plates; default must be true.
+	body := strings.NewReader("{}")
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/v1/routes/d/r/share", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id", "route_name")
+	c.SetParamValues("d", "r")
+	c.Set(middleware.ContextKeyAuthMode, middleware.AuthModeSession)
+
+	if err := h.CreateShare(c); err != nil {
+		t.Fatalf("CreateShare: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp createShareResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !resp.RedactPlates {
+		t.Errorf("redact_plates = false, want true (default)")
+	}
+	parsed, err := share.ParseTokenAt([]byte("secret"), resp.Token, frozen)
+	if err != nil {
+		t.Fatalf("ParseTokenAt: %v", err)
+	}
+	if !parsed.RedactPlates {
+		t.Errorf("token redact_plates = false, want true")
+	}
+}
+
+func TestShareCreateExplicitRedactPlatesFalse(t *testing.T) {
+	route := newShareTestRoute(42, "d", "r")
+	mock := &shareMockDB{route: route}
+	queries := db.New(mock)
+	h := NewShareHandler(queries, nil, "secret")
+	frozen := time.Unix(1_700_000_000, 0)
+	h.now = func() time.Time { return frozen }
+
+	body := strings.NewReader(`{"redact_plates": false}`)
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/v1/routes/d/r/share", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("dongle_id", "route_name")
+	c.SetParamValues("d", "r")
+	c.Set(middleware.ContextKeyAuthMode, middleware.AuthModeSession)
+
+	if err := h.CreateShare(c); err != nil {
+		t.Fatalf("CreateShare: %v", err)
+	}
+	var resp createShareResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.RedactPlates {
+		t.Errorf("redact_plates = true, want false (explicit)")
+	}
+	parsed, err := share.ParseTokenAt([]byte("secret"), resp.Token, frozen)
+	if err != nil {
+		t.Fatalf("ParseTokenAt: %v", err)
+	}
+	if parsed.RedactPlates {
+		t.Errorf("token redact_plates = true, want false")
+	}
+}
+
+func TestShareCameraMediaRedactedServesCachedVariant(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Lay down a redacted qcamera variant + the unredacted source so we
+	// can detect which one was served.
+	redactedDir := filepath.Join(tmpDir, "d", "r", "0", "qcamera-redacted")
+	if err := os.MkdirAll(redactedDir, 0o755); err != nil {
+		t.Fatalf("mkdir redacted: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(redactedDir, "index.m3u8"),
+		[]byte("#EXTM3U\nREDACTED\n"), 0o644); err != nil {
+		t.Fatalf("write redacted playlist: %v", err)
+	}
+	plainDir := filepath.Join(tmpDir, "d", "r", "0", "qcamera")
+	if err := os.MkdirAll(plainDir, 0o755); err != nil {
+		t.Fatalf("mkdir plain: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(plainDir, "index.m3u8"),
+		[]byte("#EXTM3U\nUNREDACTED\n"), 0o644); err != nil {
+		t.Fatalf("write plain playlist: %v", err)
+	}
+
+	mock := &shareRedactMockDB{
+		shareMockDB: shareMockDB{route: newShareTestRoute(1, "d", "r")},
+		settings:    map[string]string{"alpr_enabled": "true"},
+	}
+	queries := db.New(mock)
+	store := storage.New(tmpDir)
+	settingsStore := settings.New(queries)
+
+	trigger := &fakeRedactionTrigger{}
+	h := NewShareHandler(queries, store, "secret").
+		WithRedaction(settingsStore, trigger, tmpDir)
+	frozen := time.Unix(1_700_000_000, 0)
+	h.now = func() time.Time { return frozen }
+
+	tok, err := share.SignWithOptions([]byte("secret"), 1, frozen.Add(1*time.Hour),
+		share.Options{RedactPlates: true})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/share/"+tok+"/segments/0/qcamera/index.m3u8", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("token", "segment_num", "camera", "file")
+	c.SetParamValues(tok, "0", "qcamera", "index.m3u8")
+
+	if err := h.GetShareCameraMedia(c); err != nil {
+		t.Fatalf("GetShareCameraMedia: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "REDACTED") {
+		t.Errorf("response should be redacted variant, got %q", rec.Body.String())
+	}
+	if calls := trigger.Calls(); len(calls) != 0 {
+		t.Errorf("trigger should not fire on cache hit; got %v", calls)
+	}
+}
+
+func TestShareCameraMediaRedactedReturns503OnCacheMiss(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Only the unredacted source exists; redacted variant is missing.
+	plainDir := filepath.Join(tmpDir, "d", "r", "0", "qcamera")
+	if err := os.MkdirAll(plainDir, 0o755); err != nil {
+		t.Fatalf("mkdir plain: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(plainDir, "index.m3u8"),
+		[]byte("#EXTM3U\nUNREDACTED\n"), 0o644); err != nil {
+		t.Fatalf("write plain playlist: %v", err)
+	}
+
+	mock := &shareRedactMockDB{
+		shareMockDB: shareMockDB{route: newShareTestRoute(1, "d", "r")},
+		settings:    map[string]string{"alpr_enabled": "true"},
+	}
+	queries := db.New(mock)
+	store := storage.New(tmpDir)
+	settingsStore := settings.New(queries)
+
+	trigger := &fakeRedactionTrigger{}
+	h := NewShareHandler(queries, store, "secret").
+		WithRedaction(settingsStore, trigger, tmpDir)
+	frozen := time.Unix(1_700_000_000, 0)
+	h.now = func() time.Time { return frozen }
+
+	tok, err := share.SignWithOptions([]byte("secret"), 1, frozen.Add(1*time.Hour),
+		share.Options{RedactPlates: true})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/share/"+tok+"/segments/0/qcamera/index.m3u8", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("token", "segment_num", "camera", "file")
+	c.SetParamValues(tok, "0", "qcamera", "index.m3u8")
+
+	if err := h.GetShareCameraMedia(c); err != nil {
+		t.Fatalf("GetShareCameraMedia: %v", err)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") != "30" {
+		t.Errorf("Retry-After = %q, want 30", rec.Header().Get("Retry-After"))
+	}
+	calls := trigger.Calls()
+	if len(calls) != 1 || calls[0] != "d|r" {
+		t.Errorf("trigger calls = %v, want [d|r]", calls)
+	}
+}
+
+func TestShareCameraMediaRedactedServesUnredactedWhenALPRDisabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	plainDir := filepath.Join(tmpDir, "d", "r", "0", "qcamera")
+	if err := os.MkdirAll(plainDir, 0o755); err != nil {
+		t.Fatalf("mkdir plain: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(plainDir, "index.m3u8"),
+		[]byte("#EXTM3U\nUNREDACTED\n"), 0o644); err != nil {
+		t.Fatalf("write plain playlist: %v", err)
+	}
+
+	// alpr_enabled=false (or row missing) -> the redact_plates flag in
+	// the token is treated as a no-op and the unredacted source is
+	// served. The redacted-variant directory does not exist.
+	mock := &shareRedactMockDB{
+		shareMockDB: shareMockDB{route: newShareTestRoute(1, "d", "r")},
+		settings:    map[string]string{"alpr_enabled": "false"},
+	}
+	queries := db.New(mock)
+	store := storage.New(tmpDir)
+	settingsStore := settings.New(queries)
+
+	trigger := &fakeRedactionTrigger{}
+	h := NewShareHandler(queries, store, "secret").
+		WithRedaction(settingsStore, trigger, tmpDir)
+	frozen := time.Unix(1_700_000_000, 0)
+	h.now = func() time.Time { return frozen }
+
+	tok, err := share.SignWithOptions([]byte("secret"), 1, frozen.Add(1*time.Hour),
+		share.Options{RedactPlates: true})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/share/"+tok+"/segments/0/qcamera/index.m3u8", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("token", "segment_num", "camera", "file")
+	c.SetParamValues(tok, "0", "qcamera", "index.m3u8")
+
+	if err := h.GetShareCameraMedia(c); err != nil {
+		t.Fatalf("GetShareCameraMedia: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (alpr off, fallthrough); body=%s",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "UNREDACTED") {
+		t.Errorf("expected unredacted body, got %q", rec.Body.String())
+	}
+	if calls := trigger.Calls(); len(calls) != 0 {
+		t.Errorf("trigger should not fire when ALPR off; got %v", calls)
+	}
+}
+
+func TestShareCameraMediaRedactFalseTokenServesUnredacted(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Both variants exist; redact_plates=false in the token means we
+	// must serve the original even though a cached redacted variant
+	// happens to be on disk.
+	for _, sub := range []string{"qcamera", "qcamera-redacted"} {
+		dir := filepath.Join(tmpDir, "d", "r", "0", sub)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		marker := "UNREDACTED"
+		if sub == "qcamera-redacted" {
+			marker = "REDACTED"
+		}
+		if err := os.WriteFile(filepath.Join(dir, "index.m3u8"),
+			[]byte("#EXTM3U\n"+marker+"\n"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	mock := &shareRedactMockDB{
+		shareMockDB: shareMockDB{route: newShareTestRoute(1, "d", "r")},
+		settings:    map[string]string{"alpr_enabled": "true"},
+	}
+	queries := db.New(mock)
+	store := storage.New(tmpDir)
+	settingsStore := settings.New(queries)
+
+	trigger := &fakeRedactionTrigger{}
+	h := NewShareHandler(queries, store, "secret").
+		WithRedaction(settingsStore, trigger, tmpDir)
+	frozen := time.Unix(1_700_000_000, 0)
+	h.now = func() time.Time { return frozen }
+
+	tok, err := share.SignWithOptions([]byte("secret"), 1, frozen.Add(1*time.Hour),
+		share.Options{RedactPlates: false})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/share/"+tok+"/segments/0/qcamera/index.m3u8", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("token", "segment_num", "camera", "file")
+	c.SetParamValues(tok, "0", "qcamera", "index.m3u8")
+
+	if err := h.GetShareCameraMedia(c); err != nil {
+		t.Fatalf("GetShareCameraMedia: %v", err)
+	}
+	if !strings.Contains(rec.Body.String(), "UNREDACTED") {
+		t.Errorf("expected unredacted variant, got %q", rec.Body.String())
+	}
+	if calls := trigger.Calls(); len(calls) != 0 {
+		t.Errorf("trigger should not fire when token redact=false; got %v", calls)
 	}
 }
 

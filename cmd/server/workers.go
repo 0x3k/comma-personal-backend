@@ -339,4 +339,20 @@ func startWorkers(ctx context.Context, d *deps) {
 	go aggregator.Run(ctx)
 	log.Printf("alpr aggregator started (concurrency=%d, encounter_gap_seconds=%g)",
 		aggregatorConcurrency, encounterGap)
+
+	// Redaction builder: on-demand worker that renders the cached
+	// qcamera-redacted HLS variant for a route the moment a redacted
+	// share-link tries to play it. The builder is constructed in
+	// main.go (so it can be threaded through setupRoutes into the
+	// share handler) and only started here when
+	// REDACTION_BUILDER_ENABLED is true. Setting it to false disables
+	// the worker (and therefore the cache-builder Trigger path) but
+	// leaves the on-disk cache intact -- a previously built variant
+	// keeps serving normally.
+	if envBool("REDACTION_BUILDER_ENABLED", true) && d.redactionBuilder != nil {
+		d.redactionBuilder.Start(ctx)
+		log.Printf("redaction builder started")
+	} else {
+		log.Printf("redaction builder: disabled via REDACTION_BUILDER_ENABLED=false")
+	}
 }
