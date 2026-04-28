@@ -1,10 +1,11 @@
 {
   "id": "alpr-frame-extractor",
   "name": "ALPR frame extractor worker (fcamera -> JPEG frames)",
-  "status": "pending",
+  "status": "complete",
   "priority": 3,
   "blocked_by": ["alpr-engine-service", "alpr-schema"],
-  "branch": "",
+  "branch": "agent/alpr-frame-extractor",
+  "base_branch": "feat/alpr",
   "summary": "Background worker that samples frames from each new fcamera segment at the configured FPS, paired with per-frame millisecond offsets so detections can be correlated with the route's GPS timeline. Producer half of the ALPR pipeline; alpr-detection-worker is the consumer. Triggered by the same segment-finalized signal that the existing transcoder + event-detector workers use -- check internal/worker/event_detector.go and internal/worker/transcoder.go for the exact wire-up pattern.",
   "acceptance_criteria": [
     "New worker file internal/worker/alpr_extractor.go. Started from cmd/server/workers.go, gated on the runtime alpr_enabled flag (not env var).",
@@ -20,5 +21,7 @@
     "Metrics: register Prometheus counters/histograms via internal/metrics: alpr_frames_extracted_total{result=ok|error}, alpr_extractor_segment_seconds (histogram), alpr_extractor_queue_depth (gauge of channel length).",
     "Tests with a small fixture HEVC under internal/worker/testdata/: extract at 2 fps and assert correct frame count + monotonic increasing offsets. Test the idempotency path (second run on same segment is a no-op). Test cancel during extraction (no goroutine leak)."
   ],
-  "notes": ""
+  "notes": "Implemented internal/worker/alpr_extractor.go with poll-based scanner over ListRecentRoutes (mirrors transcoder/event-detector pattern), per-segment processing under a small worker pool, ffmpeg via os/exec with -vf fps=N -f image2pipe -vcodec mjpeg, MJPEG SOI/EOI parsing on stdout, concurrent rate-limited stderr drain, idempotency via alpr_segment_progress.processed_at_extractor, graceful shutdown that closes the output channel. Channel exposed on deps.alprFrames so the future detection worker (next wave) can subscribe. Metrics added: alpr_frames_extracted_total{result}, alpr_extractor_segment_seconds histogram, alpr_extractor_queue_depth gauge. Tests cover fps cadence, idempotency, cancel-with-no-leak, and the JPEG parser. No schema changes; existing sqlc-generated MarkExtractorProcessed/IsExtractorProcessed/ListRecentRoutes used as-is."
 }
+</content>
+</invoke>
