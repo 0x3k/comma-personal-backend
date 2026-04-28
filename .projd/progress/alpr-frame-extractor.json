@@ -1,10 +1,11 @@
 {
   "id": "alpr-frame-extractor",
   "name": "ALPR frame extractor worker (fcamera -> JPEG frames)",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 3,
   "blocked_by": ["alpr-engine-service", "alpr-schema"],
-  "branch": "",
+  "branch": "agent/alpr-frame-extractor",
+  "base_branch": "feat/alpr",
   "summary": "Background worker that samples frames from each new fcamera segment at the configured FPS, paired with per-frame millisecond offsets so detections can be correlated with the route's GPS timeline. Producer half of the ALPR pipeline; alpr-detection-worker is the consumer. Triggered by the same segment-finalized signal that the existing transcoder + event-detector workers use -- check internal/worker/event_detector.go and internal/worker/transcoder.go for the exact wire-up pattern.",
   "acceptance_criteria": [
     "New worker file internal/worker/alpr_extractor.go. Started from cmd/server/workers.go, gated on the runtime alpr_enabled flag (not env var).",
@@ -22,3 +23,5 @@
   ],
   "notes": ""
 }
+</content>
+</invoke>
