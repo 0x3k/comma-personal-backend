@@ -15,7 +15,7 @@ INSERT INTO plate_watchlist (
     notes
 )
 VALUES ($1, $2, 'alerted', $3, sqlc.arg('alert_at'), sqlc.arg('alert_at'), $4)
-ON CONFLICT (plate_hash) DO UPDATE
+ON CONFLICT (plate_hash) WHERE plate_hash IS NOT NULL DO UPDATE
 SET kind             = 'alerted',
     severity         = EXCLUDED.severity,
     label_ciphertext = COALESCE(EXCLUDED.label_ciphertext,
@@ -63,7 +63,7 @@ INSERT INTO plate_watchlist (
     notes
 )
 VALUES ($1, $2, 'alerted', $3, sqlc.arg('alert_at'), sqlc.arg('alert_at'), $4)
-ON CONFLICT (plate_hash) DO UPDATE
+ON CONFLICT (plate_hash) WHERE plate_hash IS NOT NULL DO UPDATE
 SET kind             = 'alerted',
     severity         = GREATEST(COALESCE(plate_watchlist.severity, 0::SMALLINT),
                                  EXCLUDED.severity),
@@ -93,7 +93,7 @@ INSERT INTO plate_watchlist (
     notes
 )
 VALUES ($1, $2, 'whitelist', $3)
-ON CONFLICT (plate_hash) DO UPDATE
+ON CONFLICT (plate_hash) WHERE plate_hash IS NOT NULL DO UPDATE
 SET kind             = 'whitelist',
     label_ciphertext = COALESCE(EXCLUDED.label_ciphertext,
                                 plate_watchlist.label_ciphertext),

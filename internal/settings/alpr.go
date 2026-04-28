@@ -147,6 +147,53 @@ const (
 	// KeyALPRHeuristicTimingPoints is the points awarded when the
 	// timing window threshold is met. Default 1.0.
 	KeyALPRHeuristicTimingPoints = "alpr_heuristic_timing_points"
+
+	// --- Signature-fusion layer (alpr-signature-fusion-heuristic).
+	//
+	// The fusion-layer keys live behind the alpr_signature_* prefix
+	// so they are visually distinct from the stalking-heuristic
+	// alpr_heuristic_* keys. Operators tune the two layers
+	// independently; a misconfigured fusion knob never bleeds into
+	// stalking severity.
+
+	// KeyALPRSignatureConsistencyShareMin is the minimum share of a
+	// plate's signature-bearing detections that must agree on a
+	// single signature for the signature_consistent component to
+	// fire (and contribute the corroboration severity bump).
+	// Default 0.80.
+	KeyALPRSignatureConsistencyShareMin = "alpr_signature_consistency_share_min"
+
+	// KeyALPRSignatureConsistencyPoints is the severity bump
+	// applied when the consistency threshold is met. Default 0.5.
+	KeyALPRSignatureConsistencyPoints = "alpr_signature_consistency_points"
+
+	// KeyALPRSignatureConflictShareMin is the minimum share each
+	// distinct signature must hold for the signature_inconsistent
+	// component to fire. Default 0.20.
+	KeyALPRSignatureConflictShareMin = "alpr_signature_conflict_share_min"
+
+	// KeyALPRSignatureConflictMinSignatures is the minimum number
+	// of distinct signatures (each above the share threshold)
+	// required for signature_inconsistent. Default 2.
+	KeyALPRSignatureConflictMinSignatures = "alpr_signature_conflict_min_signatures"
+
+	// KeyALPRSignatureSwapMinPlates is the minimum number of
+	// distinct plate hashes a single signature must show inside one
+	// area cell for the plate-swap alert to fire. Default 3.
+	KeyALPRSignatureSwapMinPlates = "alpr_signature_swap_min_plates"
+
+	// KeyALPRSignatureSwapAreaCellKm is the side length (in km) of
+	// the area cell used by plate-swap detection. Default 5.0.
+	KeyALPRSignatureSwapAreaCellKm = "alpr_signature_swap_area_cell_km"
+
+	// KeyALPRSignatureSwapLookbackDays is the encounter-history
+	// window (in days) the fusion layer scans for plate-swap
+	// detection. Default 14.
+	KeyALPRSignatureSwapLookbackDays = "alpr_signature_swap_lookback_days"
+
+	// KeyALPRSignatureSwapSeverity is the severity assigned to a
+	// fresh signature-keyed plate-swap alert. Default 4.
+	KeyALPRSignatureSwapSeverity = "alpr_signature_swap_severity"
 )
 
 // GetBool returns the boolean value for the given key. Stored values are
