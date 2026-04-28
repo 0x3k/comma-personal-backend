@@ -2,24 +2,33 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
+	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/config"
+	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/settings"
 )
 
 // ALPRDisclaimerCurrentVersion is the disclaimer revision the operator must
-// have acknowledged before ALPR can be enabled. The alpr-disclaimer-gate
-// feature owns the actual ack flow; until that lands, this value is the
-// constant returned by GET and the precondition checked by PUT (which means
-// enable=true will fail with missing_prerequisites: ["disclaimer"] until
-// the gate feature is implemented -- intentionally).
-const ALPRDisclaimerCurrentVersion = "1.0"
+// have acknowledged before ALPR can be enabled. Bumping this value (in
+// response to a material legal text change) re-prompts every operator on
+// their next enable: the prior ack is preserved as an audit trail but does
+// not satisfy the gate at the new version.
+//
+// This is a package-level var rather than a const so tests can simulate a
+// version bump without rebuilding the binary; production code must never
+// mutate it.
+var ALPRDisclaimerCurrentVersion = "2026-04-v1"
 
 // alprEngineReachabilityTTL is how long a /health probe result is cached
 // before the next call re-probes. The status endpoint is cheap enough that
@@ -91,20 +100,31 @@ func (e *engineReachability) Check(ctx context.Context) bool {
 	return e.reachOK
 }
 
-// ALPRSettingsHandler exposes GET/PUT /v1/settings/alpr. It bridges the
-// deployment-time ALPRConfig (env vars) with the runtime overrides stored
-// in the settings table, and returns a status response that includes
-// derived fields (encryption_key_configured, engine_reachable, disclaimer
-// state).
+// alprAuditQuerier is the slice of *db.Queries this handler needs in order
+// to write to alpr_audit_log. Extracted as an interface so tests can pass
+// a small in-memory fake instead of standing up Postgres.
+type alprAuditQuerier interface {
+	InsertAudit(ctx context.Context, arg db.InsertAuditParams) (db.AlprAuditLog, error)
+}
+
+// ALPRSettingsHandler exposes GET/PUT /v1/settings/alpr and POST
+// /v1/settings/alpr/disclaimer/ack. It bridges the deployment-time
+// ALPRConfig (env vars) with the runtime overrides stored in the settings
+// table, and returns a status response that includes derived fields
+// (encryption_key_configured, engine_reachable, disclaimer state).
 type ALPRSettingsHandler struct {
 	store *settings.Store
 	cfg   *config.ALPRConfig
 	probe *engineReachability
+	audit alprAuditQuerier
 }
 
 // NewALPRSettingsHandler wires the given settings.Store with the ALPRConfig
 // loaded from env. cfg may be nil in tests that do not need an engine probe.
-func NewALPRSettingsHandler(store *settings.Store, cfg *config.ALPRConfig) *ALPRSettingsHandler {
+// audit may be nil in tests that do not exercise the audit log; the
+// disclaimer ack handler tolerates a nil audit by skipping the audit-log
+// writes (and logging a warning) rather than failing the user request.
+func NewALPRSettingsHandler(store *settings.Store, cfg *config.ALPRConfig, audit alprAuditQuerier) *ALPRSettingsHandler {
 	engineURL := ""
 	if cfg != nil {
 		engineURL = cfg.EngineURL
@@ -113,28 +133,31 @@ func NewALPRSettingsHandler(store *settings.Store, cfg *config.ALPRConfig) *ALPR
 		store: store,
 		cfg:   cfg,
 		probe: newEngineReachability(engineURL),
+		audit: audit,
 	}
 }
 
 // alprSettingsResponse is the JSON body returned from GET /v1/settings/alpr.
 //
-// disclaimer_acked_at is a *string so a missing ack serializes as JSON null
-// rather than an empty string. The encryption key is intentionally never
-// exposed -- only the boolean encryption_key_configured.
+// disclaimer_acked_at and disclaimer_acked_jurisdiction are *string so a
+// missing ack serializes as JSON null rather than an empty string. The
+// encryption key is intentionally never exposed -- only the boolean
+// encryption_key_configured.
 type alprSettingsResponse struct {
-	Enabled                 bool    `json:"enabled"`
-	EngineURL               string  `json:"engine_url"`
-	Region                  string  `json:"region"`
-	FramesPerSecond         float64 `json:"frames_per_second"`
-	ConfidenceMin           float64 `json:"confidence_min"`
-	RetentionDaysUnflagged  int     `json:"retention_days_unflagged"`
-	RetentionDaysFlagged    int     `json:"retention_days_flagged"`
-	NotifyMinSeverity       int     `json:"notify_min_severity"`
-	EncryptionKeyConfigured bool    `json:"encryption_key_configured"`
-	EngineReachable         bool    `json:"engine_reachable"`
-	DisclaimerRequired      bool    `json:"disclaimer_required"`
-	DisclaimerVersion       string  `json:"disclaimer_version"`
-	DisclaimerAckedAt       *string `json:"disclaimer_acked_at"`
+	Enabled                     bool    `json:"enabled"`
+	EngineURL                   string  `json:"engine_url"`
+	Region                      string  `json:"region"`
+	FramesPerSecond             float64 `json:"frames_per_second"`
+	ConfidenceMin               float64 `json:"confidence_min"`
+	RetentionDaysUnflagged      int     `json:"retention_days_unflagged"`
+	RetentionDaysFlagged        int     `json:"retention_days_flagged"`
+	NotifyMinSeverity           int     `json:"notify_min_severity"`
+	EncryptionKeyConfigured     bool    `json:"encryption_key_configured"`
+	EngineReachable             bool    `json:"engine_reachable"`
+	DisclaimerRequired          bool    `json:"disclaimer_required"`
+	DisclaimerVersion           string  `json:"disclaimer_version"`
+	DisclaimerAckedAt           *string `json:"disclaimer_acked_at"`
+	DisclaimerAckedJurisdiction *string `json:"disclaimer_acked_jurisdiction"`
 }
 
 // alprSettingsRequest is the JSON body accepted by PUT /v1/settings/alpr.
@@ -154,10 +177,17 @@ type alprSettingsRequest struct {
 // preconditionResponse is the body returned for 412 Precondition Failed
 // when an enable=true call is missing prerequisites. The list is stable
 // for clients to map to UI hints (e.g. "Configure key before enabling").
+//
+// CurrentVersion is always set when "disclaimer" is in the missing list so
+// the frontend can immediately re-prompt the operator with the right ack
+// payload after a server-side version bump. The Error string is set to
+// "alpr_disclaimer_required" when disclaimer is the (or a) missing
+// prerequisite so the UI can branch on it without inspecting the list.
 type preconditionResponse struct {
 	Error                string   `json:"error"`
 	Code                 int      `json:"code"`
 	MissingPrerequisites []string `json:"missing_prerequisites"`
+	CurrentVersion       string   `json:"current_version,omitempty"`
 }
 
 // validRegions is the closed set of region values accepted by both env and
@@ -181,8 +211,10 @@ func (h *ALPRSettingsHandler) effectiveSettings(ctx context.Context) (alprSettin
 	resp := alprSettingsResponse{
 		EngineURL:               cfg.EngineURL,
 		EncryptionKeyConfigured: cfg.EncryptionKeyConfigured(),
-		DisclaimerRequired:      true,
-		DisclaimerVersion:       ALPRDisclaimerCurrentVersion,
+		// DisclaimerRequired is recomputed below once we know whether the
+		// stored ack matches CurrentDisclaimerVersion.
+		DisclaimerRequired: true,
+		DisclaimerVersion:  ALPRDisclaimerCurrentVersion,
 	}
 
 	enabled, err := h.store.BoolOr(ctx, settings.KeyALPREnabled, false)
@@ -231,10 +263,25 @@ func (h *ALPRSettingsHandler) effectiveSettings(ctx context.Context) (alprSettin
 	if err != nil {
 		return resp, err
 	}
+	storedVersion, err := h.store.StringOr(ctx, settings.KeyALPRDisclaimerVersion, "")
+	if err != nil {
+		return resp, err
+	}
 	if ok {
 		s := ackedAt.UTC().Format(time.RFC3339)
 		resp.DisclaimerAckedAt = &s
 	}
+	jurisdiction, err := h.store.StringOr(ctx, settings.KeyALPRDisclaimerAckedJurisdiction, "")
+	if err != nil {
+		return resp, err
+	}
+	if jurisdiction != "" {
+		j := jurisdiction
+		resp.DisclaimerAckedJurisdiction = &j
+	}
+	// disclaimer_required is true when the operator has either never
+	// acknowledged at all, or acknowledged a prior version (post-bump).
+	resp.DisclaimerRequired = !ok || storedVersion != ALPRDisclaimerCurrentVersion
 
 	return resp, nil
 }
@@ -328,11 +375,20 @@ func (h *ALPRSettingsHandler) SetALPR(c echo.Context) error {
 			})
 		}
 		if len(missing) > 0 {
-			return c.JSON(http.StatusPreconditionFailed, preconditionResponse{
+			resp := preconditionResponse{
 				Error:                "alpr cannot be enabled until prerequisites are satisfied",
 				Code:                 http.StatusPreconditionFailed,
 				MissingPrerequisites: missing,
-			})
+			}
+			// When disclaimer is among the missing prereqs, surface the
+			// disclaimer-specific error string and the current version so
+			// the frontend can immediately re-prompt the operator without
+			// a separate GET round-trip.
+			if slices.Contains(missing, "disclaimer") {
+				resp.Error = "alpr_disclaimer_required"
+				resp.CurrentVersion = ALPRDisclaimerCurrentVersion
+			}
+			return c.JSON(http.StatusPreconditionFailed, resp)
 		}
 	}
 
@@ -452,7 +508,188 @@ func (h *ALPRSettingsHandler) RegisterReadRoutes(g *echo.Group) {
 
 // RegisterMutationRoutes wires up the ALPR settings mutation endpoint. The
 // group must require an operator session cookie -- a device JWT must never
-// be able to flip enable on or off.
+// be able to flip enable on or off, nor record a disclaimer ack on the
+// operator's behalf.
 func (h *ALPRSettingsHandler) RegisterMutationRoutes(g *echo.Group) {
 	g.PUT("/settings/alpr", h.SetALPR)
+	g.POST("/settings/alpr/disclaimer/ack", h.AckDisclaimer)
+}
+
+// validJurisdictions is the closed set accepted by the disclaimer ack
+// endpoint. The set is wider than ALPRRegion (us|eu|uk|other) because the
+// jurisdiction is a self-declaration of the operator's legal context for
+// audit purposes -- Canada and Australia have meaningfully different
+// privacy regimes and we want them recorded distinctly even though the
+// detector currently has no AU/CA model.
+var validJurisdictions = map[string]struct{}{
+	"us":    {},
+	"eu":    {},
+	"uk":    {},
+	"ca":    {},
+	"au":    {},
+	"other": {},
+}
+
+// disclaimerAckRequest is the body accepted by POST
+// /v1/settings/alpr/disclaimer/ack. version must equal
+// ALPRDisclaimerCurrentVersion or the request fails with 409 Conflict.
+type disclaimerAckRequest struct {
+	Jurisdiction string `json:"jurisdiction"`
+	Version      string `json:"version"`
+}
+
+// disclaimerAckResponse is the body returned on a successful ack. It
+// echoes the persisted state so the frontend can stop polling GET
+// immediately after the POST resolves.
+type disclaimerAckResponse struct {
+	Version      string `json:"version"`
+	AckedAt      string `json:"acked_at"`
+	Jurisdiction string `json:"jurisdiction"`
+}
+
+// disclaimerVersionMismatchResponse is the 409 body returned when the
+// client's posted version does not match the server's current version.
+// The current_version field lets the frontend immediately re-fetch the
+// matching disclaimer text without an extra GET.
+type disclaimerVersionMismatchResponse struct {
+	Error          string `json:"error"`
+	Code           int    `json:"code"`
+	CurrentVersion string `json:"current_version"`
+}
+
+// AckDisclaimer handles POST /v1/settings/alpr/disclaimer/ack. The endpoint
+// records that the operator has acknowledged the current disclaimer
+// version, capturing the declared jurisdiction. If the operator had a
+// prior ack for a different version, a 'disclaimer_ack_superseded' audit
+// row is written before the new ack so the audit trail preserves both the
+// old and new state. A successful ack always emits an 'alpr_disclaimer_ack'
+// audit row.
+//
+// The handler is session-only -- a device JWT must never satisfy the
+// operator's legal acknowledgement on their behalf.
+func (h *ALPRSettingsHandler) AckDisclaimer(c echo.Context) error {
+	var req disclaimerAckRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "failed to parse request body",
+			Code:  http.StatusBadRequest,
+		})
+	}
+
+	if _, ok := validJurisdictions[req.Jurisdiction]; !ok {
+		return c.JSON(http.StatusBadRequest, errorResponse{
+			Error: "jurisdiction must be one of us|eu|uk|ca|au|other",
+			Code:  http.StatusBadRequest,
+		})
+	}
+
+	if req.Version != ALPRDisclaimerCurrentVersion {
+		return c.JSON(http.StatusConflict, disclaimerVersionMismatchResponse{
+			Error:          "disclaimer_version_mismatch",
+			Code:           http.StatusConflict,
+			CurrentVersion: ALPRDisclaimerCurrentVersion,
+		})
+	}
+
+	ctx := c.Request().Context()
+
+	// Detect a superseded ack BEFORE we overwrite the row, so the audit
+	// trail captures the prior version transparently. An empty/missing
+	// stored version means there was no prior ack -- skip the supersede
+	// row in that case (it would be misleading noise).
+	priorVersion, err := h.store.StringOr(ctx, settings.KeyALPRDisclaimerVersion, "")
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errorResponse{
+			Error: "failed to read prior disclaimer version",
+			Code:  http.StatusInternalServerError,
+		})
+	}
+	priorAckedAt, priorAckedOK, err := h.store.TimeOrZero(ctx, settings.KeyALPRDisclaimerAckedAt)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errorResponse{
+			Error: "failed to read prior disclaimer ack",
+			Code:  http.StatusInternalServerError,
+		})
+	}
+	priorJurisdiction, err := h.store.StringOr(ctx, settings.KeyALPRDisclaimerAckedJurisdiction, "")
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errorResponse{
+			Error: "failed to read prior disclaimer jurisdiction",
+			Code:  http.StatusInternalServerError,
+		})
+	}
+	if priorAckedOK && priorVersion != "" && priorVersion != ALPRDisclaimerCurrentVersion {
+		h.writeAudit(ctx, c, "disclaimer_ack_superseded", map[string]any{
+			"prior_version":      priorVersion,
+			"prior_acked_at":     priorAckedAt.UTC().Format(time.RFC3339),
+			"prior_jurisdiction": priorJurisdiction,
+			"new_version":        ALPRDisclaimerCurrentVersion,
+		})
+	}
+
+	now := time.Now().UTC()
+	ackedAtStr := now.Format(time.RFC3339)
+
+	if err := h.store.Set(ctx, settings.KeyALPRDisclaimerVersion, ALPRDisclaimerCurrentVersion); err != nil {
+		return h.dbError(c, err)
+	}
+	if err := h.store.Set(ctx, settings.KeyALPRDisclaimerAckedAt, ackedAtStr); err != nil {
+		return h.dbError(c, err)
+	}
+	if err := h.store.Set(ctx, settings.KeyALPRDisclaimerAckedJurisdiction, req.Jurisdiction); err != nil {
+		return h.dbError(c, err)
+	}
+
+	h.writeAudit(ctx, c, "alpr_disclaimer_ack", map[string]any{
+		"jurisdiction": req.Jurisdiction,
+		"version":      ALPRDisclaimerCurrentVersion,
+	})
+
+	return c.JSON(http.StatusOK, disclaimerAckResponse{
+		Version:      ALPRDisclaimerCurrentVersion,
+		AckedAt:      ackedAtStr,
+		Jurisdiction: req.Jurisdiction,
+	})
+}
+
+// writeAudit emits a single alpr_audit_log row with the given action and
+// payload. Failures are logged via the Echo logger but do NOT fail the
+// caller's request -- the audit log is observability, not a hard
+// invariant, and dropping a row is preferable to refusing a legitimate
+// disclaimer ack because of a transient DB issue. A nil h.audit is
+// tolerated for tests that do not exercise the audit path.
+func (h *ALPRSettingsHandler) writeAudit(ctx context.Context, c echo.Context, action string, payload map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		c.Logger().Errorf("alpr audit payload marshal failed: %v", err)
+		return
+	}
+	if _, err := h.audit.InsertAudit(ctx, db.InsertAuditParams{
+		Action:  action,
+		Actor:   actorFromContext(c),
+		Payload: body,
+	}); err != nil {
+		c.Logger().Errorf("alpr audit insert failed (action=%s): %v", action, err)
+	}
+}
+
+// actorFromContext records who performed the action. Mirrors
+// requesterFromContext in route_data_request.go: session callers are
+// stamped "user:<id>" (the username is not in the Echo context); a missing
+// user id yields a NULL actor. This handler is session-only so a JWT
+// caller is never expected here, but if one slipped through we still want
+// the audit row to be NULL rather than misleadingly attributed.
+func actorFromContext(c echo.Context) pgtype.Text {
+	mode, _ := c.Get(middleware.ContextKeyAuthMode).(string)
+	if mode != middleware.AuthModeSession {
+		return pgtype.Text{}
+	}
+	userID, ok := c.Get(middleware.ContextKeyUserID).(int32)
+	if !ok || userID == 0 {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: fmt.Sprintf("user:%d", userID), Valid: true}
 }
