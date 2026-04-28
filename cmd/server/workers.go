@@ -295,6 +295,51 @@ func startWorkers(ctx context.Context, d *deps) {
 	log.Printf("alpr detector started (concurrency=%d, detect_timeout=%s, confidence_min=%g, keyring_configured=%v)",
 		detectorConcurrency, detectTimeout, defaultConfMin, keyringConfigured)
 
+	// ALPR encounter aggregator: consumes RouteAlprDetectionsComplete
+	// events and collapses per-frame detections into per-encounter
+	// rows. Started AFTER the detector so d.alprDetectionsComplete is
+	// already constructed. The aggregator self-gates on alpr_enabled
+	// so disabling ALPR mid-flight does not aggregate stale data, and
+	// the worker pipeline as a whole stays decoupled from the
+	// runtime flag.
+	//
+	// Concurrency precedence: explicit env var > default 1. The
+	// "process at most one route at a time" acceptance criterion is
+	// the sane default; users with parallel routes from a fleet of
+	// devices can raise ALPR_AGGREGATOR_CONCURRENCY.
+	//
+	// Channel sizing rationale: the encounters-updated channel is
+	// buffered to 64 so a slow stalking-heuristic consumer (next
+	// wave) does not stall the aggregator. The aggregator's drop-on-
+	// full path is a soft fallback (the heuristic's own periodic
+	// scan, when it lands, will pick up missed events).
+	aggregatorConcurrency := envInt("ALPR_AGGREGATOR_CONCURRENCY", worker.DefaultALPRAggregatorConcurrency)
+
+	encounterGap := envFloat("ENCOUNTER_GAP_SECONDS", worker.DefaultALPREncounterGapSeconds)
+	if d.settings != nil {
+		seedCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := d.settings.SeedFloatIfMissing(seedCtx, settings.KeyALPREncounterGapSeconds, encounterGap); err != nil {
+			log.Printf("warning: seed alpr_encounter_gap_seconds: %v", err)
+		}
+		cancel()
+	}
+
+	d.alprEncountersUpdated = make(chan worker.EncountersUpdated, 64)
+
+	aggregator := worker.NewALPRAggregator(
+		d.alprDetectionsComplete,
+		worker.WrapPgxQueriesForAggregator(d.queries),
+		d.pool,
+		d.settings,
+		d.metrics,
+		d.alprEncountersUpdated,
+	)
+	aggregator.Concurrency = aggregatorConcurrency
+	aggregator.DefaultEncounterGapSeconds = encounterGap
+	go aggregator.Run(ctx)
+	log.Printf("alpr aggregator started (concurrency=%d, encounter_gap_seconds=%g)",
+		aggregatorConcurrency, encounterGap)
+
 	// Redaction builder: on-demand worker that renders the cached
 	// qcamera-redacted HLS variant for a route the moment a redacted
 	// share-link tries to play it. The builder is constructed in

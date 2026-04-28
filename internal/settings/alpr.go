@@ -59,6 +59,14 @@ const (
 	// time of the ack -- it does NOT change the ALPR pipeline's region
 	// selection (that is KeyALPRRegion).
 	KeyALPRDisclaimerAckedJurisdiction = "alpr_disclaimer_acked_jurisdiction"
+
+	// KeyALPREncounterGapSeconds is the maximum allowed gap (in seconds)
+	// between consecutive plate detections within a single encounter. A
+	// gap longer than this value starts a new encounter. Default 60s.
+	// Bounded to a positive value at the API layer; the worker also
+	// clamps to a sensible minimum so a misconfigured zero cannot collapse
+	// every detection into one encounter.
+	KeyALPREncounterGapSeconds = "alpr_encounter_gap_seconds"
 )
 
 // GetBool returns the boolean value for the given key. Stored values are

@@ -156,7 +156,7 @@ const listDetectionsForRoute = `-- name: ListDetectionsForRoute :many
 SELECT id, dongle_id, route, segment, frame_offset_ms,
        plate_ciphertext, plate_hash, bbox, confidence, ocr_corrected,
        gps_lat, gps_lng, gps_heading_deg, frame_ts, thumb_path,
-       created_at
+       created_at, signature_id
 FROM plate_detections
 WHERE dongle_id = $1 AND route = $2
 ORDER BY frame_ts ASC, id ASC
@@ -184,10 +184,13 @@ type ListDetectionsForRouteRow struct {
 	FrameTs         pgtype.Timestamptz `json:"frameTs"`
 	ThumbPath       pgtype.Text        `json:"thumbPath"`
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	SignatureID     pgtype.Int8        `json:"signatureId"`
 }
 
 // All detections for a single route, in chronological order. Used by the
-// encounter aggregator and the per-route review UI.
+// encounter aggregator and the per-route review UI. signature_id is
+// included so the aggregator can compute the mode signature per
+// encounter without a second query.
 func (q *Queries) ListDetectionsForRoute(ctx context.Context, arg ListDetectionsForRouteParams) ([]ListDetectionsForRouteRow, error) {
 	rows, err := q.db.Query(ctx, listDetectionsForRoute, arg.DongleID, arg.Route)
 	if err != nil {
@@ -214,6 +217,7 @@ func (q *Queries) ListDetectionsForRoute(ctx context.Context, arg ListDetections
 			&i.FrameTs,
 			&i.ThumbPath,
 			&i.CreatedAt,
+			&i.SignatureID,
 		); err != nil {
 			return nil, err
 		}
