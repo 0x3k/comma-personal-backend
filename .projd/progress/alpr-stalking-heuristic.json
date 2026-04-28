@@ -1,10 +1,11 @@
 {
   "id": "alpr-stalking-heuristic",
   "name": "Stalking detection heuristic + alert generation",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 5,
   "blocked_by": ["alpr-encounter-aggregator", "alpr-turn-detector"],
-  "branch": "",
+  "branch": "agent/alpr-stalking-heuristic",
+  "base_branch": "feat/alpr",
   "summary": "The brain of the feature. Scores each plate's behavior across one route and across history (configurable lookback window), raises alerts when scores cross thresholds, and writes them to plate_watchlist with severity. Each alert is backed by a plate_alert_events row with the component breakdown so the UI can show the user WHY the alert fired -- transparency is critical for a feature that nudges someone toward 'someone might be following me.' Heuristic is deliberately separate from the aggregator so the rule set can evolve without re-running detection.",
   "acceptance_criteria": [
     "New package internal/alpr/heuristic with a pure scoring function Score(input ScoringInput) (Result) -- no DB/IO -- and a Run(ctx, deps, dongle, plate_hash) worker hook that loads the input, calls Score, and writes results.",
