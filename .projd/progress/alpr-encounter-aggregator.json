@@ -1,7 +1,7 @@
 {
   "id": "alpr-encounter-aggregator",
   "name": "Group raw detections into per-route encounters",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 4,
   "blocked_by": ["alpr-detection-worker"],
   "branch": "agent/alpr-encounter-aggregator",
@@ -19,5 +19,5 @@
     "Metrics: alpr_encounters_total, alpr_encounter_compute_seconds histogram, alpr_encounters_per_route histogram.",
     "Tests: detection sequences crafted to exercise -- single encounter (no gap), two encounters split by 90s gap, plate seen across many turns, signature mode tie-breaker (two signatures at equal counts -> deterministic pick by signature_id ascending), idempotent re-run produces identical state."
   ],
-  "notes": ""
+  "notes": "Implemented in internal/worker/alpr_aggregator.go. Wired in cmd/server/workers.go after the detector. Adds settings key alpr_encounter_gap_seconds, env ENCOUNTER_GAP_SECONDS (default 60s), env ALPR_AGGREGATOR_CONCURRENCY (default 1). Adds three Prometheus collectors. ListDetectionsForRoute SQL now also selects signature_id (regenerated via sqlc). Emits EncountersUpdated{DongleID, Route, PlateHashesAffected} on a new buffered channel deps.alprEncountersUpdated for the next-wave alpr-stalking-heuristic. Race with turn-detector resolved via documented 0-fallback (CountTurnsInWindow returns 0 when route_turns is unpopulated; future re-aggregation pass picks up updated turns). 14 unit tests pass; smoke.sh Go gates (vet, fmt, alpr-schema) pass; web lint/typecheck unrelated to this change (no node_modules in worktree)."
 }
