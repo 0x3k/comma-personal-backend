@@ -1,10 +1,11 @@
 {
   "id": "alpr-engine-service",
   "name": "ALPR engine sidecar (Docker) + Makefile targets + Go client",
-  "status": "pending",
+  "status": "complete",
   "priority": 2,
   "blocked_by": ["alpr-engine-spike"],
-  "branch": "",
+  "branch": "agent/alpr-engine-service",
+  "base_branch": "feat/alpr",
   "summary": "Containerized ALPR engine running as a separate Docker service under a 'profiles: [alpr]' guard so it never starts unless the user explicitly opts in. The Go backend is a pure HTTP client of the engine -- image bytes in, plate detections out. This feature also ships the Makefile targets that make enabling ALPR a single command (make alpr-up) and matches the existing 'as simple as the postgres container' deployment pattern. The engine choice (FastALPR / OpenALPR-OSS / DIY) was decided in alpr-engine-spike; follow that decision document.",
   "acceptance_criteria": [
     "New directory docker/alpr/ containing: Dockerfile for the chosen engine (CPU-friendly default; document GPU variant in docs/ALPR.md), an entrypoint script if the engine doesn't ship one, a small wrapper service exposing the HTTP API below if the chosen engine doesn't expose one natively. The Dockerfile pins all model files and Python deps to specific versions so the build is reproducible.",
@@ -20,5 +21,5 @@
     "Tests for internal/alpr.Client: mock HTTP server returns canned responses for /health and /v1/detect; verify success path, timeout, unreachable, malformed JSON each map to the right typed error.",
     "Image tag conventions: tag locally-built images as `comma-alpr:dev` and `comma-alpr:<git-short-sha>`; document in docs/ALPR.md so users can pin versions."
   ],
-  "notes": ""
+  "notes": "Implemented on agent/alpr-engine-service against feat/alpr. docker/alpr/ ships a uv-managed FastAPI wrapper around fast-alpr (pinned: fast-alpr 0.1.5, onnxruntime 1.20.1, model identifiers exposed as ARG/ENV per docs/ALPR.md). docker-compose.yml gains the `alpr` profile (no host port published in prod, commented-out 8081 mapping for dev, healthcheck against /health every 30s, GPU device_requests stanza commented with a pointer to docs/ALPR.md). Makefile gains alpr-up/down/build/logs/pull, all listed by `make help`. internal/alpr.Client exposes Detect / Health with typed sentinel errors (ErrEngineUnreachable, ErrEngineTimeout, ErrEngineBadResponse); rate-limited warn log on unreachable. cmd/server/deps.go gains a lazy ALPRClient() accessor so toggling alpr_enabled at runtime does not require a restart. 12 unit tests pass (success / timeout / context-deadline / unreachable / 4xx / 5xx / malformed-json / empty-frame / construction defaults). docs/ALPR.md is a stub per the brief; the full operator doc is owned by alpr-docs. Docker engine end-to-end (`make alpr-build`) was NOT exercised in this worktree -- the wrapper compose config + Dockerfile are syntax-validated via `docker compose --profile alpr config` only."
 }

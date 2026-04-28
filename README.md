@@ -128,6 +128,15 @@ pnpm --dir web dev
 
 The API server runs on `:8080` and the frontend dev server on `:3000` by default.
 
+## Optional services
+
+**ALPR (license plate recognition)** is opt-in. It runs as a separate
+Docker container (`comma-alpr`) gated by the `alpr` Compose profile, so
+bare `docker compose up` and `make prod-up` do not start it. Bring it up
+with `make alpr-up` only if you accept the privacy and legal trade-offs
+of recording plate text. See [docs/ALPR.md](docs/ALPR.md) for the engine
+sidecar setup, GPU activation, and pin policy.
+
 ## Pointing your device at this server
 
 Set two environment variables on your comma device before openpilot starts:
