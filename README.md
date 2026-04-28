@@ -270,6 +270,14 @@ The ALPR feature is off by default and must be enabled per [docs/ALPR.md](docs/A
 | POST | `/v1/settings/alpr/disclaimer/ack` | session | Acknowledge the current disclaimer (`version` must equal `2026-04-v1`); records the ack timestamp and selected jurisdiction |
 | GET | `/v1/routes/:dongle_id/:route_name/plates` | session-or-JWT | Per-route plate encounters (decrypted server-side). Returns `503 alpr_disabled` when `alpr_enabled=false` so the frontend can render a "feature disabled" state. Includes per-encounter signature, watchlist (severity / ack) state, first-bbox, and a `sample_thumb_url` placeholder pointing at `/v1/alpr/detections/:id/thumbnail` (handler is a follow-up; the path is stable) |
 | GET | `/v1/plates/:hash_b64` | session | Cross-route history for a single plate hash (URL-safe base64, no padding). Returns watchlist state, dominant vehicle signature, paginated `encounters[]` (`?limit=`, `?offset=`; default 50, max 200), and a `stats` envelope (`distinct_routes_30d`, `total_detections`, etc.). 404 when no encounters exist for the hash; `503 alpr_disabled` when ALPR is off |
+| GET | `/v1/alpr/alerts` | session | Paginated alert feed (alerted-kind watchlist rows). Filters: `?status=open\|acked\|all` (default `open`), `?severity=N[,N...]`, `?dongle_id=`. Pagination `?limit=` (default 25, max 100) + `?offset=`. Each item includes decrypted plate, signature placeholder, severity, evidence summary, latest route, and ack timestamp |
+| GET | `/v1/alpr/alerts/summary` | session | Cheap dashboard-badge counts: `{open_count, max_open_severity, last_alert_at}`. Single-page query path so latency stays under 50ms even on a populated watchlist |
+| POST | `/v1/alpr/alerts/:hash_b64/ack` | session | Mark an alert acknowledged (`acked_at = now()`). Idempotent. 404 on unknown hash. Audited `action='alert_ack'` |
+| POST | `/v1/alpr/alerts/:hash_b64/unack` | session | Clear `acked_at`. 404 on unknown. Audited `action='alert_unack'` |
+| POST | `/v1/alpr/alerts/:hash_b64/note` | session | Set `plate_watchlist.notes`. Empty string clears the note. Audit payload omits the note text. 404 on unknown |
+| GET | `/v1/alpr/whitelist` | session | Paginated whitelist entries with decrypted labels. Same `?limit=`/`?offset=` defaults as the alerts feed |
+| POST | `/v1/alpr/whitelist` | session | Body `{plate: string, label?: string}`. Hash + encrypt via `internal/alpr/crypto`, upsert with `kind='whitelist'`. A transition from `kind='alerted'` clears severity/timestamps and emits an internal `AlertSuppressed` event so notification subsystems can decrement open counts. `400` when plate is empty after normalization. Audited `action='whitelist_add'` |
+| DELETE | `/v1/alpr/whitelist/:hash_b64` | session | Remove a whitelist row. `404` when missing; `409` when the row exists with a non-whitelist kind (use the appropriate endpoint instead). Audited `action='whitelist_remove'` |
 
 #### Planned (not yet implemented)
 
@@ -279,10 +287,6 @@ table reflects the eventual surface; they will be filled in as their
 implementation features land:
 
 - `GET /v1/routes/:dongle_id/:route_name/turns` -- per-route turn-signal events used by the stalking heuristic
-- `GET`, `POST /v1/alpr/alerts` -- list and create alert events
-- `POST /v1/alpr/alerts/:hash/ack`, `unack`, `note` -- alert workflow
-- `GET`, `POST`, `DELETE /v1/alpr/whitelist` -- whitelist management
-- `GET /v1/alpr/alerts/summary` -- aggregate counts for the dashboard
 - `PATCH /v1/alpr/detections/:id` -- correct or annotate a detection
 - `POST /v1/alpr/plates/merge` -- merge OCR-near-duplicate plate hashes
 - `GET`, `POST /v1/alpr/backfill/*` -- historical-route backfill control

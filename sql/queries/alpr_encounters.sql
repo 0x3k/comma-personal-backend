@@ -78,6 +78,28 @@ FROM plate_encounters
 WHERE dongle_id = $1 AND route = $2
 ORDER BY first_seen_ts ASC, id ASC;
 
+-- name: GetMostRecentEncounterForPlate :one
+-- The single most-recently-finished encounter for a plate. Used by the
+-- alert/whitelist listing endpoints to populate the latest_route panel
+-- (which device, which route, when) without loading the full encounter
+-- history. pgx.ErrNoRows when the plate has never been seen.
+SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
+       detection_count, turn_count, max_internal_gap_seconds,
+       signature_id, status, bbox_first, bbox_last,
+       created_at, updated_at
+FROM plate_encounters
+WHERE plate_hash = $1
+ORDER BY last_seen_ts DESC NULLS LAST, id DESC
+LIMIT 1;
+
+-- name: CountEncountersForPlate :one
+-- Number of encounter rows for a plate, used by the alert listing to
+-- render an "encounter_count" badge without paging through the full
+-- list. BIGINT so the count never overflows on a heavy producer.
+SELECT COUNT(*)::BIGINT
+FROM plate_encounters
+WHERE plate_hash = $1;
+
 -- name: ListEncountersForPlate :many
 -- All encounters of a single plate across every route, newest first.
 -- Backs the plate-detail page and feeds the stalking heuristic's

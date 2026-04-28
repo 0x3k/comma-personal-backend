@@ -1,10 +1,11 @@
 {
   "id": "alpr-route-overlay-ui",
   "name": "Plate sightings track on the route detail timeline",
-  "status": "pending",
+  "status": "complete",
   "priority": 5,
   "blocked_by": ["alpr-encounters-api"],
-  "branch": "",
+  "branch": "agent/alpr-route-overlay-ui",
+  "base_branch": "feat/alpr",
   "summary": "Surface plate sightings on the existing route detail page as a new track on the signal timeline. Clicking a sighting marker seeks the video; hovering shows a thumbnail and the detected plate + vehicle badge. Visible only when alpr_enabled is true (frontend reads /v1/settings/alpr). Severity-colored: gray for unalerted, amber for sev 2-3, red for sev 4-5. Don't fork the existing SignalTimeline component; add a sibling track inside it. Existing component lives at web/src/components/video/SignalTimeline.tsx.",
   "acceptance_criteria": [
     "New hook web/src/lib/useAlprSettings.ts: fetches /v1/settings/alpr once on mount, exposes {enabled, engineReachable, ...}. Caches via SWR or the project's existing API client cache. Default state during loading: do NOT reserve UI space (avoid flicker).",
@@ -19,5 +20,5 @@
     "Lint clean (pnpm --dir web lint), type-check clean (pnpm --dir web type-check), tests added for the empty state, feature-flag-off state, and click-to-seek behavior.",
     "Manual verification on a route with >=3 encounters of varying severity: load the route, verify color coding matches the encounter severity, hover shows correct vehicle badge, click seeks the video, alerted markers visible in scrubber."
   ],
-  "notes": ""
+  "notes": "Implemented as PlateTimeline sibling to SignalTimeline in routes/[dongleId]/[routeName]/page.tsx. useAlprSettings hook caches the /v1/settings/alpr response in module scope so it is fetched once per session. Tests cover the three required states (empty, flag-off, click-to-seek). Manual verification of the multi-severity rendering and scrubber markers must be done against a live backend with seeded encounters."
 }

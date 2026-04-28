@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countEncountersForPlate = `-- name: CountEncountersForPlate :one
+SELECT COUNT(*)::BIGINT
+FROM plate_encounters
+WHERE plate_hash = $1
+`
+
+// Number of encounter rows for a plate, used by the alert listing to
+// render an "encounter_count" badge without paging through the full
+// list. BIGINT so the count never overflows on a heavy producer.
+func (q *Queries) CountEncountersForPlate(ctx context.Context, plateHash []byte) (int64, error) {
+	row := q.db.QueryRow(ctx, countEncountersForPlate, plateHash)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const deleteEncountersForRoute = `-- name: DeleteEncountersForRoute :execrows
 DELETE FROM plate_encounters
 WHERE dongle_id = $1 AND route = $2
@@ -63,6 +79,44 @@ func (q *Queries) DeleteOrphanedEncounters(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getMostRecentEncounterForPlate = `-- name: GetMostRecentEncounterForPlate :one
+SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
+       detection_count, turn_count, max_internal_gap_seconds,
+       signature_id, status, bbox_first, bbox_last,
+       created_at, updated_at
+FROM plate_encounters
+WHERE plate_hash = $1
+ORDER BY last_seen_ts DESC NULLS LAST, id DESC
+LIMIT 1
+`
+
+// The single most-recently-finished encounter for a plate. Used by the
+// alert/whitelist listing endpoints to populate the latest_route panel
+// (which device, which route, when) without loading the full encounter
+// history. pgx.ErrNoRows when the plate has never been seen.
+func (q *Queries) GetMostRecentEncounterForPlate(ctx context.Context, plateHash []byte) (PlateEncounter, error) {
+	row := q.db.QueryRow(ctx, getMostRecentEncounterForPlate, plateHash)
+	var i PlateEncounter
+	err := row.Scan(
+		&i.ID,
+		&i.DongleID,
+		&i.Route,
+		&i.PlateHash,
+		&i.FirstSeenTs,
+		&i.LastSeenTs,
+		&i.DetectionCount,
+		&i.TurnCount,
+		&i.MaxInternalGapSeconds,
+		&i.SignatureID,
+		&i.Status,
+		&i.BboxFirst,
+		&i.BboxLast,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const listEncountersForPlate = `-- name: ListEncountersForPlate :many
