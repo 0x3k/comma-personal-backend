@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"comma-personal-backend/internal/alpr"
+	alprcrypto "comma-personal-backend/internal/alpr/crypto"
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/metrics"
@@ -47,6 +48,27 @@ type deps struct {
 	// flag is on. The detection worker (later wave) ranges over this
 	// channel; the extractor closes it on graceful shutdown.
 	alprFrames chan worker.ExtractedFrame
+
+	// alprKeyring holds the ALPR plate-text encryption + hash subkeys
+	// derived from ALPR_ENCRYPTION_KEY. Loaded at startup by
+	// verifyALPRKeyring so the detection worker can encrypt and hash
+	// without paying the HKDF derivation per request and without
+	// needing to read the env var itself. Nil when ALPR_ENCRYPTION_KEY
+	// is unset; in that case the detection worker logs once at startup
+	// and idles -- the operator must configure a key before enabling
+	// ALPR (the PUT /v1/settings/alpr handler enforces this
+	// precondition; the worker's nil-guard is defense-in-depth).
+	alprKeyring *alprcrypto.Keyring
+
+	// alprDetectionsComplete carries one event per route once the
+	// detection worker has processed every fcamera segment. The
+	// encounter aggregator subscribes here so it can collapse a
+	// route's per-frame detections into per-encounter rows the moment
+	// the detection pass is done -- without polling the database for
+	// changes. The channel is buffered so a slow consumer cannot
+	// stall the detection worker in the unlikely steady-state burst
+	// of many simultaneous route completions.
+	alprDetectionsComplete chan worker.RouteAlprDetectionsComplete
 }
 
 // alprClientTimeout is the per-request budget the ALPR client applies on

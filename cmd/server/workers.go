@@ -235,4 +235,53 @@ func startWorkers(ctx context.Context, d *deps) {
 	go extractor.Run(ctx)
 	log.Printf("alpr extractor started (concurrency=%d, fps_default=%g, buffer=%d, poll=%s)",
 		alprConcurrency, defaultFPS, bufCap, extractor.PollInterval)
+
+	// ALPR detection worker: consumer half of the pipeline. Started
+	// AFTER the extractor so d.alprFrames is already constructed.
+	// The detector self-gates on the runtime alpr_enabled flag and
+	// idles cleanly when ALPR_ENCRYPTION_KEY is unconfigured (so a
+	// deployment that has not opted into ALPR sees no log noise other
+	// than a single startup line).
+	//
+	// Channel sizing rationale: the completion channel is buffered to
+	// 64 so a slow encounter aggregator does not stall the detection
+	// loop. 64 routes' worth of completion events is comfortably more
+	// than any plausible burst, and the detector's drop-on-full path
+	// is a soft fallback (the aggregator's own periodic scan will
+	// pick up missed routes).
+	detectorConcurrency := worker.DefaultALPRDetectorConcurrency
+	if d.cfg != nil && d.cfg.ALPR != nil && d.cfg.ALPR.DetectorConcurrency > 0 {
+		detectorConcurrency = d.cfg.ALPR.DetectorConcurrency
+	}
+	detectorConcurrency = envInt("ALPR_DETECTOR_CONCURRENCY", detectorConcurrency)
+
+	detectTimeout := worker.DefaultALPRDetectTimeout
+	if v := envInt("ALPR_DETECT_TIMEOUT_MS", 0); v > 0 {
+		detectTimeout = time.Duration(v) * time.Millisecond
+	}
+
+	defaultConfMin := worker.DefaultALPRConfidenceMin
+	if d.cfg != nil && d.cfg.ALPR != nil && d.cfg.ALPR.ConfidenceMin > 0 {
+		defaultConfMin = d.cfg.ALPR.ConfidenceMin
+	}
+
+	d.alprDetectionsComplete = make(chan worker.RouteAlprDetectionsComplete, 64)
+
+	detector := worker.NewALPRDetector(
+		d.alprFrames,
+		d.ALPRClient(),
+		d.queries,
+		d.pool,
+		d.settings,
+		d.alprKeyring,
+		d.metrics,
+		d.alprDetectionsComplete,
+	)
+	detector.Concurrency = detectorConcurrency
+	detector.DetectTimeout = detectTimeout
+	detector.DefaultConfidenceMin = defaultConfMin
+	go detector.Run(ctx)
+	keyringConfigured := d.alprKeyring != nil
+	log.Printf("alpr detector started (concurrency=%d, detect_timeout=%s, confidence_min=%g, keyring_configured=%v)",
+		detectorConcurrency, detectTimeout, defaultConfMin, keyringConfigured)
 }
