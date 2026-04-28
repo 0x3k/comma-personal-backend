@@ -1,10 +1,11 @@
 {
   "id": "alpr-signature-fusion-heuristic",
   "name": "Vehicle-signature fusion: corroboration + plate-swap detection",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 6,
   "blocked_by": ["alpr-stalking-heuristic", "alpr-vehicle-attributes-engine"],
-  "branch": "",
+  "branch": "agent/alpr-signature-fusion-heuristic",
+  "base_branch": "feat/alpr",
   "summary": "Layer that uses vehicle signatures (make/model/color/body_type) to (1) corroborate plate-based alerts -- raise confidence when the same signature backs the same plate across encounters; (2) detect signature-inconsistent plates -- a single plate hash with wildly different signatures probably means OCR error or plate cloning; (3) detect plate-swap -- multiple plate hashes share one signature in the same area, the strongest 'someone is actively trying to evade detection' signal we can produce. Strictly additive on top of alpr-stalking-heuristic; if no detections have signatures (attributes engine off or unsupported), this layer produces no output.",
   "acceptance_criteria": [
     "Extend internal/alpr/heuristic with FuseSignatures(ctx, deps, plate_hash) (extraSeverity int, evidence []Component, plateSwapAlerts []SwapAlert).",
