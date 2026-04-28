@@ -1,7 +1,7 @@
 {
   "id": "alpr-tuning-ui",
   "name": "Heuristic tuning UI + re-evaluate-history endpoint",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 9,
   "blocked_by": ["alpr-watchlist-page"],
   "base_branch": "feat/alpr",
