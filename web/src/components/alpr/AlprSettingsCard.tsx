@@ -816,8 +816,16 @@ function State4EngineOnline({
             </dd>
           </dl>
           <p className="text-xs text-[var(--text-tertiary)]">
-            Editing these values inline is coming with the ALPR tuning
-            UI. For now, adjust them via the API or environment variables.
+            Open the{" "}
+            <a
+              href="/settings/alpr/tuning"
+              className="text-[var(--accent)] hover:underline"
+              data-testid="alpr-advanced-tuning-link"
+            >
+              tuning page
+            </a>{" "}
+            to adjust thresholds, severity bucket boundaries, and re-evaluate
+            existing alerts under new settings.
           </p>
         </div>
       </details>
