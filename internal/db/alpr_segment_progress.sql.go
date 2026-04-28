@@ -11,6 +11,57 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countRouteDetectorProgress = `-- name: CountRouteDetectorProgress :one
+SELECT
+    (SELECT COUNT(*) FROM alpr_segment_progress p
+     WHERE p.dongle_id = $1
+       AND p.route     = $2
+       AND p.processed_at_extractor IS NOT NULL)::BIGINT
+        AS extractor_processed,
+    (SELECT COUNT(*) FROM alpr_segment_progress p
+     WHERE p.dongle_id = $1
+       AND p.route     = $2
+       AND p.processed_at_detector  IS NOT NULL)::BIGINT
+        AS detector_processed,
+    (SELECT COUNT(*) FROM segments seg
+     JOIN routes r ON r.id = seg.route_id
+     WHERE r.dongle_id  = $1
+       AND r.route_name = $2)::BIGINT
+        AS segments_total
+`
+
+type CountRouteDetectorProgressParams struct {
+	DongleID string `json:"dongleId"`
+	Route    string `json:"route"`
+}
+
+type CountRouteDetectorProgressRow struct {
+	ExtractorProcessed int64 `json:"extractorProcessed"`
+	DetectorProcessed  int64 `json:"detectorProcessed"`
+	SegmentsTotal      int64 `json:"segmentsTotal"`
+}
+
+// Returns (extractor_processed, detector_processed, segments_total) for
+// a route. The detection worker calls this after MarkDetectorProcessed
+// to decide whether the route is fully done so it can emit a
+// RouteAlprDetectionsComplete event exactly once.
+//
+// extractor_processed counts alpr_segment_progress rows whose
+// processed_at_extractor is set; detector_processed counts those whose
+// processed_at_detector is set; segments_total counts segments table
+// rows for the route. The route is fully detector-processed when
+// detector_processed = extractor_processed = segments_total. Comparing
+// against segments_total alone is not sufficient because the extractor
+// only inserts rows for segments that actually had an fcamera.hevc on
+// disk -- a segment without front-camera video never enters the ALPR
+// pipeline and would otherwise prevent the route from ever completing.
+func (q *Queries) CountRouteDetectorProgress(ctx context.Context, arg CountRouteDetectorProgressParams) (CountRouteDetectorProgressRow, error) {
+	row := q.db.QueryRow(ctx, countRouteDetectorProgress, arg.DongleID, arg.Route)
+	var i CountRouteDetectorProgressRow
+	err := row.Scan(&i.ExtractorProcessed, &i.DetectorProcessed, &i.SegmentsTotal)
+	return i, err
+}
+
 const isExtractorProcessed = `-- name: IsExtractorProcessed :one
 SELECT COALESCE(
     (SELECT processed_at_extractor IS NOT NULL
