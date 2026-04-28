@@ -160,6 +160,37 @@ WHERE pe.plate_hash    = $1
   AND pe.first_seen_ts <= $3
 ORDER BY pe.last_seen_ts DESC, pe.id DESC;
 
+-- name: BulkUpdateEncountersPlateHash :execrows
+-- Plate-merge path on the encounters table: rewrite plate_hash on every
+-- encounter that currently points at the source hash. After the matching
+-- detection-side update runs, the encounters' hash is rewritten so the
+-- per-route review UI reflects the merged identity even before the
+-- aggregator re-runs. The merge handler immediately re-triggers
+-- aggregation on every affected route, which will DELETE+UPSERT
+-- encounters cleanly; this UPDATE is the interim coherent-state pass.
+--
+-- The unique index on (dongle_id, route, plate_hash, first_seen_ts) can
+-- in principle be violated if two encounters share the same first_seen_ts
+-- after a merge. In practice that requires both encounters to start on
+-- the exact same wall-clock instant in the same route, which is
+-- vanishingly unlikely; if it ever fires the transaction rolls back and
+-- the operator surfaces a 500, which is the right failure mode for a
+-- rare data race.
+UPDATE plate_encounters
+SET plate_hash = sqlc.arg('new_plate_hash')
+WHERE plate_hash = sqlc.arg('old_plate_hash');
+
+-- name: DistinctRoutesForEncountersPlateHash :many
+-- All (dongle_id, route) pairs that have at least one encounter for the
+-- given plate_hash. Companion to DistinctRoutesForPlateHash on the
+-- detections side; the merge handler unions the two so a route whose
+-- detections were retention-pruned but whose encounter survives is still
+-- re-aggregated. Ordered for deterministic enqueue order.
+SELECT DISTINCT dongle_id, route
+FROM plate_encounters
+WHERE plate_hash = $1
+ORDER BY dongle_id ASC, route ASC;
+
 -- name: ListEncountersForSignatureInArea :many
 -- Encounters linked to a vehicle signature whose first detection lies
 -- inside a lat/lng bounding box. Used by the signature-fusion heuristic

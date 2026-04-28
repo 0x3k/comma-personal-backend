@@ -125,6 +125,39 @@ SELECT id, plate_hash, label_ciphertext, kind, severity,
 FROM plate_watchlist
 WHERE plate_hash = $1;
 
+-- name: RenameWatchlistHash :execrows
+-- Plate-merge path: rewrite plate_hash on a single watchlist row from
+-- the source hash to the destination hash. Used by the merge handler
+-- when ONLY the source watchlist row exists (no destination) -- the
+-- handler can simply rename the existing row instead of doing a
+-- full merge. Returns rows-affected so the handler can fall through
+-- to the merge path on 0.
+UPDATE plate_watchlist
+SET plate_hash = sqlc.arg('new_plate_hash'),
+    updated_at = now()
+WHERE plate_hash = sqlc.arg('old_plate_hash');
+
+-- name: ApplyMergedWatchlistRow :execrows
+-- Plate-merge path: when BOTH source and destination watchlist rows
+-- exist for the same plate identity, the merge handler computes the
+-- merged column values in Go (max severity, earliest first_alert_at,
+-- latest last_alert_at, concatenated notes, preserved-or-cleared
+-- acked_at) and stamps them onto the destination row. The matching
+-- DELETE for the source row is a separate RemoveWatchlist call inside
+-- the same transaction so a partial commit is impossible.
+--
+-- Computing the merge in Go rather than SQL keeps the merge rules
+-- testable without a Postgres dependency and avoids ambiguous
+-- column-reference traps in CTE-shaped UPDATE+DELETE composites.
+UPDATE plate_watchlist
+SET severity       = sqlc.narg('severity'),
+    first_alert_at = sqlc.narg('first_alert_at'),
+    last_alert_at  = sqlc.narg('last_alert_at'),
+    acked_at       = sqlc.narg('acked_at'),
+    notes          = sqlc.narg('notes'),
+    updated_at     = now()
+WHERE plate_hash = sqlc.arg('plate_hash');
+
 -- name: ListWatchlistByKind :many
 -- Paginated list of watchlist rows of a given kind, newest update first.
 -- Used by the watchlist UI tabs (alerted / whitelist / note).

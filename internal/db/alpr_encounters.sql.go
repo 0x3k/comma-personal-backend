@@ -11,6 +11,40 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bulkUpdateEncountersPlateHash = `-- name: BulkUpdateEncountersPlateHash :execrows
+UPDATE plate_encounters
+SET plate_hash = $1
+WHERE plate_hash = $2
+`
+
+type BulkUpdateEncountersPlateHashParams struct {
+	NewPlateHash []byte `json:"newPlateHash"`
+	OldPlateHash []byte `json:"oldPlateHash"`
+}
+
+// Plate-merge path on the encounters table: rewrite plate_hash on every
+// encounter that currently points at the source hash. After the matching
+// detection-side update runs, the encounters' hash is rewritten so the
+// per-route review UI reflects the merged identity even before the
+// aggregator re-runs. The merge handler immediately re-triggers
+// aggregation on every affected route, which will DELETE+UPSERT
+// encounters cleanly; this UPDATE is the interim coherent-state pass.
+//
+// The unique index on (dongle_id, route, plate_hash, first_seen_ts) can
+// in principle be violated if two encounters share the same first_seen_ts
+// after a merge. In practice that requires both encounters to start on
+// the exact same wall-clock instant in the same route, which is
+// vanishingly unlikely; if it ever fires the transaction rolls back and
+// the operator surfaces a 500, which is the right failure mode for a
+// rare data race.
+func (q *Queries) BulkUpdateEncountersPlateHash(ctx context.Context, arg BulkUpdateEncountersPlateHashParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bulkUpdateEncountersPlateHash, arg.NewPlateHash, arg.OldPlateHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countEncountersForPlate = `-- name: CountEncountersForPlate :one
 SELECT COUNT(*)::BIGINT
 FROM plate_encounters
@@ -79,6 +113,43 @@ func (q *Queries) DeleteOrphanedEncounters(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const distinctRoutesForEncountersPlateHash = `-- name: DistinctRoutesForEncountersPlateHash :many
+SELECT DISTINCT dongle_id, route
+FROM plate_encounters
+WHERE plate_hash = $1
+ORDER BY dongle_id ASC, route ASC
+`
+
+type DistinctRoutesForEncountersPlateHashRow struct {
+	DongleID string `json:"dongleId"`
+	Route    string `json:"route"`
+}
+
+// All (dongle_id, route) pairs that have at least one encounter for the
+// given plate_hash. Companion to DistinctRoutesForPlateHash on the
+// detections side; the merge handler unions the two so a route whose
+// detections were retention-pruned but whose encounter survives is still
+// re-aggregated. Ordered for deterministic enqueue order.
+func (q *Queries) DistinctRoutesForEncountersPlateHash(ctx context.Context, plateHash []byte) ([]DistinctRoutesForEncountersPlateHashRow, error) {
+	rows, err := q.db.Query(ctx, distinctRoutesForEncountersPlateHash, plateHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DistinctRoutesForEncountersPlateHashRow
+	for rows.Next() {
+		var i DistinctRoutesForEncountersPlateHashRow
+		if err := rows.Scan(&i.DongleID, &i.Route); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getMostRecentEncounterForPlate = `-- name: GetMostRecentEncounterForPlate :one

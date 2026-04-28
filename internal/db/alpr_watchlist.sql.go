@@ -35,6 +35,52 @@ func (q *Queries) AckWatchlist(ctx context.Context, arg AckWatchlistParams) (int
 	return result.RowsAffected(), nil
 }
 
+const applyMergedWatchlistRow = `-- name: ApplyMergedWatchlistRow :execrows
+UPDATE plate_watchlist
+SET severity       = $1,
+    first_alert_at = $2,
+    last_alert_at  = $3,
+    acked_at       = $4,
+    notes          = $5,
+    updated_at     = now()
+WHERE plate_hash = $6
+`
+
+type ApplyMergedWatchlistRowParams struct {
+	Severity     pgtype.Int2        `json:"severity"`
+	FirstAlertAt pgtype.Timestamptz `json:"firstAlertAt"`
+	LastAlertAt  pgtype.Timestamptz `json:"lastAlertAt"`
+	AckedAt      pgtype.Timestamptz `json:"ackedAt"`
+	Notes        pgtype.Text        `json:"notes"`
+	PlateHash    []byte             `json:"plateHash"`
+}
+
+// Plate-merge path: when BOTH source and destination watchlist rows
+// exist for the same plate identity, the merge handler computes the
+// merged column values in Go (max severity, earliest first_alert_at,
+// latest last_alert_at, concatenated notes, preserved-or-cleared
+// acked_at) and stamps them onto the destination row. The matching
+// DELETE for the source row is a separate RemoveWatchlist call inside
+// the same transaction so a partial commit is impossible.
+//
+// Computing the merge in Go rather than SQL keeps the merge rules
+// testable without a Postgres dependency and avoids ambiguous
+// column-reference traps in CTE-shaped UPDATE+DELETE composites.
+func (q *Queries) ApplyMergedWatchlistRow(ctx context.Context, arg ApplyMergedWatchlistRowParams) (int64, error) {
+	result, err := q.db.Exec(ctx, applyMergedWatchlistRow,
+		arg.Severity,
+		arg.FirstAlertAt,
+		arg.LastAlertAt,
+		arg.AckedAt,
+		arg.Notes,
+		arg.PlateHash,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countUnackedAlerts = `-- name: CountUnackedAlerts :one
 SELECT COUNT(*)::BIGINT
 FROM plate_watchlist
@@ -433,6 +479,32 @@ WHERE plate_hash = $1
 // caller can distinguish "deleted" from "wasn't there to begin with".
 func (q *Queries) RemoveWatchlist(ctx context.Context, plateHash []byte) (int64, error) {
 	result, err := q.db.Exec(ctx, removeWatchlist, plateHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const renameWatchlistHash = `-- name: RenameWatchlistHash :execrows
+UPDATE plate_watchlist
+SET plate_hash = $1,
+    updated_at = now()
+WHERE plate_hash = $2
+`
+
+type RenameWatchlistHashParams struct {
+	NewPlateHash []byte `json:"newPlateHash"`
+	OldPlateHash []byte `json:"oldPlateHash"`
+}
+
+// Plate-merge path: rewrite plate_hash on a single watchlist row from
+// the source hash to the destination hash. Used by the merge handler
+// when ONLY the source watchlist row exists (no destination) -- the
+// handler can simply rename the existing row instead of doing a
+// full merge. Returns rows-affected so the handler can fall through
+// to the merge path on 0.
+func (q *Queries) RenameWatchlistHash(ctx context.Context, arg RenameWatchlistHashParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renameWatchlistHash, arg.NewPlateHash, arg.OldPlateHash)
 	if err != nil {
 		return 0, err
 	}
