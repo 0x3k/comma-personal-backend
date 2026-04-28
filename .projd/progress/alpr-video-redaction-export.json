@@ -1,10 +1,11 @@
 {
   "id": "alpr-video-redaction-export",
   "name": "Plate-blur on MP4 export + share-link viewing",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 8,
   "blocked_by": ["alpr-detection-worker"],
-  "branch": "",
+  "branch": "agent/alpr-video-redaction-export",
+  "base_branch": "feat/alpr",
   "summary": "When exporting an MP4 of a route or sharing it via public link, optionally blur all detected plate bboxes so other people's plates aren't broadcast. Default: blur ON for share links (privacy-respecting outbound default), OFF for local exports (the user owns their own data). Bboxes interpolate ~200ms across frames to avoid flicker. Re-encoding HLS for share-link views is expensive, so cache the redacted variant alongside the existing transcoded streams.",
   "acceptance_criteria": [
     "Export pipeline (route-export-mp4 worker; check internal/worker for the existing implementation): GET /v1/routes/:dongle/:route/export.mp4 gains a query param ?redact_plates=true|false. Default false. When true: load plate_detections for the route, build a per-frame bbox list (interpolating up to 200ms across frames where no detection exists for the current frame timestamp), pass the bbox list to ffmpeg as a series of `-vf` filters chaining `boxblur` over each region. Implementation hint: ffmpeg's geq + crop + overlay approach scales poorly with many bboxes; preferred path is to write a small per-frame mask and use `unsharp` or `gblur` with `enable='between(t,...)'` per detection. Document the chosen approach and benchmark.",
