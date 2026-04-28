@@ -1,10 +1,11 @@
 {
   "id": "alpr-turn-detector",
   "name": "Per-route turn timeline from GPS geometry",
-  "status": "pending",
+  "status": "complete",
   "priority": 3,
   "blocked_by": [],
-  "branch": "",
+  "branch": "agent/alpr-turn-detector",
+  "base_branch": "feat/alpr",
   "summary": "Compute a turn timeline for each route from existing GPS geometry. Independently useful (analytics, smart playback, future driving-style features) but lives in the ALPR plan because the stalking heuristic needs to count 'turns since first sighting of plate X.' Has zero ALPR-specific dependencies -- runs for every route regardless of alpr_enabled. Triggers off the same route-metadata-completion signal that trip-aggregator-worker uses; check internal/worker/trip_aggregator.go for the wire-up pattern.",
   "acceptance_criteria": [
     "New worker internal/worker/turn_detector.go. Always-on (not gated on ALPR), started from cmd/server/workers.go.",
@@ -19,5 +20,5 @@
     "Metrics: turn_detector_runs_total, turn_detector_turns_emitted_total, turn_detector_run_seconds histogram.",
     "Tests: synthetic geometry with a known 90 deg right turn -> exactly one turn at the expected timestamp. Straight-line geometry -> 0 turns. Circle geometry -> at least the dedup-bound count. Bearing-wrap edge case (358 deg -> 2 deg = +4 deg, NOT -356 deg) -> no spurious turn. Window-shorter-than-min-route guard."
   ],
-  "notes": ""
+  "notes": "Ships its own minimal route_turns migration (015) so the feature lands independently of alpr-schema. Both migrations use IF NOT EXISTS and are coexistence-safe."
 }

@@ -65,3 +65,12 @@ WHERE dongle_id = $1
   AND route     = $2
   AND turn_ts  >= sqlc.arg('window_start')
   AND turn_ts  <= sqlc.arg('window_end');
+
+-- name: CountTurnsForRoute :one
+-- Total number of turns recorded for a route. Used by the turn detector
+-- worker's idempotency tests to verify re-runs do not double up rows,
+-- and by future analytics that want a per-route turn count without
+-- listing every row.
+SELECT COUNT(*)::BIGINT
+FROM route_turns
+WHERE dongle_id = $1 AND route = $2;

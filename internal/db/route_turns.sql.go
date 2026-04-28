@@ -11,6 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countTurnsForRoute = `-- name: CountTurnsForRoute :one
+SELECT COUNT(*)::BIGINT
+FROM route_turns
+WHERE dongle_id = $1 AND route = $2
+`
+
+type CountTurnsForRouteParams struct {
+	DongleID string `json:"dongleId"`
+	Route    string `json:"route"`
+}
+
+// Total number of turns recorded for a route. Used by the turn detector
+// worker's idempotency tests to verify re-runs do not double up rows,
+// and by future analytics that want a per-route turn count without
+// listing every row.
+func (q *Queries) CountTurnsForRoute(ctx context.Context, arg CountTurnsForRouteParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countTurnsForRoute, arg.DongleID, arg.Route)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countTurnsInWindow = `-- name: CountTurnsInWindow :one
 SELECT COUNT(*)::BIGINT
 FROM route_turns

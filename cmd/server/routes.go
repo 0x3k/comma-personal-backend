@@ -141,6 +141,7 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	api.NewExportHandler(d.queries, d.store).RegisterRoutes(v1Routes)
 	api.NewSignalsHandler(d.queries, d.store).RegisterRoutes(v1Routes)
 	api.NewThumbnailHandler(d.store).RegisterRoutes(v1Routes)
+	api.NewTurnsHandler(d.queries).RegisterRoutes(v1Routes)
 
 	// Authenticated segment file streaming. Mounted at the top-level path
 	// /storage/... (not under /v1) because the frontend was already

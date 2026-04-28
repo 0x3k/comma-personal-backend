@@ -64,6 +64,7 @@ func main() {
 
 	d := &deps{
 		cfg:           cfg,
+		pool:          pool,
 		queries:       queries,
 		store:         store,
 		settings:      settingsStore,

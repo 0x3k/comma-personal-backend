@@ -4,14 +4,32 @@ import (
 	"context"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"comma-personal-backend/internal/api"
 	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/geocode"
+	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/worker"
 	"comma-personal-backend/internal/ws"
 )
+
+// envFloat parses a float environment variable. Local helper because
+// envInt and envBool live in env.go but float wasn't needed before the
+// turn-detector tunables landed.
+func envFloat(name string, defaultValue float64) float64 {
+	v := os.Getenv(name)
+	if v == "" {
+		return defaultValue
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		log.Printf("warning: %s=%q is not a valid float; using default %g", name, v, defaultValue)
+		return defaultValue
+	}
+	return f
+}
 
 // startWorkers launches the background goroutines that make up the
 // server's non-HTTP side: event detection, trip aggregation, and the
@@ -67,6 +85,39 @@ func startWorkers(ctx context.Context, d *deps) {
 	} else {
 		log.Printf("trip aggregator disabled via TRIP_AGGREGATOR_ENABLED")
 	}
+
+	// Turn detector: emits per-route turn timelines from existing GPS
+	// geometry. Always-on (not gated on ALPR -- turns are independently
+	// useful for analytics, smart playback, and the ALPR stalking
+	// heuristic). Subscribes to the same "route finalized" signal as
+	// the trip aggregator above; runs a one-shot first-deploy backfill
+	// on top so freshly installed servers don't have to wait for new
+	// uploads to populate turn data for routes already in the database.
+	turnWindow := envFloat("TURN_WINDOW_SECONDS", 4.0)
+	turnDelta := envFloat("TURN_DELTA_DEG_MIN", 35.0)
+	turnDedup := envFloat("TURN_DEDUP_SECONDS", 5.0)
+	turnBackfillLimit := envInt("TURN_BACKFILL_LIMIT", 200)
+	if d.settings != nil {
+		seedCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := d.settings.SeedFloatIfMissing(seedCtx, settings.KeyTurnWindowSeconds, turnWindow); err != nil {
+			log.Printf("warning: seed turn_window_seconds: %v", err)
+		}
+		if err := d.settings.SeedFloatIfMissing(seedCtx, settings.KeyTurnDeltaDegMin, turnDelta); err != nil {
+			log.Printf("warning: seed turn_delta_deg_min: %v", err)
+		}
+		if err := d.settings.SeedFloatIfMissing(seedCtx, settings.KeyTurnDedupSeconds, turnDedup); err != nil {
+			log.Printf("warning: seed turn_dedup_seconds: %v", err)
+		}
+		cancel()
+	}
+	turnDetector := worker.NewTurnDetectorWorker(d.queries, d.pool, d.settings, d.metrics)
+	turnDetector.DefaultWindowSeconds = turnWindow
+	turnDetector.DefaultDeltaDegMin = turnDelta
+	turnDetector.DefaultDedupSeconds = turnDedup
+	turnDetector.BackfillLimit = turnBackfillLimit
+	go turnDetector.Run(ctx)
+	log.Printf("turn detector worker started (window=%.1fs, delta>=%.1fdeg, dedup=%.1fs, backfill_limit=%d)",
+		turnWindow, turnDelta, turnDedup, turnBackfillLimit)
 
 	// Cleanup worker: deletes non-preserved routes older than the
 	// configured retention window. CLEANUP_ENABLED defaults to true.
