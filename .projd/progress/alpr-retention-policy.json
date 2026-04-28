@@ -1,7 +1,7 @@
 {
   "id": "alpr-retention-policy",
   "name": "Tiered retention cleanup for ALPR data",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 6,
   "blocked_by": ["alpr-stalking-heuristic"],
   "branch": "agent/alpr-retention-policy",
