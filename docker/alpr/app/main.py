@@ -29,6 +29,8 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image, UnidentifiedImageError
 
+from app import attributes as vehicle_attributes
+
 # fast_alpr is imported lazily on first /v1/detect so /health works even
 # if the model download is still in flight at startup. Container readiness
 # is therefore "process is up", not "model is loaded".
@@ -52,10 +54,13 @@ DETECTOR_MODEL = os.environ.get("ALPR_DETECTOR_MODEL", "yolo-v9-t-384-license-pl
 OCR_MODEL = os.environ.get("ALPR_OCR_MODEL", "global-plates-mobile-vit-v2-model")
 REGION = os.environ.get("ALPR_REGION", "us")
 
-# alpr-vehicle-attributes-engine is a future feature. The wrapper exposes
-# the capability flag now so the Go client can branch on it without a
-# server-side restart when the followup ships.
-SUPPORTS_ATTRIBUTES = os.environ.get("ALPR_SUPPORTS_ATTRIBUTES", "false").lower() == "true"
+# alpr-vehicle-attributes-engine wires the second-stage classifier into
+# this wrapper. The capability flag is sourced directly from the
+# attributes module so /health and /v1/detect agree on whether the
+# classifier is active. ALPR_ATTRIBUTES_ENABLED defaults to "true" inside
+# the container; the operator can flip it to "false" to skip the
+# classifier and reclaim the latency budget (see docs/ALPR.md).
+SUPPORTS_ATTRIBUTES = vehicle_attributes.ATTRIBUTES_ENABLED
 
 # Best-effort version reporting. Reads the installed fast-alpr distribution
 # version so /health reflects the model code in use.
@@ -111,6 +116,10 @@ async def health() -> dict[str, Any]:
         "supports_attributes": SUPPORTS_ATTRIBUTES,
         "engine_loaded": _alpr_engine is not None,
         "engine_error": _alpr_engine_error,
+        # Surface the most recent attribute-classifier load failure so an
+        # operator can tell whether ALPR_ATTRIBUTES_ENABLED=true is doing
+        # what it claims. None means "no failure recorded".
+        "attributes_error": vehicle_attributes.availability_error(),
     }
 
 
@@ -171,10 +180,25 @@ def _normalise_bbox(box: Any, img_w: int, img_h: int) -> dict[str, float]:
     }
 
 
-def _detection_to_dict(det: Any, img_w: int, img_h: int) -> dict[str, Any] | None:
+def _detection_to_dict(
+    det: Any,
+    img_w: int,
+    img_h: int,
+    vehicle: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Map a fast-alpr ALPRResult to the documented detection dict.
     Returns None for results with no recognised plate text -- the caller
-    has no use for a bbox without a plate string."""
+    has no use for a bbox without a plate string.
+
+    ``vehicle`` carries the per-detection vehicle attribute dict from
+    ``app.attributes.predict``. Passed in rather than computed here so
+    the caller can run the classifier once per frame and share the
+    result across all plate detections in that frame (the classifier is
+    image-level, not bbox-level, in the open-image-models default
+    pipeline). Pass ``None`` when ALPR_ATTRIBUTES_ENABLED=false or the
+    classifier is unavailable; the wrapper emits ``vehicle: null`` on
+    the wire.
+    """
     plate_text = ""
     plate_conf = 0.0
     bbox_obj = None
@@ -195,35 +219,53 @@ def _detection_to_dict(det: Any, img_w: int, img_h: int) -> dict[str, Any] | Non
         "plate": plate_text,
         "confidence": plate_conf,
         "bbox": _normalise_bbox(bbox_obj, img_w, img_h),
-        # Vehicle attributes are filled by alpr-vehicle-attributes-engine.
-        # The key is present-and-null so the Go client's optional-decode
-        # path does not need to special-case its absence.
-        "vehicle": None,
+        # vehicle is None when the classifier is disabled / unavailable,
+        # OR a dict with the documented schema when it ran. The Go
+        # client treats both the JSON null and a present-but-all-null
+        # dict as valid states (see internal/alpr/client.go).
+        "vehicle": vehicle,
     }
 
 
 async def _run_detect(image: Image.Image) -> list[dict[str, Any]]:
     """Run the synchronous ALPR predict() call inside a thread so the
-    event loop stays responsive, and apply the per-request timeout."""
+    event loop stays responsive, and apply the per-request timeout.
+
+    When the attribute classifier is enabled, a single classifier pass
+    is issued per frame and the resulting attribute dict is shared
+    across every plate detection on that frame. open-image-models is
+    image-level (the engine decision document explains the rationale);
+    re-running it per bbox would multiply latency without improving
+    accuracy because the same vehicle is in frame.
+    """
     engine = await _get_engine()
 
-    def _predict() -> list[Any]:
+    def _predict_plus_attributes() -> tuple[list[Any], dict[str, Any] | None]:
         # fast-alpr expects an RGB or BGR numpy array; PIL Image -> numpy
         # is handled internally for >= 0.1.x, but be conservative.
         import numpy as np
 
         arr = np.asarray(image)
-        return engine.predict(arr)
+        plate_results = engine.predict(arr)
+
+        # Run the attribute classifier inline so the per-request timeout
+        # covers both calls together. Returning None is the documented
+        # "skip" signal -- _detection_to_dict turns that into vehicle:null.
+        vehicle_attrs = vehicle_attributes.predict(arr)
+        return plate_results, vehicle_attrs
 
     try:
-        results = await asyncio.wait_for(asyncio.to_thread(_predict), timeout=DETECT_TIMEOUT_SECONDS)
+        results, vehicle_attrs = await asyncio.wait_for(
+            asyncio.to_thread(_predict_plus_attributes),
+            timeout=DETECT_TIMEOUT_SECONDS,
+        )
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504, detail="alpr detection timed out") from exc
 
     img_w, img_h = image.size
     detections: list[dict[str, Any]] = []
     for r in results or []:
-        d = _detection_to_dict(r, img_w, img_h)
+        d = _detection_to_dict(r, img_w, img_h, vehicle=vehicle_attrs)
         if d is not None:
             detections.append(d)
     return detections

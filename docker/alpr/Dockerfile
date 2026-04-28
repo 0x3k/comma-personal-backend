@@ -75,6 +75,16 @@ from fast_alpr import ALPR; \
 ALPR(detector_model=os.environ['ALPR_DETECTOR_MODEL'], ocr_model=os.environ['ALPR_OCR_MODEL'])" \
     || echo "warning: pre-pull failed (offline build?); models will fetch on first request"
 
+# Pre-pull the open-image-models vehicle attribute classifier weights
+# (alpr-vehicle-attributes-engine). Same air-gapped tolerance as above:
+# the wrapper retries the import on first /v1/detect when ALPR_ATTRIBUTES_ENABLED
+# is true. Set ALPR_ATTRIBUTES_ENABLED=false at run time to skip the
+# classifier entirely (latency drops to plate-only).
+ARG ALPR_ATTRIBUTES_ENABLED=true
+ENV ALPR_ATTRIBUTES_ENABLED=${ALPR_ATTRIBUTES_ENABLED}
+RUN uv run --no-sync python -c "from app.attributes import warmup; warmup()" \
+    || echo "warning: open-image-models pre-pull failed (offline build?); classifier loads on first request"
+
 EXPOSE 8081
 
 # Run as a non-root user. Done last so the model cache directory written
