@@ -409,6 +409,7 @@ func startWorkers(ctx context.Context, d *deps) {
 		d.alprAlertCreated,
 	)
 	heuristicWorker.Concurrency = heuristicConcurrency
+	d.alprHeuristicWorker = heuristicWorker
 	go heuristicWorker.Run(ctx)
 	log.Printf("alpr heuristic worker started (concurrency=%d, version=%s)",
 		heuristicConcurrency, heuristic.HeuristicVersion)

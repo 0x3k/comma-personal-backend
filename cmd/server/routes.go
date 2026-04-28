@@ -284,6 +284,16 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	v1AlprSession := e.Group("/v1", sessionOnly, alprWatchlistHandler.RequireEnabled())
 	alprWatchlistHandler.RegisterRoutes(v1AlprSession)
 
+	// ALPR heuristic re-evaluation endpoint. Session-only -- a
+	// device JWT must never be able to trigger a fleet-wide rescore
+	// (it is also a non-trivial workload). The handler reuses the
+	// running heuristic worker so settings overrides written by the
+	// tuning UI take effect on the very next call.
+	if d.cfg.UIAuthEnabled() {
+		api.NewALPRReevaluateHandler(d.queries, d.alprHeuristicWorker).
+			RegisterRoutes(v1AlprSession)
+	}
+
 	// ALPR manual-correction + plate-merge endpoints. Session-only --
 	// rewriting plate identity is an operator action; a device JWT
 	// must never trigger one. Mounted on the same v1AlprSession group

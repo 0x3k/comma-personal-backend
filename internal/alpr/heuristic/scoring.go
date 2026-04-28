@@ -118,6 +118,17 @@ const (
 	// DefaultTimingPoints is the points awarded when the timing
 	// window threshold is met.
 	DefaultTimingPoints = 1.0
+
+	// DefaultSeverityBucketSev2 / Sev3 / Sev4 / Sev5 are the lower
+	// edges of the severity buckets used by severityForScore. The
+	// constants match the original closed-form bucketing
+	// (>=2/4/6/8 -> severity 2/3/4/5). They are surfaced as runtime
+	// tunables (KeyALPRHeuristicSeverityBucketSev*) so an operator
+	// can re-shape sensitivity without a redeploy.
+	DefaultSeverityBucketSev2 = 2.0
+	DefaultSeverityBucketSev3 = 4.0
+	DefaultSeverityBucketSev4 = 6.0
+	DefaultSeverityBucketSev5 = 8.0
 )
 
 // Thresholds bundles every numeric knob the heuristic exposes. The
@@ -143,6 +154,13 @@ type Thresholds struct {
 	AreaCellKm               float64
 	TimingWindowHours        float64
 	TimingPoints             float64
+	// SeverityBuckets are the lower edges of severities 2..5, in
+	// ascending order. severityForScore promotes a TotalScore to
+	// the highest bucket whose lower edge it meets. A
+	// zero-initialised SeverityBuckets falls back to the
+	// historical [2, 4, 6, 8] mapping so a Thresholds{} literal
+	// still scores tests deterministically.
+	SeverityBuckets [4]float64
 }
 
 // DefaultThresholds returns the rule set as documented in the feature
@@ -164,6 +182,12 @@ func DefaultThresholds() Thresholds {
 		AreaCellKm:               DefaultAreaCellKm,
 		TimingWindowHours:        DefaultTimingWindowHours,
 		TimingPoints:             DefaultTimingPoints,
+		SeverityBuckets: [4]float64{
+			DefaultSeverityBucketSev2,
+			DefaultSeverityBucketSev3,
+			DefaultSeverityBucketSev4,
+			DefaultSeverityBucketSev5,
+		},
 	}
 }
 
@@ -312,6 +336,7 @@ func Score(input ScoringInput) Result {
 	// would have done. The component itself is informational and
 	// contributes 0 points (the override happens on TotalScore, not
 	// at the component level).
+	buckets := effectiveSeverityBuckets(t.SeverityBuckets)
 	if input.Whitelisted {
 		components = append(components, Component{
 			Name:   ComponentWhitelistSuppression,
@@ -319,14 +344,14 @@ func Score(input ScoringInput) Result {
 			Evidence: map[string]any{
 				"suppressed":     true,
 				"would_score":    total,
-				"would_severity": severityForScore(total),
+				"would_severity": severityForScoreBuckets(total, buckets),
 			},
 		})
 		total = 0
 	}
 
-	severity := severityForScore(total)
-	reason := summarize(components, total, severity, input.Whitelisted)
+	severity := severityForScoreBuckets(total, buckets)
+	reason := summarizeWithBuckets(components, total, severity, input.Whitelisted, buckets)
 
 	return Result{
 		TotalScore: total,
@@ -590,34 +615,79 @@ func computeCrossRouteTiming(encs []Encounter, t Thresholds) (Component, bool) {
 }
 
 // severityForScore maps a TotalScore to one of the documented severity
-// buckets. The bucket boundaries are inclusive on the lower bound:
-// a score of exactly 2.0 produces severity 2, a score of 3.99 stays at
-// severity 2, and 4.0 promotes to 3.
+// buckets using the package-default bucket boundaries [2, 4, 6, 8].
+// Kept for callers (notably the fusion layer in worker.go) that have
+// no Thresholds in hand. Inside Score, severityForScoreBuckets with
+// the active Thresholds is used so runtime tuning takes effect.
 //
 // Severity 1 is reserved for manual 'note' watchlist entries surfaced
 // from the UI; the heuristic never emits it.
 func severityForScore(total float64) int {
+	return severityForScoreBuckets(total, [4]float64{
+		DefaultSeverityBucketSev2,
+		DefaultSeverityBucketSev3,
+		DefaultSeverityBucketSev4,
+		DefaultSeverityBucketSev5,
+	})
+}
+
+// severityForScoreBuckets is the bucket-parameterised severity
+// computation. buckets is [sev2, sev3, sev4, sev5]; total >= sev5
+// produces severity 5, total >= sev4 produces 4, etc. Callers that
+// did not configure the buckets must supply the package defaults via
+// effectiveSeverityBuckets.
+func severityForScoreBuckets(total float64, buckets [4]float64) int {
 	switch {
-	case total >= 8:
+	case total >= buckets[3]:
 		return 5
-	case total >= 6:
+	case total >= buckets[2]:
 		return 4
-	case total >= 4:
+	case total >= buckets[1]:
 		return 3
-	case total >= 2:
+	case total >= buckets[0]:
 		return 2
 	default:
 		return 0
 	}
 }
 
-// summarize produces a one-line human reason. The UI also has the
-// component breakdown for the full explanation; this is the at-a-
-// glance string the alert badge uses.
+// effectiveSeverityBuckets returns the supplied buckets if they are
+// strictly positive (the convention for "configured"), otherwise the
+// package defaults. This lets a zero-initialised Thresholds{} keep the
+// historical scoring behaviour, and lets DefaultThresholds() round-trip
+// through serialization without losing the bucket map.
+func effectiveSeverityBuckets(in [4]float64) [4]float64 {
+	if in[0] > 0 || in[1] > 0 || in[2] > 0 || in[3] > 0 {
+		return in
+	}
+	return [4]float64{
+		DefaultSeverityBucketSev2,
+		DefaultSeverityBucketSev3,
+		DefaultSeverityBucketSev4,
+		DefaultSeverityBucketSev5,
+	}
+}
+
+// summarize is the legacy default-bucket summarizer kept for callers
+// outside the runtime-tuned Score path. summarizeWithBuckets is the
+// bucket-aware variant used inside Score.
 func summarize(components []Component, total float64, severity int, whitelisted bool) string {
+	return summarizeWithBuckets(components, total, severity, whitelisted, [4]float64{
+		DefaultSeverityBucketSev2,
+		DefaultSeverityBucketSev3,
+		DefaultSeverityBucketSev4,
+		DefaultSeverityBucketSev5,
+	})
+}
+
+// summarizeWithBuckets produces a one-line human reason. The UI also
+// has the component breakdown for the full explanation; this is the
+// at-a-glance string the alert badge uses.
+func summarizeWithBuckets(components []Component, total float64, severity int, whitelisted bool, buckets [4]float64) string {
 	if whitelisted {
+		ws := summedWithoutWhitelist(components)
 		return fmt.Sprintf("whitelist suppressed (would have scored %.2f, severity %d)",
-			summedWithoutWhitelist(components), severityForScore(summedWithoutWhitelist(components)))
+			ws, severityForScoreBuckets(ws, buckets))
 	}
 	if severity == 0 {
 		if total <= 0 {

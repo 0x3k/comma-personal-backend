@@ -180,6 +180,21 @@ UPDATE plate_encounters
 SET plate_hash = sqlc.arg('new_plate_hash')
 WHERE plate_hash = sqlc.arg('old_plate_hash');
 
+-- name: ListDistinctPlatesEncounteredInWindow :many
+-- All distinct (dongle_id, plate_hash) pairs that have at least one
+-- encounter overlapping the supplied [window_start, window_end]
+-- range. Used by the heuristic re-evaluation endpoint
+-- (POST /v1/alpr/heuristic/reevaluate) to enumerate which plates need
+-- to be re-scored against fresh tuning thresholds without scanning the
+-- entire encounter table. The window is inclusive on both ends and
+-- matches the same overlap semantics as ListEncountersForPlateInWindow.
+-- Ordered for deterministic test fixtures.
+SELECT DISTINCT dongle_id, plate_hash
+FROM plate_encounters
+WHERE last_seen_ts  >= sqlc.arg('window_start')
+  AND first_seen_ts <= sqlc.arg('window_end')
+ORDER BY dongle_id ASC, plate_hash ASC;
+
 -- name: DistinctRoutesForEncountersPlateHash :many
 -- All (dongle_id, route) pairs that have at least one encounter for the
 -- given plate_hash. Companion to DistinctRoutesForPlateHash on the

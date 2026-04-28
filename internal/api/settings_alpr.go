@@ -513,6 +513,14 @@ func (h *ALPRSettingsHandler) RegisterReadRoutes(g *echo.Group) {
 func (h *ALPRSettingsHandler) RegisterMutationRoutes(g *echo.Group) {
 	g.PUT("/settings/alpr", h.SetALPR)
 	g.POST("/settings/alpr/disclaimer/ack", h.AckDisclaimer)
+	// Tuning surface: full-shape PUT, defaults reset, and recent-
+	// changes audit list. All three are session-only -- a device JWT
+	// must never be able to rewrite the heuristic thresholds the
+	// operator calibrated against false-positive history.
+	g.GET("/settings/alpr/tuning", h.GetTuning)
+	g.PUT("/settings/alpr/tuning", h.SetTuning)
+	g.POST("/settings/alpr/tuning/reset", h.ResetTuning)
+	g.GET("/settings/alpr/tuning/audit", h.ListTuningAudit)
 }
 
 // validJurisdictions is the closed set accepted by the disclaimer ack

@@ -190,6 +190,52 @@ func (q *Queries) GetMostRecentEncounterForPlate(ctx context.Context, plateHash 
 	return i, err
 }
 
+const listDistinctPlatesEncounteredInWindow = `-- name: ListDistinctPlatesEncounteredInWindow :many
+SELECT DISTINCT dongle_id, plate_hash
+FROM plate_encounters
+WHERE last_seen_ts  >= $1
+  AND first_seen_ts <= $2
+ORDER BY dongle_id ASC, plate_hash ASC
+`
+
+type ListDistinctPlatesEncounteredInWindowParams struct {
+	WindowStart pgtype.Timestamptz `json:"windowStart"`
+	WindowEnd   pgtype.Timestamptz `json:"windowEnd"`
+}
+
+type ListDistinctPlatesEncounteredInWindowRow struct {
+	DongleID  string `json:"dongleId"`
+	PlateHash []byte `json:"plateHash"`
+}
+
+// All distinct (dongle_id, plate_hash) pairs that have at least one
+// encounter overlapping the supplied [window_start, window_end]
+// range. Used by the heuristic re-evaluation endpoint
+// (POST /v1/alpr/heuristic/reevaluate) to enumerate which plates need
+// to be re-scored against fresh tuning thresholds without scanning the
+// entire encounter table. The window is inclusive on both ends and
+// matches the same overlap semantics as ListEncountersForPlateInWindow.
+// Ordered for deterministic test fixtures.
+func (q *Queries) ListDistinctPlatesEncounteredInWindow(ctx context.Context, arg ListDistinctPlatesEncounteredInWindowParams) ([]ListDistinctPlatesEncounteredInWindowRow, error) {
+	rows, err := q.db.Query(ctx, listDistinctPlatesEncounteredInWindow, arg.WindowStart, arg.WindowEnd)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDistinctPlatesEncounteredInWindowRow
+	for rows.Next() {
+		var i ListDistinctPlatesEncounteredInWindowRow
+		if err := rows.Scan(&i.DongleID, &i.PlateHash); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEncountersForPlate = `-- name: ListEncountersForPlate :many
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,
