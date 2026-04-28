@@ -32,7 +32,6 @@ import (
 // never logged or labelled; logs use plate_hash_b64 instead.
 type ALPREncountersHandler struct {
 	queries  alprEncountersQuerier
-	store    *settings.Store
 	keyring  plateKeyring
 	envelope alprEnvelope
 }
@@ -48,7 +47,6 @@ type alprEncountersQuerier interface {
 	GetWatchlistByHash(ctx context.Context, plateHash []byte) (db.GetWatchlistByHashRow, error)
 	GetSignature(ctx context.Context, id int64) (db.VehicleSignature, error)
 	GetTripByRouteID(ctx context.Context, routeID int32) (db.Trip, error)
-	GetRouteByID(ctx context.Context, id int32) (db.Route, error)
 }
 
 // plateKeyring is the slice of *alprcrypto.Keyring methods the encounters
@@ -122,7 +120,6 @@ func NewALPREncountersHandler(queries alprEncountersQuerier, store *settings.Sto
 	}
 	h := &ALPREncountersHandler{
 		queries: queries,
-		store:   store,
 		keyring: keyring,
 	}
 	h.envelope = settingsEnvelope{store: store, hasKeys: hasKeys}
@@ -134,13 +131,6 @@ func NewALPREncountersHandler(queries alprEncountersQuerier, store *settings.Sto
 // route wiring can apply the gate without re-implementing it.
 func (h *ALPREncountersHandler) RequireEnabled() echo.MiddlewareFunc {
 	return requireAlprEnabled(h.envelope)
-}
-
-// withEnvelope swaps in a custom alprEnvelope. Used by tests to force
-// "alpr_disabled" without creating a real settings.Store.
-func (h *ALPREncountersHandler) withEnvelope(env alprEnvelope) *ALPREncountersHandler {
-	h.envelope = env
-	return h
 }
 
 // alprDisabledResponse is the JSON envelope returned by the
