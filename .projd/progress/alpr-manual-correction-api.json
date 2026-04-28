@@ -1,10 +1,11 @@
 {
   "id": "alpr-manual-correction-api",
   "name": "Manual OCR correction + plate-hash merge endpoints",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 7,
   "blocked_by": ["alpr-watchlist-api"],
-  "branch": "",
+  "branch": "agent/alpr-manual-correction-api",
+  "base_branch": "feat/alpr",
   "summary": "OCR is imperfect; the user needs an escape hatch when '0CR123' should be 'OCR123', or when two encounters with hashes A and B are clearly the same physical plate (the engine read 'O' as '0' on different days). Two endpoints: edit a single detection's plate text (which re-hashes and triggers re-aggregation + re-evaluation), and merge two plate hashes into one. Both are destructive in the sense that they rewrite history -- audit-logged, transactional, no half-states.",
   "acceptance_criteria": [
     "PATCH /v1/alpr/detections/:id (session-only, requireAlprEnabled) body {plate: string}: in a single transaction -- (1) compute new ciphertext + hash via internal/alpr/crypto, (2) UPDATE plate_detections SET plate_ciphertext=?, plate_hash=?, ocr_corrected=true WHERE id=?, (3) re-trigger encounter aggregation for that detection's route (delete + reinsert encounters), (4) trigger heuristic re-evaluation for BOTH the old plate_hash AND the new plate_hash. 400 on empty plate after normalization, 404 on unknown id, 403 on cross-device (load detection.dongle_id then checkDongleAccess).",
