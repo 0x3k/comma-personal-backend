@@ -71,6 +71,11 @@ elif _ts_has typecheck; then
 else
     run_check "typecheck" sh -c "cd '$_ts_dir' && npx tsc --noEmit"
 fi
+# Production build catches Next.js App Router rules (e.g. allowed page exports)
+# that lint/type-check do not exercise. Slower than the rest of smoke (~15-30s).
+if _ts_has build; then
+    run_check "build" sh -c "cd '$_ts_dir' && npm run build"
+fi
 
 run_check "vet" go vet ./...
 run_check "fmt" bash -c 'test -z "$(gofmt -l .)"'

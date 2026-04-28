@@ -263,5 +263,3 @@ export default function AlertsPage() {
     </Suspense>
   );
 }
-
-export { EMPTY_ALERTS_FILTERS };

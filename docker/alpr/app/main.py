@@ -1,7 +1,7 @@
 """HTTP wrapper around FastALPR exposing the contract documented in
 .projd/progress/alpr-engine-service.json:
 
-  GET  /health        -> {ok, model, version, region, supports_attributes}
+  GET  /health        -> {ok, model, version, region}
   POST /v1/detect     -> {detections: [{plate, confidence, bbox, ...}]}
 
 The Go backend (internal/alpr.Client) is the only intended caller. The
@@ -29,8 +29,6 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image, UnidentifiedImageError
 
-from app import attributes as vehicle_attributes
-
 # fast_alpr is imported lazily on first /v1/detect so /health works even
 # if the model download is still in flight at startup. Container readiness
 # is therefore "process is up", not "model is loaded".
@@ -53,14 +51,6 @@ MAX_IMAGE_BYTES = int(os.environ.get("ALPR_MAX_IMAGE_BYTES", str(10 * 1024 * 102
 DETECTOR_MODEL = os.environ.get("ALPR_DETECTOR_MODEL", "yolo-v9-t-384-license-plate-end2end")
 OCR_MODEL = os.environ.get("ALPR_OCR_MODEL", "global-plates-mobile-vit-v2-model")
 REGION = os.environ.get("ALPR_REGION", "us")
-
-# alpr-vehicle-attributes-engine wires the second-stage classifier into
-# this wrapper. The capability flag is sourced directly from the
-# attributes module so /health and /v1/detect agree on whether the
-# classifier is active. ALPR_ATTRIBUTES_ENABLED defaults to "true" inside
-# the container; the operator can flip it to "false" to skip the
-# classifier and reclaim the latency budget (see docs/ALPR.md).
-SUPPORTS_ATTRIBUTES = vehicle_attributes.ATTRIBUTES_ENABLED
 
 # Best-effort version reporting. Reads the installed fast-alpr distribution
 # version so /health reflects the model code in use.
@@ -113,13 +103,8 @@ async def health() -> dict[str, Any]:
         "model": f"{DETECTOR_MODEL}+{OCR_MODEL}",
         "version": ENGINE_VERSION,
         "region": REGION,
-        "supports_attributes": SUPPORTS_ATTRIBUTES,
         "engine_loaded": _alpr_engine is not None,
         "engine_error": _alpr_engine_error,
-        # Surface the most recent attribute-classifier load failure so an
-        # operator can tell whether ALPR_ATTRIBUTES_ENABLED=true is doing
-        # what it claims. None means "no failure recorded".
-        "attributes_error": vehicle_attributes.availability_error(),
     }
 
 
@@ -184,20 +169,10 @@ def _detection_to_dict(
     det: Any,
     img_w: int,
     img_h: int,
-    vehicle: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Map a fast-alpr ALPRResult to the documented detection dict.
     Returns None for results with no recognised plate text -- the caller
     has no use for a bbox without a plate string.
-
-    ``vehicle`` carries the per-detection vehicle attribute dict from
-    ``app.attributes.predict``. Passed in rather than computed here so
-    the caller can run the classifier once per frame and share the
-    result across all plate detections in that frame (the classifier is
-    image-level, not bbox-level, in the open-image-models default
-    pipeline). Pass ``None`` when ALPR_ATTRIBUTES_ENABLED=false or the
-    classifier is unavailable; the wrapper emits ``vehicle: null`` on
-    the wire.
     """
     plate_text = ""
     plate_conf = 0.0
@@ -210,7 +185,15 @@ def _detection_to_dict(
     ocr = getattr(det, "ocr", None)
     if ocr is not None:
         plate_text = str(getattr(ocr, "text", "") or "")
-        plate_conf = float(getattr(ocr, "confidence", 0.0) or 0.0)
+        # fast-alpr >=0.4 returns per-character confidences as a list; older
+        # versions returned a single plate-level scalar. Reduce to the
+        # minimum so a single low-confidence character caps the plate
+        # confidence (false positives are worse than misses for this app).
+        raw_conf = getattr(ocr, "confidence", 0.0) or 0.0
+        if isinstance(raw_conf, (list, tuple)):
+            plate_conf = float(min(raw_conf)) if raw_conf else 0.0
+        else:
+            plate_conf = float(raw_conf)
 
     if not plate_text:
         return None
@@ -219,44 +202,26 @@ def _detection_to_dict(
         "plate": plate_text,
         "confidence": plate_conf,
         "bbox": _normalise_bbox(bbox_obj, img_w, img_h),
-        # vehicle is None when the classifier is disabled / unavailable,
-        # OR a dict with the documented schema when it ran. The Go
-        # client treats both the JSON null and a present-but-all-null
-        # dict as valid states (see internal/alpr/client.go).
-        "vehicle": vehicle,
     }
 
 
 async def _run_detect(image: Image.Image) -> list[dict[str, Any]]:
     """Run the synchronous ALPR predict() call inside a thread so the
     event loop stays responsive, and apply the per-request timeout.
-
-    When the attribute classifier is enabled, a single classifier pass
-    is issued per frame and the resulting attribute dict is shared
-    across every plate detection on that frame. open-image-models is
-    image-level (the engine decision document explains the rationale);
-    re-running it per bbox would multiply latency without improving
-    accuracy because the same vehicle is in frame.
     """
     engine = await _get_engine()
 
-    def _predict_plus_attributes() -> tuple[list[Any], dict[str, Any] | None]:
+    def _predict() -> list[Any]:
         # fast-alpr expects an RGB or BGR numpy array; PIL Image -> numpy
         # is handled internally for >= 0.1.x, but be conservative.
         import numpy as np
 
         arr = np.asarray(image)
-        plate_results = engine.predict(arr)
-
-        # Run the attribute classifier inline so the per-request timeout
-        # covers both calls together. Returning None is the documented
-        # "skip" signal -- _detection_to_dict turns that into vehicle:null.
-        vehicle_attrs = vehicle_attributes.predict(arr)
-        return plate_results, vehicle_attrs
+        return engine.predict(arr)
 
     try:
-        results, vehicle_attrs = await asyncio.wait_for(
-            asyncio.to_thread(_predict_plus_attributes),
+        results = await asyncio.wait_for(
+            asyncio.to_thread(_predict),
             timeout=DETECT_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError as exc:
@@ -265,7 +230,7 @@ async def _run_detect(image: Image.Image) -> list[dict[str, Any]]:
     img_w, img_h = image.size
     detections: list[dict[str, Any]] = []
     for r in results or []:
-        d = _detection_to_dict(r, img_w, img_h, vehicle=vehicle_attrs)
+        d = _detection_to_dict(r, img_w, img_h)
         if d is not None:
             detections.append(d)
     return detections

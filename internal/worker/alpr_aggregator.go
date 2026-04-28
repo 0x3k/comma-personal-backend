@@ -124,7 +124,7 @@ type ALPRAggregatorQuerier interface {
 	ListDetectionsForRoute(ctx context.Context, arg db.ListDetectionsForRouteParams) ([]db.ListDetectionsForRouteRow, error)
 	CountTurnsInWindow(ctx context.Context, arg db.CountTurnsInWindowParams) (int64, error)
 	DeleteEncountersForRoute(ctx context.Context, arg db.DeleteEncountersForRouteParams) (int64, error)
-	UpsertEncounter(ctx context.Context, arg db.UpsertEncounterParams) (db.PlateEncounter, error)
+	UpsertEncounter(ctx context.Context, arg db.UpsertEncounterParams) (db.UpsertEncounterRow, error)
 
 	// WithTxQuerier returns a querier bound to the given pgx.Tx. The
 	// production *db.Queries-backed adapter wraps q.WithTx(tx) so the
@@ -405,7 +405,6 @@ func (w *ALPRAggregator) persist(ctx context.Context, dongleID, route string, en
 			DetectionCount:        e.DetectionCount,
 			TurnCount:             e.TurnCount,
 			MaxInternalGapSeconds: e.MaxInternalGapSeconds,
-			SignatureID:           e.SignatureID,
 			Status:                "open",
 			BboxFirst:             e.BboxFirst,
 			BboxLast:              e.BboxLast,
@@ -450,7 +449,6 @@ type encounter struct {
 	DetectionCount        int32
 	TurnCount             int32
 	MaxInternalGapSeconds int32
-	SignatureID           pgtype.Int8
 	BboxFirst             []byte
 	BboxLast              []byte
 }
@@ -560,19 +558,10 @@ func encountersForPlateBucket(group []db.ListDetectionsForRouteRow, gap time.Dur
 				current.MaxInternalGapSeconds = gapSec
 			}
 			current.BboxLast = append([]byte(nil), row.Bbox...)
-			// signature accounting happens after the walk; defer
-			// the per-row tally to chooseSignatureID.
 		}
 		prevTs = ts
 	}
 	out = append(out, current)
-
-	// Stamp signature_id per encounter using the mode of the rows
-	// that produced it. We cannot do this incrementally above
-	// because closing-out an encounter requires the full count
-	// across all of its rows; rather than carry a partial counter
-	// per encounter, we re-walk each emitted encounter and tally.
-	stampSignatureIDs(out, group, gap)
 	return out
 }
 
@@ -588,73 +577,6 @@ func startEncounter(row db.ListDetectionsForRouteRow) encounter {
 		BboxFirst:             append([]byte(nil), row.Bbox...),
 		BboxLast:              append([]byte(nil), row.Bbox...),
 	}
-}
-
-// stampSignatureIDs computes signature_id for each encounter as the
-// mode of its constituent rows' signature_id (ignoring nulls). Ties
-// resolve to the lowest signature_id so re-runs are deterministic.
-// Walks the (already sorted) group again, partitioning into the same
-// encounters by gap so per-encounter tallies stay aligned.
-func stampSignatureIDs(encounters []encounter, group []db.ListDetectionsForRouteRow, gap time.Duration) {
-	if len(encounters) == 0 || len(group) == 0 {
-		return
-	}
-	// Tally per encounter. encIdx tracks which encounter the current
-	// row belongs to; advance when the gap to the prior row exceeds
-	// the threshold (mirroring encountersForPlateBucket).
-	encIdx := 0
-	tallies := make([]map[int64]int, len(encounters))
-	tallies[0] = make(map[int64]int)
-
-	prevTs := group[0].FrameTs.Time
-	if group[0].SignatureID.Valid {
-		tallies[0][group[0].SignatureID.Int64]++
-	}
-	for i := 1; i < len(group); i++ {
-		row := group[i]
-		ts := row.FrameTs.Time
-		if ts.Sub(prevTs) > gap {
-			encIdx++
-			if encIdx >= len(encounters) {
-				// Defensive: tally bookkeeping disagrees with the
-				// emitted-encounter list. Should be impossible
-				// because both walks use the same group + gap; log
-				// and stop tallying rather than write past the
-				// slice.
-				return
-			}
-			tallies[encIdx] = make(map[int64]int)
-		}
-		if row.SignatureID.Valid {
-			tallies[encIdx][row.SignatureID.Int64]++
-		}
-		prevTs = ts
-	}
-
-	for i := range encounters {
-		encounters[i].SignatureID = modeSignatureID(tallies[i])
-	}
-}
-
-// modeSignatureID returns the mode of a tally; null when the tally is
-// empty (no row had a signature). Ties resolve to the lowest
-// signature_id so re-runs are deterministic.
-func modeSignatureID(tally map[int64]int) pgtype.Int8 {
-	if len(tally) == 0 {
-		return pgtype.Int8{}
-	}
-	var bestID int64
-	bestCount := -1
-	for id, count := range tally {
-		if count > bestCount || (count == bestCount && id < bestID) {
-			bestCount = count
-			bestID = id
-		}
-	}
-	if bestCount <= 0 {
-		return pgtype.Int8{}
-	}
-	return pgtype.Int8{Int64: bestID, Valid: true}
 }
 
 // uniquePlateHashes returns the distinct plate hashes across the

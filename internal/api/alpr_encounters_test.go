@@ -62,11 +62,10 @@ func (k *fakeKeyring) DecryptLabel(ciphertext []byte) (string, error) {
 type fakeEncountersQuerier struct {
 	routes              map[string]db.Route // key: dongle|route_name
 	routesByID          map[int32]db.Route  // key: id
-	encountersByRoute   map[string][]db.PlateEncounter
-	encountersByHash    map[string][]db.PlateEncounter
+	encountersByRoute   map[string][]db.ListEncountersForRouteRow
+	encountersByHash    map[string][]db.ListEncountersForPlateRow
 	detectionsByRoute   map[string][]db.ListDetectionsForRouteRow
 	watchlistByHash     map[string]db.GetWatchlistByHashRow
-	signaturesByID      map[int64]db.VehicleSignature
 	tripsByRouteID      map[int32]db.Trip
 	getRouteErr         error
 	listEncountersErr   error
@@ -78,11 +77,10 @@ func newFakeEncountersQuerier() *fakeEncountersQuerier {
 	return &fakeEncountersQuerier{
 		routes:            make(map[string]db.Route),
 		routesByID:        make(map[int32]db.Route),
-		encountersByRoute: make(map[string][]db.PlateEncounter),
-		encountersByHash:  make(map[string][]db.PlateEncounter),
+		encountersByRoute: make(map[string][]db.ListEncountersForRouteRow),
+		encountersByHash:  make(map[string][]db.ListEncountersForPlateRow),
 		detectionsByRoute: make(map[string][]db.ListDetectionsForRouteRow),
 		watchlistByHash:   make(map[string]db.GetWatchlistByHashRow),
-		signaturesByID:    make(map[int64]db.VehicleSignature),
 		tripsByRouteID:    make(map[int32]db.Trip),
 	}
 }
@@ -108,14 +106,14 @@ func (f *fakeEncountersQuerier) GetRouteByID(_ context.Context, id int32) (db.Ro
 	return r, nil
 }
 
-func (f *fakeEncountersQuerier) ListEncountersForRoute(_ context.Context, arg db.ListEncountersForRouteParams) ([]db.PlateEncounter, error) {
+func (f *fakeEncountersQuerier) ListEncountersForRoute(_ context.Context, arg db.ListEncountersForRouteParams) ([]db.ListEncountersForRouteRow, error) {
 	if f.listEncountersErr != nil {
 		return nil, f.listEncountersErr
 	}
 	return f.encountersByRoute[encountersRouteKey(arg.DongleID, arg.Route)], nil
 }
 
-func (f *fakeEncountersQuerier) ListEncountersForPlate(_ context.Context, plateHash []byte) ([]db.PlateEncounter, error) {
+func (f *fakeEncountersQuerier) ListEncountersForPlate(_ context.Context, plateHash []byte) ([]db.ListEncountersForPlateRow, error) {
 	if f.listEncountersHashE != nil {
 		return nil, f.listEncountersHashE
 	}
@@ -133,14 +131,6 @@ func (f *fakeEncountersQuerier) GetWatchlistByHash(_ context.Context, plateHash 
 	v, ok := f.watchlistByHash[string(plateHash)]
 	if !ok {
 		return db.GetWatchlistByHashRow{}, pgx.ErrNoRows
-	}
-	return v, nil
-}
-
-func (f *fakeEncountersQuerier) GetSignature(_ context.Context, id int64) (db.VehicleSignature, error) {
-	v, ok := f.signaturesByID[id]
-	if !ok {
-		return db.VehicleSignature{}, pgx.ErrNoRows
 	}
 	return v, nil
 }
@@ -169,10 +159,28 @@ func timestamptz(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }
 
-// makeEncounter builds a PlateEncounter row with sensible defaults so
-// tests only override fields that matter to them.
-func makeEncounter(id int64, dongle, route string, plateHash []byte, firstSeen, lastSeen time.Time) db.PlateEncounter {
-	return db.PlateEncounter{
+// makeRouteEncounter builds a ListEncountersForRouteRow with sensible
+// defaults so tests only override fields that matter to them.
+func makeRouteEncounter(id int64, dongle, route string, plateHash []byte, firstSeen, lastSeen time.Time) db.ListEncountersForRouteRow {
+	return db.ListEncountersForRouteRow{
+		ID:             id,
+		DongleID:       dongle,
+		Route:          route,
+		PlateHash:      plateHash,
+		FirstSeenTs:    timestamptz(firstSeen),
+		LastSeenTs:     timestamptz(lastSeen),
+		DetectionCount: 1,
+		TurnCount:      0,
+		Status:         "ok",
+		BboxFirst:      []byte(`{"x":1,"y":2,"w":3,"h":4}`),
+		BboxLast:       []byte(`{"x":5,"y":6,"w":7,"h":8}`),
+	}
+}
+
+// makePlateEncounter builds a ListEncountersForPlateRow with sensible
+// defaults for plate-detail tests.
+func makePlateEncounter(id int64, dongle, route string, plateHash []byte, firstSeen, lastSeen time.Time) db.ListEncountersForPlateRow {
+	return db.ListEncountersForPlateRow{
 		ID:             id,
 		DongleID:       dongle,
 		Route:          route,
@@ -257,16 +265,15 @@ func TestRouteEncounters_HappyPath_MixedAlertedUnalerted(t *testing.T) {
 		RouteName: route,
 		StartTime: timestamptz(now),
 	}
-	q.encountersByRoute[encountersRouteKey(dongle, route)] = []db.PlateEncounter{
-		func() db.PlateEncounter {
-			e := makeEncounter(101, dongle, route, hashAlerted, now, now.Add(10*time.Second))
+	q.encountersByRoute[encountersRouteKey(dongle, route)] = []db.ListEncountersForRouteRow{
+		func() db.ListEncountersForRouteRow {
+			e := makeRouteEncounter(101, dongle, route, hashAlerted, now, now.Add(10*time.Second))
 			e.DetectionCount = 12
 			e.TurnCount = 3
-			e.SignatureID = pgtype.Int8{Int64: 555, Valid: true}
 			return e
 		}(),
-		func() db.PlateEncounter {
-			e := makeEncounter(102, dongle, route, hashClean, now.Add(20*time.Second), now.Add(40*time.Second))
+		func() db.ListEncountersForRouteRow {
+			e := makeRouteEncounter(102, dongle, route, hashClean, now.Add(20*time.Second), now.Add(40*time.Second))
 			e.DetectionCount = 4
 			e.TurnCount = 1
 			return e
@@ -285,15 +292,6 @@ func TestRouteEncounters_HappyPath_MixedAlertedUnalerted(t *testing.T) {
 		PlateHash: hashAlerted,
 		Kind:      "alerted",
 		Severity:  pgtype.Int2{Int16: 4, Valid: true},
-	}
-	q.signaturesByID[555] = db.VehicleSignature{
-		ID:           555,
-		SignatureKey: "toyota|camry|silver|sedan",
-		Make:         pgtype.Text{String: "Toyota", Valid: true},
-		Model:        pgtype.Text{String: "Camry", Valid: true},
-		Color:        pgtype.Text{String: "silver", Valid: true},
-		BodyType:     pgtype.Text{String: "sedan", Valid: true},
-		Confidence:   pgtype.Float4{Float32: 0.85, Valid: true},
 	}
 
 	k := newFakeKeyring()
@@ -337,9 +335,6 @@ func TestRouteEncounters_HappyPath_MixedAlertedUnalerted(t *testing.T) {
 	if alerted.AckStatus == nil || *alerted.AckStatus != "open" {
 		t.Errorf("first encounter ack_status = %v, want open", alerted.AckStatus)
 	}
-	if alerted.Signature == nil || alerted.Signature.Make != "Toyota" || alerted.Signature.Model != "Camry" {
-		t.Errorf("first encounter signature = %+v, want Toyota Camry", alerted.Signature)
-	}
 	if alerted.BboxFirst == nil || alerted.BboxFirst.X != 1 || alerted.BboxFirst.W != 3 {
 		t.Errorf("first encounter bbox_first = %+v, want {1,2,3,4}", alerted.BboxFirst)
 	}
@@ -358,67 +353,8 @@ func TestRouteEncounters_HappyPath_MixedAlertedUnalerted(t *testing.T) {
 	if clean.AckStatus != nil {
 		t.Errorf("second encounter ack_status = %v, want nil", *clean.AckStatus)
 	}
-	if clean.Signature != nil {
-		t.Errorf("second encounter signature = %+v, want nil (no signature_id)", clean.Signature)
-	}
 	if clean.SampleThumbURL != nil {
 		t.Errorf("second encounter sample_thumb_url = %v, want nil (no thumb)", *clean.SampleThumbURL)
-	}
-}
-
-func TestRouteEncounters_MissingSignaturePath(t *testing.T) {
-	// Encounter has signature_id NOT NULL but the signature row is
-	// missing (e.g. deleted by a retention sweep on the signatures
-	// table while the encounter still references it). The handler
-	// should NOT 500 -- it should drop the signature field but keep
-	// the rest of the encounter.
-	const dongle = "d-1"
-	const route = "2026-04-01--11-00-00"
-	now := time.Date(2026, 4, 1, 11, 0, 0, 0, time.UTC)
-
-	hash := []byte{0x10, 0x20}
-	cipher := []byte("CIPHER-X")
-
-	q := newFakeEncountersQuerier()
-	q.routes[encountersRouteKey(dongle, route)] = db.Route{
-		ID: 1, DongleID: dongle, RouteName: route, StartTime: timestamptz(now),
-	}
-	q.encountersByRoute[encountersRouteKey(dongle, route)] = []db.PlateEncounter{
-		func() db.PlateEncounter {
-			e := makeEncounter(1, dongle, route, hash, now, now.Add(time.Second))
-			e.SignatureID = pgtype.Int8{Int64: 999, Valid: true} // dangling FK
-			return e
-		}(),
-	}
-	q.detectionsByRoute[encountersRouteKey(dongle, route)] = []db.ListDetectionsForRouteRow{
-		makeDetection(1, dongle, route, hash, cipher, now),
-	}
-	// signaturesByID intentionally empty -- 999 not found
-
-	k := newFakeKeyring()
-	k.plates[string(cipher)] = "QED111"
-
-	h := makeRouteEncountersHandler(q, k)
-	rec, c := newRouteEncountersRequest(t, dongle, route, dongle)
-	if err := h.GetRouteEncounters(c); err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
-
-	var body routeEncountersResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(body.Encounters) != 1 {
-		t.Fatalf("len(encounters) = %d, want 1", len(body.Encounters))
-	}
-	if body.Encounters[0].Plate != "QED111" {
-		t.Errorf("plate = %q, want QED111", body.Encounters[0].Plate)
-	}
-	if body.Encounters[0].Signature != nil {
-		t.Errorf("signature = %+v, want nil (FK dangling)", body.Encounters[0].Signature)
 	}
 }
 
@@ -459,22 +395,20 @@ func TestPlateDetail_HappyPath_DecryptsAndComputesStats(t *testing.T) {
 	hashB64 := base64.RawURLEncoding.EncodeToString(hash)
 
 	q := newFakeEncountersQuerier()
-	q.encountersByHash[string(hash)] = []db.PlateEncounter{
-		func() db.PlateEncounter {
-			e := makeEncounter(1, "d-1", "route-A", hash, now, now.Add(time.Minute))
+	q.encountersByHash[string(hash)] = []db.ListEncountersForPlateRow{
+		func() db.ListEncountersForPlateRow {
+			e := makePlateEncounter(1, "d-1", "route-A", hash, now, now.Add(time.Minute))
 			e.DetectionCount = 5
 			e.TurnCount = 1
-			e.SignatureID = pgtype.Int8{Int64: 7, Valid: true}
 			return e
 		}(),
-		func() db.PlateEncounter {
-			e := makeEncounter(2, "d-1", "route-B", hash, now.Add(-2*24*time.Hour), now.Add(-2*24*time.Hour+time.Minute))
+		func() db.ListEncountersForPlateRow {
+			e := makePlateEncounter(2, "d-1", "route-B", hash, now.Add(-2*24*time.Hour), now.Add(-2*24*time.Hour+time.Minute))
 			e.DetectionCount = 3
-			e.SignatureID = pgtype.Int8{Int64: 7, Valid: true}
 			return e
 		}(),
-		func() db.PlateEncounter {
-			e := makeEncounter(3, "d-1", "route-C", hash, now.Add(-60*24*time.Hour), now.Add(-60*24*time.Hour+time.Minute))
+		func() db.ListEncountersForPlateRow {
+			e := makePlateEncounter(3, "d-1", "route-C", hash, now.Add(-60*24*time.Hour), now.Add(-60*24*time.Hour+time.Minute))
 			e.DetectionCount = 2
 			return e
 		}(),
@@ -497,11 +431,6 @@ func TestPlateDetail_HappyPath_DecryptsAndComputesStats(t *testing.T) {
 		Kind:      "alerted",
 		Severity:  pgtype.Int2{Int16: 4, Valid: true},
 		AckedAt:   pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
-	}
-	q.signaturesByID[7] = db.VehicleSignature{
-		ID:    7,
-		Make:  pgtype.Text{String: "Toyota", Valid: true},
-		Model: pgtype.Text{String: "Camry", Valid: true},
 	}
 
 	k := newFakeKeyring()
@@ -535,9 +464,6 @@ func TestPlateDetail_HappyPath_DecryptsAndComputesStats(t *testing.T) {
 	if body.WatchlistStatus == nil || body.WatchlistStatus.AckedAt == nil {
 		t.Errorf("watchlist_status.acked_at = nil, want set")
 	}
-	if body.Signature == nil || body.Signature.Make != "Toyota" {
-		t.Errorf("signature = %+v, want Toyota", body.Signature)
-	}
 	if len(body.Encounters) != 3 {
 		t.Errorf("len(encounters) = %d, want 3", len(body.Encounters))
 	}
@@ -568,10 +494,10 @@ func TestPlateDetail_PaginationCorrectness(t *testing.T) {
 
 	q := newFakeEncountersQuerier()
 	// 100 encounters, newest first by last_seen_ts.
-	encounters := make([]db.PlateEncounter, 100)
+	encounters := make([]db.ListEncountersForPlateRow, 100)
 	for i := range encounters {
 		ts := now.Add(time.Duration(-i) * time.Hour)
-		encounters[i] = makeEncounter(int64(i+1), "d-1", fmt.Sprintf("route-%03d", i), hash, ts, ts.Add(time.Minute))
+		encounters[i] = makePlateEncounter(int64(i+1), "d-1", fmt.Sprintf("route-%03d", i), hash, ts, ts.Add(time.Minute))
 		encounters[i].DetectionCount = 1
 	}
 	q.encountersByHash[string(hash)] = encounters
@@ -643,8 +569,8 @@ func TestPlateDetail_400OnBadPagination(t *testing.T) {
 	hash := []byte{0x01, 0x02}
 	hashB64 := base64.RawURLEncoding.EncodeToString(hash)
 	q := newFakeEncountersQuerier()
-	q.encountersByHash[string(hash)] = []db.PlateEncounter{
-		makeEncounter(1, "d-1", "r-1", hash, time.Now(), time.Now()),
+	q.encountersByHash[string(hash)] = []db.ListEncountersForPlateRow{
+		makePlateEncounter(1, "d-1", "r-1", hash, time.Now(), time.Now()),
 	}
 	h := makeRouteEncountersHandler(q, newFakeKeyring())
 

@@ -175,9 +175,7 @@ type ALPRDetectorMetrics interface {
 type ALPRDetectorQuerier interface {
 	GetRoute(ctx context.Context, arg db.GetRouteParams) (db.Route, error)
 	GetRouteGeometryAndTimes(ctx context.Context, arg db.GetRouteGeometryWKTParams) (db.RouteGeometryAndTimes, error)
-	UpsertSignatureByKey(ctx context.Context, arg db.UpsertSignatureByKeyParams) (db.VehicleSignature, error)
 	InsertDetection(ctx context.Context, arg db.InsertDetectionParams) (db.InsertDetectionRow, error)
-	UpdateDetectionSignature(ctx context.Context, arg db.UpdateDetectionSignatureParams) error
 	MarkDetectorProcessed(ctx context.Context, arg db.MarkDetectorProcessedParams) error
 	CountRouteDetectorProgress(ctx context.Context, arg db.CountRouteDetectorProgressParams) (db.CountRouteDetectorProgressRow, error)
 	ListDetectionsForRoute(ctx context.Context, arg db.ListDetectionsForRouteParams) ([]db.ListDetectionsForRouteRow, error)
@@ -755,32 +753,6 @@ func (w *ALPRDetector) persistDetection(
 	}()
 	qtx := w.Queries.WithTxQuerier(tx)
 
-	var sigID pgtype.Int8
-	var detMake, detModel, detColor, detBodyType pgtype.Text
-	var detAttrConf pgtype.Float4
-
-	if det.Vehicle != nil && det.Vehicle.SignatureKey != "" {
-		sig, err := qtx.UpsertSignatureByKey(ctx, db.UpsertSignatureByKeyParams{
-			SignatureKey: det.Vehicle.SignatureKey,
-			Make:         optText(det.Vehicle.Make),
-			Model:        optText(det.Vehicle.Model),
-			Color:        optText(det.Vehicle.Color),
-			BodyType:     optText(det.Vehicle.BodyType),
-			Confidence:   optFloat4(det.Vehicle.Confidence),
-		})
-		if err != nil {
-			return fmt.Errorf("upsert signature: %w", err)
-		}
-		sigID = pgtype.Int8{Int64: sig.ID, Valid: true}
-	}
-	if det.Vehicle != nil {
-		detMake = optText(det.Vehicle.Make)
-		detModel = optText(det.Vehicle.Model)
-		detColor = optText(det.Vehicle.Color)
-		detBodyType = optText(det.Vehicle.BodyType)
-		detAttrConf = optFloat4(det.Vehicle.Confidence)
-	}
-
 	gpsLat := pgtype.Float8{Float64: gps.Lat, Valid: true}
 	gpsLng := pgtype.Float8{Float64: gps.Lng, Valid: true}
 	gpsHeading := pgtype.Float4{}
@@ -788,7 +760,7 @@ func (w *ALPRDetector) persistDetection(
 		gpsHeading = pgtype.Float4{Float32: float32(gps.HeadingDeg), Valid: true}
 	}
 
-	row, err := qtx.InsertDetection(ctx, db.InsertDetectionParams{
+	if _, err := qtx.InsertDetection(ctx, db.InsertDetectionParams{
 		DongleID:        frame.DongleID,
 		Route:           frame.Route,
 		Segment:         int32(frame.Segment),
@@ -803,27 +775,8 @@ func (w *ALPRDetector) persistDetection(
 		GpsHeadingDeg:   gpsHeading,
 		FrameTs:         pgtype.Timestamptz{Time: frameTs, Valid: true},
 		ThumbPath:       pgtype.Text{},
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("insert detection: %w", err)
-	}
-
-	// If we have a signature link or denormalized vehicle attributes,
-	// stamp them onto the just-inserted row inside the same tx so a
-	// reader never observes a detection without its associated
-	// signature_id when one was available.
-	if sigID.Valid || detMake.Valid || detModel.Valid || detColor.Valid || detBodyType.Valid || detAttrConf.Valid {
-		if err := qtx.UpdateDetectionSignature(ctx, db.UpdateDetectionSignatureParams{
-			SignatureID:       sigID,
-			DetMake:           detMake,
-			DetModel:          detModel,
-			DetColor:          detColor,
-			DetBodyType:       detBodyType,
-			DetAttrConfidence: detAttrConf,
-			ID:                row.ID,
-		}); err != nil {
-			return fmt.Errorf("update detection signature: %w", err)
-		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1076,24 +1029,4 @@ func (w *ALPRDetector) metricsIncProcessed(result string) {
 		return
 	}
 	w.Metrics.IncALPRFrameProcessed(result)
-}
-
-// optText converts a Go string to a pgtype.Text where empty == NULL.
-// The vehicle attribute fields are emitted as nullable on the wire and
-// we want absent values to land as SQL NULL so COALESCE in
-// UpsertSignatureByKey behaves as documented.
-func optText(s string) pgtype.Text {
-	if s == "" {
-		return pgtype.Text{}
-	}
-	return pgtype.Text{String: s, Valid: true}
-}
-
-// optFloat4 converts a *float64 to a pgtype.Float4 where nil == NULL.
-// Same null-vs-absent rationale as optText.
-func optFloat4(v *float64) pgtype.Float4 {
-	if v == nil {
-		return pgtype.Float4{}
-	}
-	return pgtype.Float4{Float32: float32(*v), Valid: true}
 }

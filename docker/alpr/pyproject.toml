@@ -9,12 +9,12 @@ requires-python = ">=3.12,<3.13"
 # alpr-engine-spike harness when changing fast-alpr or onnxruntime --
 # both have direct accuracy / latency impact.
 dependencies = [
-  "fast-alpr==0.1.5",
+  "fast-alpr==0.4.0",
   # open-image-models supplies the vehicle make / color / body-type
   # classifier owned by alpr-vehicle-attributes-engine. Pinned tightly so
   # the engine produces deterministic class labels run-to-run; bumping
   # requires re-validating the body-type taxonomy mapping in app/main.py.
-  "open-image-models==0.2.1",
+  "open-image-models==0.5.1",
   "onnxruntime==1.20.1",
   "fastapi==0.115.6",
   "uvicorn[standard]==0.32.1",

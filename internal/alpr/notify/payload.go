@@ -24,7 +24,6 @@
 package notify
 
 import (
-	"comma-personal-backend/internal/alpr"
 	"comma-personal-backend/internal/alpr/heuristic"
 )
 
@@ -50,11 +49,6 @@ type AlertPayload struct {
 	// the payload can deep-link into the plate detail page.
 	PlateHashB64 string
 
-	// Vehicle, when non-nil, is the canonical vehicle attribute set
-	// for this plate (make / model / color / body type). Nil renders
-	// as "Vehicle attributes unknown" in the email body.
-	Vehicle *alpr.VehicleAttributes
-
 	// Evidence is the heuristic's component breakdown ("why we
 	// alerted"). The order of entries mirrors the order Score
 	// produced. Nil-safe -- the email/webhook formatters handle the
@@ -76,31 +70,4 @@ type AlertPayload struct {
 	// unset; in that case the formatters omit the deep link rather
 	// than emit a half-built URL.
 	DashboardURL string
-}
-
-// VehicleBadge returns a short human-readable summary of the vehicle
-// attributes ("Silver Toyota Camry") or a fixed unknown label when the
-// engine produced no attributes for this plate. Used by the email body.
-//
-// Format: "<Color> <Make> <Model>" with empty fields squeezed out so a
-// nil-or-mostly-empty Vehicle does not render as "  Camry". An entirely
-// empty Vehicle (or nil) renders as "Vehicle attributes unknown".
-func (p AlertPayload) VehicleBadge() string {
-	if p.Vehicle == nil {
-		return "Vehicle attributes unknown"
-	}
-	parts := make([]string, 0, 3)
-	for _, s := range []string{p.Vehicle.Color, p.Vehicle.Make, p.Vehicle.Model} {
-		if s != "" {
-			parts = append(parts, s)
-		}
-	}
-	if len(parts) == 0 {
-		return "Vehicle attributes unknown"
-	}
-	out := parts[0]
-	for _, s := range parts[1:] {
-		out = out + " " + s
-	}
-	return out
 }

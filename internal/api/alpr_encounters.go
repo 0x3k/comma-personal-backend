@@ -41,11 +41,10 @@ type ALPREncountersHandler struct {
 // without standing up Postgres.
 type alprEncountersQuerier interface {
 	GetRoute(ctx context.Context, arg db.GetRouteParams) (db.Route, error)
-	ListEncountersForRoute(ctx context.Context, arg db.ListEncountersForRouteParams) ([]db.PlateEncounter, error)
-	ListEncountersForPlate(ctx context.Context, plateHash []byte) ([]db.PlateEncounter, error)
+	ListEncountersForRoute(ctx context.Context, arg db.ListEncountersForRouteParams) ([]db.ListEncountersForRouteRow, error)
+	ListEncountersForPlate(ctx context.Context, plateHash []byte) ([]db.ListEncountersForPlateRow, error)
 	ListDetectionsForRoute(ctx context.Context, arg db.ListDetectionsForRouteParams) ([]db.ListDetectionsForRouteRow, error)
 	GetWatchlistByHash(ctx context.Context, plateHash []byte) (db.GetWatchlistByHashRow, error)
-	GetSignature(ctx context.Context, id int64) (db.VehicleSignature, error)
 	GetTripByRouteID(ctx context.Context, routeID int32) (db.Trip, error)
 }
 
@@ -180,18 +179,6 @@ func requireAlprEnabled(env alprEnvelope) echo.MiddlewareFunc {
 	}
 }
 
-// signatureResponse is the JSON shape for a vehicle_signatures row when
-// embedded in encounter responses. Confidence is a pointer so a missing
-// confidence (the column is nullable) serialises as null rather than a
-// misleading 0.
-type signatureResponse struct {
-	Make       string   `json:"make,omitempty"`
-	Model      string   `json:"model,omitempty"`
-	Color      string   `json:"color,omitempty"`
-	BodyType   string   `json:"body_type,omitempty"`
-	Confidence *float32 `json:"confidence,omitempty"`
-}
-
 // bboxResponse is the {x,y,w,h} shape stored in plate_detections.bbox
 // and plate_encounters.bbox_first/bbox_last. We round-trip it through a
 // typed struct so the wire format is stable independent of how the
@@ -209,21 +196,19 @@ type bboxResponse struct {
 // `Plate` is the decrypted plate text; the requester is authenticated
 // and viewing their own data. `PlateHashB64` is included so the
 // frontend can link to the plate-detail page without re-encoding the
-// raw hash bytes. Fields that may be missing (signature, alert state,
-// thumbnail) are pointers so they serialize as null rather than zero
-// values.
+// raw hash bytes. Fields that may be missing (alert state, thumbnail)
+// are pointers so they serialize as null rather than zero values.
 type routeEncounterResponse struct {
-	Plate             string             `json:"plate"`
-	PlateHashB64      string             `json:"plate_hash_b64"`
-	FirstSeenTs       string             `json:"first_seen_ts"`
-	LastSeenTs        string             `json:"last_seen_ts"`
-	DetectionCount    int32              `json:"detection_count"`
-	TurnCount         int32              `json:"turn_count"`
-	Signature         *signatureResponse `json:"signature"`
-	SeverityIfAlerted *int16             `json:"severity_if_alerted"`
-	AckStatus         *string            `json:"ack_status"`
-	BboxFirst         *bboxResponse      `json:"bbox_first"`
-	SampleThumbURL    *string            `json:"sample_thumb_url"`
+	Plate             string        `json:"plate"`
+	PlateHashB64      string        `json:"plate_hash_b64"`
+	FirstSeenTs       string        `json:"first_seen_ts"`
+	LastSeenTs        string        `json:"last_seen_ts"`
+	DetectionCount    int32         `json:"detection_count"`
+	TurnCount         int32         `json:"turn_count"`
+	SeverityIfAlerted *int16        `json:"severity_if_alerted"`
+	AckStatus         *string       `json:"ack_status"`
+	BboxFirst         *bboxResponse `json:"bbox_first"`
+	SampleThumbURL    *string       `json:"sample_thumb_url"`
 }
 
 type routeEncountersResponse struct {
@@ -291,7 +276,7 @@ func (h *ALPREncountersHandler) GetRouteEncounters(c echo.Context) error {
 
 	out := make([]routeEncounterResponse, 0, len(encounters))
 	for _, e := range encounters {
-		entry, err := h.encounterToRouteResponse(ctx, e, sampleByHash)
+		entry, err := h.encounterToRouteResponse(ctx, db.ListEncountersForPlateRow(e), sampleByHash)
 		if err != nil {
 			// Per-encounter failures (e.g. a single decryption failure
 			// from a corrupted ciphertext, or a missing signature row)
@@ -311,7 +296,7 @@ func (h *ALPREncountersHandler) GetRouteEncounters(c echo.Context) error {
 // the wire shape, looking up signature + watchlist state alongside.
 func (h *ALPREncountersHandler) encounterToRouteResponse(
 	ctx context.Context,
-	e db.PlateEncounter,
+	e db.ListEncountersForPlateRow,
 	sampleByHash map[string]db.ListDetectionsForRouteRow,
 ) (routeEncounterResponse, error) {
 	// Find a detection ciphertext we can decrypt for the plate text.
@@ -336,15 +321,6 @@ func (h *ALPREncountersHandler) encounterToRouteResponse(
 		DetectionCount: e.DetectionCount,
 		TurnCount:      e.TurnCount,
 		BboxFirst:      decodeBbox(e.BboxFirst),
-	}
-
-	if e.SignatureID.Valid {
-		sig, err := h.queries.GetSignature(ctx, e.SignatureID.Int64)
-		if err == nil {
-			resp.Signature = signatureToResponse(sig)
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return routeEncounterResponse{}, fmt.Errorf("get signature: %w", err)
-		}
 	}
 
 	// Watchlist state -- severity / ack status -- is per-plate, so we
@@ -384,14 +360,13 @@ func (h *ALPREncountersHandler) encounterToRouteResponse(
 // relative to routeEncounterResponse, and drops plate / plate_hash_b64
 // (those live on the parent envelope).
 type plateDetailEncounter struct {
-	DongleID         string             `json:"dongle_id"`
-	Route            string             `json:"route"`
-	FirstSeenTs      string             `json:"first_seen_ts"`
-	LastSeenTs       string             `json:"last_seen_ts"`
-	DetectionCount   int32              `json:"detection_count"`
-	TurnCount        int32              `json:"turn_count"`
-	Signature        *signatureResponse `json:"signature"`
-	AreaClusterLabel string             `json:"area_cluster_label"`
+	DongleID         string `json:"dongle_id"`
+	Route            string `json:"route"`
+	FirstSeenTs      string `json:"first_seen_ts"`
+	LastSeenTs       string `json:"last_seen_ts"`
+	DetectionCount   int32  `json:"detection_count"`
+	TurnCount        int32  `json:"turn_count"`
+	AreaClusterLabel string `json:"area_cluster_label"`
 }
 
 // plateWatchlistStatus mirrors the subset of plate_watchlist that the
@@ -420,7 +395,6 @@ type plateDetailResponse struct {
 	Plate           string                 `json:"plate"`
 	PlateHashB64    string                 `json:"plate_hash_b64"`
 	WatchlistStatus *plateWatchlistStatus  `json:"watchlist_status"`
-	Signature       *signatureResponse     `json:"signature"`
 	Encounters      []plateDetailEncounter `json:"encounters"`
 	Stats           plateDetailStats       `json:"stats"`
 }
@@ -496,18 +470,7 @@ func (h *ALPREncountersHandler) GetPlateDetail(c echo.Context) error {
 		// Non-fatal: keep going without a watchlist field.
 	}
 
-	// Canonical signature: most-frequent signature_id across encounters,
-	// resolved into a vehicle_signatures row. If no encounter has a
-	// signature_id we leave the field nil.
-	if sigID, ok := dominantSignatureID(all); ok {
-		if sig, err := h.queries.GetSignature(ctx, sigID); err == nil {
-			resp.Signature = signatureToResponse(sig)
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			c.Logger().Errorf("alpr: get signature %d for hash=%s failed: %v", sigID, hashB64Param, err)
-		}
-	}
-
-	// Apply pagination AFTER stats / signature / watchlist computation
+	// Apply pagination AFTER stats / watchlist computation
 	// so those summaries reflect the entire dataset.
 	page := paginate(all, offset, limit)
 	resp.Encounters = make([]plateDetailEncounter, 0, len(page))
@@ -520,16 +483,6 @@ func (h *ALPREncountersHandler) GetPlateDetail(c echo.Context) error {
 			DetectionCount: e.DetectionCount,
 			TurnCount:      e.TurnCount,
 		}
-
-		if e.SignatureID.Valid {
-			if sig, err := h.queries.GetSignature(ctx, e.SignatureID.Int64); err == nil {
-				entry.Signature = signatureToResponse(sig)
-			} else if !errors.Is(err, pgx.ErrNoRows) {
-				c.Logger().Warnf("alpr: get signature %d for encounter %d failed: %v",
-					e.SignatureID.Int64, e.ID, err)
-			}
-		}
-
 		entry.AreaClusterLabel = h.areaClusterLabel(ctx, e)
 		resp.Encounters = append(resp.Encounters, entry)
 	}
@@ -544,7 +497,7 @@ func (h *ALPREncountersHandler) GetPlateDetail(c echo.Context) error {
 // the page can degrade gracefully.
 func (h *ALPREncountersHandler) decryptPlateFromEncounters(
 	ctx context.Context,
-	encounters []db.PlateEncounter,
+	encounters []db.ListEncountersForPlateRow,
 ) string {
 	for _, e := range encounters {
 		dets, err := h.queries.ListDetectionsForRoute(ctx, db.ListDetectionsForRouteParams{
@@ -597,7 +550,7 @@ func (h *ALPREncountersHandler) watchlistRowToStatus(w db.GetWatchlistByHashRow)
 // address first (set by the trip-aggregator-worker); falls back to
 // "lat,lng" rounded to 2 decimal places, and finally to "" when
 // there's no GPS at all on the route.
-func (h *ALPREncountersHandler) areaClusterLabel(ctx context.Context, e db.PlateEncounter) string {
+func (h *ALPREncountersHandler) areaClusterLabel(ctx context.Context, e db.ListEncountersForPlateRow) string {
 	route, err := h.queries.GetRoute(ctx, db.GetRouteParams{
 		DongleID:  e.DongleID,
 		RouteName: e.Route,
@@ -622,7 +575,7 @@ func (h *ALPREncountersHandler) areaClusterLabel(ctx context.Context, e db.Plate
 // numbers are small (a single plate's encounters across all routes is
 // O(routes-it-was-seen-in), not O(detections)) and avoiding a custom
 // SQL aggregate keeps the migrations footprint zero.
-func computePlateStats(encounters []db.PlateEncounter) plateDetailStats {
+func computePlateStats(encounters []db.ListEncountersForPlateRow) plateDetailStats {
 	stats := plateDetailStats{}
 
 	cutoff := time.Now().Add(-30 * 24 * time.Hour)
@@ -668,35 +621,6 @@ func computePlateStats(encounters []db.PlateEncounter) plateDetailStats {
 		stats.LastEverSeen = lastEver.UTC().Format(time.RFC3339)
 	}
 	return stats
-}
-
-// dominantSignatureID returns the signature_id that appears on the
-// most encounters, ties broken by which appears first. Returns
-// (id, true) when at least one encounter has a non-null signature_id;
-// (0, false) otherwise.
-func dominantSignatureID(encounters []db.PlateEncounter) (int64, bool) {
-	counts := map[int64]int{}
-	order := []int64{}
-	for _, e := range encounters {
-		if !e.SignatureID.Valid {
-			continue
-		}
-		id := e.SignatureID.Int64
-		if _, seen := counts[id]; !seen {
-			order = append(order, id)
-		}
-		counts[id]++
-	}
-	if len(order) == 0 {
-		return 0, false
-	}
-	best := order[0]
-	for _, id := range order[1:] {
-		if counts[id] > counts[best] {
-			best = id
-		}
-	}
-	return best, true
 }
 
 // paginate slices a result set safely. offset >= len returns an empty
@@ -780,30 +704,6 @@ func formatTs(ts pgtype.Timestamptz) string {
 		return ""
 	}
 	return ts.Time.UTC().Format(time.RFC3339)
-}
-
-// signatureToResponse converts a vehicle_signatures row into the
-// signature wire shape. Returns nil for an empty row so an
-// encounter without a signature serializes the field as null.
-func signatureToResponse(s db.VehicleSignature) *signatureResponse {
-	out := &signatureResponse{}
-	if s.Make.Valid {
-		out.Make = s.Make.String
-	}
-	if s.Model.Valid {
-		out.Model = s.Model.String
-	}
-	if s.Color.Valid {
-		out.Color = s.Color.String
-	}
-	if s.BodyType.Valid {
-		out.BodyType = s.BodyType.String
-	}
-	if s.Confidence.Valid {
-		c := s.Confidence.Float32
-		out.Confidence = &c
-	}
-	return out
 }
 
 // decodeBbox parses the {x,y,w,h} JSON stored in plate_*.bbox columns.

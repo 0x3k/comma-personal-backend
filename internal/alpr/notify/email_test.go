@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"comma-personal-backend/internal/alpr"
 	"comma-personal-backend/internal/alpr/heuristic"
 )
 
@@ -45,7 +44,6 @@ func TestBuildEmailMessage_ContainsRequiredFields(t *testing.T) {
 		Severity:     5,
 		Plate:        "ABC-123",
 		PlateHashB64: "AAAA",
-		Vehicle:      &alpr.VehicleAttributes{Color: "Silver", Make: "Toyota", Model: "Camry"},
 		Evidence: []heuristic.Component{
 			{Name: heuristic.ComponentCrossRouteCount, Points: 2.5, Evidence: map[string]any{"distinct_routes": 5}},
 		},
@@ -63,7 +61,6 @@ func TestBuildEmailMessage_ContainsRequiredFields(t *testing.T) {
 		"text/plain",
 		"text/html",
 		"ABC-123",
-		"Silver Toyota Camry",
 		heuristic.ComponentCrossRouteCount,
 		"abc1234567890abc",
 		"comma.example.com/alpr/plates/AAAA",
@@ -73,17 +70,6 @@ func TestBuildEmailMessage_ContainsRequiredFields(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("message missing %q\n--- message ---\n%s", want, msg)
 		}
-	}
-}
-
-func TestBuildEmailMessage_VehicleUnknownBadge(t *testing.T) {
-	alert := AlertPayload{
-		Severity: 4,
-		Plate:    "XYZ-789",
-	}
-	msg := string(buildEmailMessage("alerts@example.com", []string{"user@example.com"}, alert))
-	if !strings.Contains(msg, "Vehicle attributes unknown") {
-		t.Errorf("missing unknown-vehicle badge in:\n%s", msg)
 	}
 }
 
@@ -182,27 +168,5 @@ func TestSanitizeHeaderValue(t *testing.T) {
 		if got := sanitizeHeaderValue(in); got != want {
 			t.Errorf("sanitizeHeaderValue(%q) = %q, want %q", in, got, want)
 		}
-	}
-}
-
-func TestVehicleBadge_PartialFields(t *testing.T) {
-	cases := []struct {
-		name string
-		v    *alpr.VehicleAttributes
-		want string
-	}{
-		{"nil", nil, "Vehicle attributes unknown"},
-		{"empty", &alpr.VehicleAttributes{}, "Vehicle attributes unknown"},
-		{"color only", &alpr.VehicleAttributes{Color: "Silver"}, "Silver"},
-		{"make+model", &alpr.VehicleAttributes{Make: "Toyota", Model: "Camry"}, "Toyota Camry"},
-		{"all", &alpr.VehicleAttributes{Color: "Silver", Make: "Toyota", Model: "Camry"}, "Silver Toyota Camry"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := AlertPayload{Vehicle: tc.v}.VehicleBadge()
-			if got != tc.want {
-				t.Errorf("VehicleBadge() = %q, want %q", got, tc.want)
-			}
-		})
 	}
 }

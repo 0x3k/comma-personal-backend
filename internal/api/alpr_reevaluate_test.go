@@ -108,32 +108,6 @@ func (f *reevalFakeQuerier) InsertAlertEvent(_ context.Context, arg db.InsertAle
 	return db.PlateAlertEvent{ID: int64(len(f.alertEvents)), PlateHash: arg.PlateHash, Severity: arg.Severity}, nil
 }
 
-// Fusion-layer methods are no-ops for this test surface; the fusion
-// path returns "no signature data" cleanly when these return empty.
-func (f *reevalFakeQuerier) CountDetectionsBySignatureForPlate(_ context.Context, _ []byte) ([]db.CountDetectionsBySignatureForPlateRow, error) {
-	return nil, nil
-}
-
-func (f *reevalFakeQuerier) GetSignature(_ context.Context, _ int64) (db.VehicleSignature, error) {
-	return db.VehicleSignature{}, pgx.ErrNoRows
-}
-
-func (f *reevalFakeQuerier) ListPlatesForSignature(_ context.Context, _ pgtype.Int8) ([][]byte, error) {
-	return nil, nil
-}
-
-func (f *reevalFakeQuerier) ListPlateHashesForSignatureInWindow(_ context.Context, _ db.ListPlateHashesForSignatureInWindowParams) ([]db.ListPlateHashesForSignatureInWindowRow, error) {
-	return nil, nil
-}
-
-func (f *reevalFakeQuerier) GetWatchlistSignatureSwap(_ context.Context, _ pgtype.Int8) (db.PlateWatchlist, error) {
-	return db.PlateWatchlist{}, pgx.ErrNoRows
-}
-
-func (f *reevalFakeQuerier) UpsertWatchlistSignatureSwap(_ context.Context, _ db.UpsertWatchlistSignatureSwapParams) (db.PlateWatchlist, error) {
-	return db.PlateWatchlist{}, nil
-}
-
 func (f *reevalFakeQuerier) ListDistinctPlatesEncounteredInWindow(_ context.Context, _ db.ListDistinctPlatesEncounteredInWindowParams) ([]db.ListDistinctPlatesEncounteredInWindowRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -108,11 +108,11 @@ func (f *fakeAggregatorQuerier) DeleteEncountersForRoute(_ context.Context, arg 
 	return deleted, nil
 }
 
-func (f *fakeAggregatorQuerier) UpsertEncounter(_ context.Context, arg db.UpsertEncounterParams) (db.PlateEncounter, error) {
+func (f *fakeAggregatorQuerier) UpsertEncounter(_ context.Context, arg db.UpsertEncounterParams) (db.UpsertEncounterRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.upsertErr != nil {
-		return db.PlateEncounter{}, f.upsertErr
+		return db.UpsertEncounterRow{}, f.upsertErr
 	}
 	f.upsertCalls++
 	k := aggKey(arg.DongleID, arg.Route)
@@ -131,7 +131,7 @@ func (f *fakeAggregatorQuerier) UpsertEncounter(_ context.Context, arg db.Upsert
 		f.encounters[k] = append(f.encounters[k], arg)
 	}
 	id := int64(f.upsertCalls)
-	return db.PlateEncounter{
+	return db.UpsertEncounterRow{
 		ID:                    id,
 		DongleID:              arg.DongleID,
 		Route:                 arg.Route,
@@ -141,7 +141,6 @@ func (f *fakeAggregatorQuerier) UpsertEncounter(_ context.Context, arg db.Upsert
 		DetectionCount:        arg.DetectionCount,
 		TurnCount:             arg.TurnCount,
 		MaxInternalGapSeconds: arg.MaxInternalGapSeconds,
-		SignatureID:           arg.SignatureID,
 		Status:                arg.Status,
 		BboxFirst:             arg.BboxFirst,
 		BboxLast:              arg.BboxLast,
@@ -177,15 +176,14 @@ func (p *fakeAggregatorPool) Begin(_ context.Context) (pgx.Tx, error) {
 // the caller supplies. This is the single test fixture builder used
 // throughout this file; the explicit bbox lets tests assert that
 // bbox_first / bbox_last carry the right rows.
-func detectionRowAt(id int64, plateHash string, frameTs time.Time, bbox []byte, sigID int64, sigValid bool) db.ListDetectionsForRouteRow {
+func detectionRowAt(id int64, plateHash string, frameTs time.Time, bbox []byte) db.ListDetectionsForRouteRow {
 	return db.ListDetectionsForRouteRow{
-		ID:          id,
-		DongleID:    "dongle1",
-		Route:       "route1",
-		PlateHash:   []byte(plateHash),
-		Bbox:        bbox,
-		FrameTs:     pgtype.Timestamptz{Time: frameTs, Valid: true},
-		SignatureID: pgtype.Int8{Int64: sigID, Valid: sigValid},
+		ID:        id,
+		DongleID:  "dongle1",
+		Route:     "route1",
+		PlateHash: []byte(plateHash),
+		Bbox:      bbox,
+		FrameTs:   pgtype.Timestamptz{Time: frameTs, Valid: true},
 	}
 }
 
@@ -197,10 +195,10 @@ func detectionRowAt(id int64, plateHash string, frameTs time.Time, bbox []byte, 
 func TestComputeEncounters_SingleEncounter(t *testing.T) {
 	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	rows := []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, []byte(`{"x":1}`), 0, false),
-		detectionRowAt(2, "plateA", t0.Add(2*time.Second), []byte(`{"x":2}`), 0, false),
-		detectionRowAt(3, "plateA", t0.Add(5*time.Second), []byte(`{"x":3}`), 0, false),
-		detectionRowAt(4, "plateA", t0.Add(20*time.Second), []byte(`{"x":4}`), 0, false),
+		detectionRowAt(1, "plateA", t0, []byte(`{"x":1}`)),
+		detectionRowAt(2, "plateA", t0.Add(2*time.Second), []byte(`{"x":2}`)),
+		detectionRowAt(3, "plateA", t0.Add(5*time.Second), []byte(`{"x":3}`)),
+		detectionRowAt(4, "plateA", t0.Add(20*time.Second), []byte(`{"x":4}`)),
 	}
 	got := computeEncounters(rows, 60.0)
 	if len(got) != 1 {
@@ -226,9 +224,6 @@ func TestComputeEncounters_SingleEncounter(t *testing.T) {
 	if !bytes.Equal(enc.BboxLast, []byte(`{"x":4}`)) {
 		t.Errorf("bbox_last: want last row's bbox, got %s", string(enc.BboxLast))
 	}
-	if enc.SignatureID.Valid {
-		t.Errorf("signature_id: want null (no row had one), got %d", enc.SignatureID.Int64)
-	}
 }
 
 // TestComputeEncounters_TwoEncountersSplitByGap verifies that a >60s
@@ -237,12 +232,12 @@ func TestComputeEncounters_SingleEncounter(t *testing.T) {
 func TestComputeEncounters_TwoEncountersSplitByGap(t *testing.T) {
 	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	rows := []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, []byte(`{"x":1}`), 0, false),
-		detectionRowAt(2, "plateA", t0.Add(5*time.Second), []byte(`{"x":2}`), 0, false),
-		detectionRowAt(3, "plateA", t0.Add(10*time.Second), []byte(`{"x":3}`), 0, false),
+		detectionRowAt(1, "plateA", t0, []byte(`{"x":1}`)),
+		detectionRowAt(2, "plateA", t0.Add(5*time.Second), []byte(`{"x":2}`)),
+		detectionRowAt(3, "plateA", t0.Add(10*time.Second), []byte(`{"x":3}`)),
 		// 90s gap kicks off encounter 2.
-		detectionRowAt(4, "plateA", t0.Add(100*time.Second), []byte(`{"x":4}`), 0, false),
-		detectionRowAt(5, "plateA", t0.Add(105*time.Second), []byte(`{"x":5}`), 0, false),
+		detectionRowAt(4, "plateA", t0.Add(100*time.Second), []byte(`{"x":4}`)),
+		detectionRowAt(5, "plateA", t0.Add(105*time.Second), []byte(`{"x":5}`)),
 	}
 	got := computeEncounters(rows, 60.0)
 	if len(got) != 2 {
@@ -273,61 +268,16 @@ func TestComputeEncounters_TwoEncountersSplitByGap(t *testing.T) {
 	}
 }
 
-// TestComputeEncounters_SignatureModeTieBreaker verifies the
-// deterministic-tie-break rule: when two signature_ids both occur the
-// same number of times, the lowest id wins. Also verifies that null
-// rows are ignored when computing the mode.
-func TestComputeEncounters_SignatureModeTieBreaker(t *testing.T) {
-	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
-	rows := []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, nil, 7, true),
-		detectionRowAt(2, "plateA", t0.Add(time.Second), nil, 3, true),
-		// Null signature: must be ignored by the mode.
-		detectionRowAt(3, "plateA", t0.Add(2*time.Second), nil, 0, false),
-		detectionRowAt(4, "plateA", t0.Add(3*time.Second), nil, 7, true),
-		detectionRowAt(5, "plateA", t0.Add(4*time.Second), nil, 3, true),
-	}
-	got := computeEncounters(rows, 60.0)
-	if len(got) != 1 {
-		t.Fatalf("want 1 encounter, got %d", len(got))
-	}
-	enc := got[0]
-	if !enc.SignatureID.Valid {
-		t.Fatalf("signature_id: want a value, got null")
-	}
-	// Tie at count=2 between sig_id 3 and 7; deterministic pick is 3.
-	if enc.SignatureID.Int64 != 3 {
-		t.Errorf("signature_id (tie break): want 3, got %d", enc.SignatureID.Int64)
-	}
-}
-
-// TestComputeEncounters_AllNullSignatures verifies that an encounter
-// where no row has a signature ends up with signature_id=null.
-func TestComputeEncounters_AllNullSignatures(t *testing.T) {
-	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
-	rows := []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, nil, 0, false),
-		detectionRowAt(2, "plateA", t0.Add(time.Second), nil, 0, false),
-	}
-	got := computeEncounters(rows, 60.0)
-	if len(got) != 1 {
-		t.Fatalf("want 1 encounter, got %d", len(got))
-	}
-	if got[0].SignatureID.Valid {
-		t.Errorf("signature_id: want null, got %d", got[0].SignatureID.Int64)
-	}
-}
-
 // TestComputeEncounters_DistinctPlatesProduceSeparateEncounters
 // verifies that two plates seen in the same route window produce two
 // separate encounters; their groups are independent.
 func TestComputeEncounters_DistinctPlatesProduceSeparateEncounters(t *testing.T) {
 	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	rows := []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, nil, 0, false),
-		detectionRowAt(2, "plateB", t0.Add(time.Second), nil, 0, false),
-		detectionRowAt(3, "plateA", t0.Add(2*time.Second), nil, 0, false),
-		detectionRowAt(4, "plateB", t0.Add(3*time.Second), nil, 0, false),
+		detectionRowAt(1, "plateA", t0, nil),
+		detectionRowAt(2, "plateB", t0.Add(time.Second), nil),
+		detectionRowAt(3, "plateA", t0.Add(2*time.Second), nil),
+		detectionRowAt(4, "plateB", t0.Add(3*time.Second), nil),
 	}
 	got := computeEncounters(rows, 60.0)
 	if len(got) != 2 {
@@ -353,9 +303,9 @@ func TestProcessRoute_TurnCountAggregates(t *testing.T) {
 	q := newFakeAggregatorQuerier()
 	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	q.detectionsByRoute[aggKey("dongle1", "route1")] = []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, nil, 0, false),
-		detectionRowAt(2, "plateA", t0.Add(10*time.Second), nil, 0, false),
-		detectionRowAt(3, "plateA", t0.Add(30*time.Second), nil, 0, false),
+		detectionRowAt(1, "plateA", t0, nil),
+		detectionRowAt(2, "plateA", t0.Add(10*time.Second), nil),
+		detectionRowAt(3, "plateA", t0.Add(30*time.Second), nil),
 	}
 	// Three turns inside the window, one outside.
 	q.turnsInWindow = []turnWindowEntry{
@@ -393,8 +343,8 @@ func TestProcessRoute_TurnCountFallsBackToZero(t *testing.T) {
 	q := newFakeAggregatorQuerier()
 	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	q.detectionsByRoute[aggKey("dongle1", "route1")] = []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, nil, 0, false),
-		detectionRowAt(2, "plateA", t0.Add(time.Second), nil, 0, false),
+		detectionRowAt(1, "plateA", t0, nil),
+		detectionRowAt(2, "plateA", t0.Add(time.Second), nil),
 	}
 	// Empty turnsInWindow -> CountTurnsInWindow returns 0.
 
@@ -425,11 +375,11 @@ func TestProcessRoute_IdempotentReRun(t *testing.T) {
 	q := newFakeAggregatorQuerier()
 	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	q.detectionsByRoute[aggKey("dongle1", "route1")] = []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, nil, 5, true),
-		detectionRowAt(2, "plateA", t0.Add(2*time.Second), nil, 5, true),
-		detectionRowAt(3, "plateB", t0.Add(3*time.Second), nil, 0, false),
+		detectionRowAt(1, "plateA", t0, nil),
+		detectionRowAt(2, "plateA", t0.Add(2*time.Second), nil),
+		detectionRowAt(3, "plateB", t0.Add(3*time.Second), nil),
 		// 90s gap creates a second plateA encounter.
-		detectionRowAt(4, "plateA", t0.Add(95*time.Second), nil, 5, true),
+		detectionRowAt(4, "plateA", t0.Add(95*time.Second), nil),
 	}
 
 	pool := &fakeAggregatorPool{}
@@ -491,8 +441,6 @@ func sameEncounterSet(a, b []db.UpsertEncounterParams) bool {
 			ai.DetectionCount != bi.DetectionCount ||
 			ai.TurnCount != bi.TurnCount ||
 			ai.MaxInternalGapSeconds != bi.MaxInternalGapSeconds ||
-			ai.SignatureID.Valid != bi.SignatureID.Valid ||
-			(ai.SignatureID.Valid && ai.SignatureID.Int64 != bi.SignatureID.Int64) ||
 			ai.Status != bi.Status ||
 			!bytes.Equal(ai.BboxFirst, bi.BboxFirst) ||
 			!bytes.Equal(ai.BboxLast, bi.BboxLast) {
@@ -510,8 +458,8 @@ func TestProcessRoute_EmitsEncountersUpdated(t *testing.T) {
 	q := newFakeAggregatorQuerier()
 	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	q.detectionsByRoute[aggKey("dongle1", "route1")] = []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, nil, 0, false),
-		detectionRowAt(2, "plateB", t0.Add(time.Second), nil, 0, false),
+		detectionRowAt(1, "plateA", t0, nil),
+		detectionRowAt(2, "plateB", t0.Add(time.Second), nil),
 	}
 
 	updates := make(chan EncountersUpdated, 4)
@@ -549,7 +497,7 @@ func TestProcessRoute_EmitsEncountersUpdated(t *testing.T) {
 func TestRun_DropsEventsWhenALPRDisabled(t *testing.T) {
 	q := newFakeAggregatorQuerier()
 	q.detectionsByRoute[aggKey("dongle1", "route1")] = []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", time.Now(), nil, 0, false),
+		detectionRowAt(1, "plateA", time.Now(), nil),
 	}
 
 	completions := make(chan RouteAlprDetectionsComplete, 1)
@@ -591,8 +539,8 @@ func TestRun_ProcessesEventsViaChannel(t *testing.T) {
 	q := newFakeAggregatorQuerier()
 	t0 := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	q.detectionsByRoute[aggKey("dongle1", "route1")] = []db.ListDetectionsForRouteRow{
-		detectionRowAt(1, "plateA", t0, nil, 0, false),
-		detectionRowAt(2, "plateA", t0.Add(time.Second), nil, 0, false),
+		detectionRowAt(1, "plateA", t0, nil),
+		detectionRowAt(2, "plateA", t0.Add(time.Second), nil),
 	}
 
 	completions := make(chan RouteAlprDetectionsComplete, 1)
