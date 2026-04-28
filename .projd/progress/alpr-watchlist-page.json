@@ -1,7 +1,7 @@
 {
   "id": "alpr-watchlist-page",
   "name": "Alert center page (open / acked / whitelist tabs)",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 6,
   "blocked_by": ["alpr-watchlist-api"],
   "branch": "agent/alpr-watchlist-page",
