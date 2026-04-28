@@ -1,7 +1,7 @@
 {
   "id": "alpr-dashboard-alert-badge",
   "name": "Dashboard alert badge + recent-alerts widget",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 7,
   "blocked_by": ["alpr-watchlist-api"],
   "branch": "agent/alpr-dashboard-alert-badge",
