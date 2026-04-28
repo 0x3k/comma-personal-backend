@@ -1,14 +1,28 @@
 # ALPR Engine Decision
 
-Status: **decided** (recommendation; subject to operator re-validation against
-real fcamera footage). Date: 2026-04-27. Spike feature: `alpr-engine-spike`.
-Authoritative harness: [`tools/alpr-spike/`](../tools/alpr-spike/).
+Status: **partially superseded.** The plate-detection arm of this decision
+holds (FastALPR is in production). The vehicle-attribute arm was based on a
+mistaken claim about `open-image-models` and is **not active**; see the
+"2026-04-28 correction" box below. Date of original decision: 2026-04-27.
+Spike feature: `alpr-engine-spike`. Authoritative harness:
+[`tools/alpr-spike/`](../tools/alpr-spike/).
+
+> **2026-04-28 correction.** This document originally claimed
+> `open-image-models` provides a vehicle make/color classifier. It does
+> not -- the upstream library only ships `LicensePlateDetector` (verified
+> against PyPI 0.5.1 and 0.2.1). The vehicle-attribute pipeline,
+> `vehicle_signatures` schema population, and signature-fusion heuristic
+> have been removed from production until a real classifier is wired in.
+> Current production builds emit plate text + bbox + GPS only. The
+> closest viable replacement identified in follow-up research is
+> **PaddleClas PULC `vehicle_attribute`** (Apache 2.0, ~7 MB ONNX after
+> `paddle2onnx` conversion, 10 colors + 9 body types). Make/model is a
+> separate, more speculative slot.
 
 This document is the load-bearing output of the `alpr-engine-spike` feature.
 Every downstream feature in the ALPR batch (`alpr-engine-service`,
-`alpr-vehicle-attributes-engine`, `alpr-detection-worker`,
-`alpr-encryption-at-rest`, `alpr-historical-backfill`, etc.) builds on the
-engine choice recorded here.
+`alpr-detection-worker`, `alpr-encryption-at-rest`,
+`alpr-historical-backfill`, etc.) builds on the engine choice recorded here.
 
 ## TL;DR
 

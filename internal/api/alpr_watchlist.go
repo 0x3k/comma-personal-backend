@@ -64,7 +64,7 @@ type alprWatchlistQuerier interface {
 	RemoveWatchlist(ctx context.Context, plateHash []byte) (int64, error)
 	CountUnackedAlerts(ctx context.Context) (int64, error)
 	MaxOpenSeverity(ctx context.Context) (int16, error)
-	GetMostRecentEncounterForPlate(ctx context.Context, plateHash []byte) (db.PlateEncounter, error)
+	GetMostRecentEncounterForPlate(ctx context.Context, plateHash []byte) (db.GetMostRecentEncounterForPlateRow, error)
 	CountEncountersForPlate(ctx context.Context, plateHash []byte) (int64, error)
 	GetRoute(ctx context.Context, arg db.GetRouteParams) (db.Route, error)
 	GetTripByRouteID(ctx context.Context, routeID int32) (db.Trip, error)
@@ -145,23 +145,20 @@ func (h *ALPRWatchlistHandler) RegisterRoutes(g *echo.Group) {
 // Wire shapes
 // ============================================================================
 
-// alertItem is one element of the GET /v1/alpr/alerts response. Plate is
-// the decrypted plate text; the requester is authenticated. Signature is
-// nil when the plate has no encounters yet (a freshly seeded watchlist
-// row from a notification import, for example).
+// alertItem is one element of the GET /v1/alpr/alerts response. Plate
+// is the decrypted plate text; the requester is authenticated.
 type alertItem struct {
-	PlateHashB64    string             `json:"plate_hash_b64"`
-	Plate           string             `json:"plate"`
-	Signature       *signatureResponse `json:"signature"`
-	Severity        *int16             `json:"severity"`
-	Kind            string             `json:"kind"`
-	FirstAlertAt    *string            `json:"first_alert_at"`
-	LastAlertAt     *string            `json:"last_alert_at"`
-	AckedAt         *string            `json:"acked_at"`
-	EncounterCount  int                `json:"encounter_count"`
-	LatestRoute     *alertLatestRoute  `json:"latest_route"`
-	EvidenceSummary string             `json:"evidence_summary"`
-	Notes           string             `json:"notes,omitempty"`
+	PlateHashB64    string            `json:"plate_hash_b64"`
+	Plate           string            `json:"plate"`
+	Severity        *int16            `json:"severity"`
+	Kind            string            `json:"kind"`
+	FirstAlertAt    *string           `json:"first_alert_at"`
+	LastAlertAt     *string           `json:"last_alert_at"`
+	AckedAt         *string           `json:"acked_at"`
+	EncounterCount  int               `json:"encounter_count"`
+	LatestRoute     *alertLatestRoute `json:"latest_route"`
+	EvidenceSummary string            `json:"evidence_summary"`
+	Notes           string            `json:"notes,omitempty"`
 }
 
 // alertLatestRoute carries the single most-recent route the plate was
@@ -376,19 +373,6 @@ func (h *ALPRWatchlistHandler) buildAlertItem(
 				}
 			}
 		}
-		// Resolve dominant signature for the latest encounter.
-		// (We intentionally do NOT use buildSampleDetectionsByHash
-		// because we don't have access to the same encounter struct
-		// here -- the most-recent encounter row is enough.)
-		if enc.SignatureID.Valid {
-			// Signature lookup is opportunistic; on error leave nil.
-			// We do not have GetSignature on this querier surface
-			// (kept lean for tests), and the alert feed UI does not
-			// strictly need signature on the list view -- the detail
-			// page already renders it. Field stays nil here.
-			_ = enc.SignatureID
-		}
-
 		if dongleFilter != "" && enc.DongleID != dongleFilter {
 			return alertItem{}, false
 		}

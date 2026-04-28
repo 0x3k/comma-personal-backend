@@ -38,6 +38,7 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      ALPR_ENCRYPTION_KEY: ${ALPR_ENCRYPTION_KEY:-}
     ports:
       - "${BACKEND_PORT:-7070}:8080"
     volumes:

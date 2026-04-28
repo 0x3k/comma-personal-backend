@@ -119,7 +119,7 @@ type fakeWatchlistQuerier struct {
 	mu sync.Mutex
 
 	rows               map[string]*db.GetWatchlistByHashRow // key: plate hash bytes
-	encountersByHash   map[string][]db.PlateEncounter
+	encountersByHash   map[string][]db.GetMostRecentEncounterForPlateRow
 	detectionsByRoute  map[string][]db.ListDetectionsForRouteRow
 	routes             map[string]db.Route // key: dongle|route
 	routesByID         map[int32]db.Route
@@ -135,7 +135,7 @@ type fakeWatchlistQuerier struct {
 func newFakeWatchlistQuerier() *fakeWatchlistQuerier {
 	return &fakeWatchlistQuerier{
 		rows:              make(map[string]*db.GetWatchlistByHashRow),
-		encountersByHash:  make(map[string][]db.PlateEncounter),
+		encountersByHash:  make(map[string][]db.GetMostRecentEncounterForPlateRow),
 		detectionsByRoute: make(map[string][]db.ListDetectionsForRouteRow),
 		routes:            make(map[string]db.Route),
 		routesByID:        make(map[int32]db.Route),
@@ -362,12 +362,12 @@ func (f *fakeWatchlistQuerier) MaxOpenSeverity(_ context.Context) (int16, error)
 	return max, nil
 }
 
-func (f *fakeWatchlistQuerier) GetMostRecentEncounterForPlate(_ context.Context, plateHash []byte) (db.PlateEncounter, error) {
+func (f *fakeWatchlistQuerier) GetMostRecentEncounterForPlate(_ context.Context, plateHash []byte) (db.GetMostRecentEncounterForPlateRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	rows := f.encountersByHash[string(plateHash)]
 	if len(rows) == 0 {
-		return db.PlateEncounter{}, pgx.ErrNoRows
+		return db.GetMostRecentEncounterForPlateRow{}, pgx.ErrNoRows
 	}
 	// Return the row with the latest LastSeenTs.
 	best := rows[0]
@@ -1075,7 +1075,7 @@ func TestListAlerts_DecryptsPlateAndPopulatesLatestRoute(t *testing.T) {
 		FirstAlertAt: pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
 		LastAlertAt:  pgtype.Timestamptz{Time: now, Valid: true},
 	}
-	q.encountersByHash[string(hash)] = []db.PlateEncounter{
+	q.encountersByHash[string(hash)] = []db.GetMostRecentEncounterForPlateRow{
 		{
 			ID:         99,
 			DongleID:   "d-1",

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"comma-personal-backend/internal/alpr"
 	"comma-personal-backend/internal/alpr/heuristic"
 )
 
@@ -55,7 +54,6 @@ func TestWebhookSender_PostsJSONPayload(t *testing.T) {
 		Severity:     5,
 		Plate:        "ABC-123",
 		PlateHashB64: "AAAA",
-		Vehicle:      &alpr.VehicleAttributes{Color: "Silver", Make: "Toyota", Model: "Camry"},
 		Evidence: []heuristic.Component{
 			{Name: heuristic.ComponentCrossRouteCount, Points: 2.5},
 		},
@@ -83,9 +81,6 @@ func TestWebhookSender_PostsJSONPayload(t *testing.T) {
 	}
 	if got.PlateHashB64 != "AAAA" {
 		t.Errorf("plate_hash_b64 = %q, want AAAA", got.PlateHashB64)
-	}
-	if got.Vehicle == nil || got.Vehicle.Make != "Toyota" {
-		t.Errorf("vehicle missing or wrong: %+v", got.Vehicle)
 	}
 	if len(got.Evidence) != 1 || got.Evidence[0].Name != heuristic.ComponentCrossRouteCount {
 		t.Errorf("evidence missing or wrong: %+v", got.Evidence)

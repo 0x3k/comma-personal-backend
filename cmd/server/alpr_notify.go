@@ -3,14 +3,9 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"log"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
-
-	"comma-personal-backend/internal/alpr"
 	alprcrypto "comma-personal-backend/internal/alpr/crypto"
 	"comma-personal-backend/internal/alpr/heuristic"
 	"comma-personal-backend/internal/alpr/notify"
@@ -109,17 +104,10 @@ func runALPRNotifySubscriber(ctx context.Context, dispatcher *notify.Dispatcher,
 }
 
 // newAlertEnricher returns a notify.PayloadEnricher that fills in the
-// decrypted plate text + canonical vehicle attributes for an alert.
-// The enricher is allowed to return an empty Plate field; the
-// dispatcher will skip the alert in that case (a transient state -- a
-// later evaluation will produce a new event once a sample detection
-// is available).
-//
-// The enricher is intentionally light on logic: it walks the
-// encounters in chronological order (most-recent first by way of
-// ListEncountersForPlate), tries each encounter's detections until
-// one decrypts, and grabs the canonical signature row (most-frequent
-// signature_id) for the vehicle attributes.
+// decrypted plate text for an alert. The enricher is allowed to return
+// an empty Plate field; the dispatcher will skip the alert in that case
+// (a transient state -- a later evaluation will produce a new event
+// once a sample detection is available).
 //
 // queries / keyring may both be nil; in that case the enricher is a
 // pass-through. The dispatcher's empty-plate guard then drops the
@@ -165,63 +153,8 @@ func newAlertEnricher(queries *db.Queries, keyring *alprcrypto.Keyring) notify.P
 				break
 			}
 		}
-		// Fill in the vehicle badge from the dominant signature.
-		if sigID, ok := dominantSignatureIDLocal(encs); ok {
-			sig, err := queries.GetSignature(ctx, sigID)
-			if err == nil {
-				base.Vehicle = signatureToVehicleAttributes(sig)
-			} else if !errors.Is(err, pgx.ErrNoRows) {
-				log.Printf("alpr notify enricher: get signature %d: %v", sigID, err)
-			}
-		}
 		return base, nil
 	})
-}
-
-// dominantSignatureIDLocal mirrors api.dominantSignatureID without the
-// import dependency. Returns the most-frequent non-null signature_id
-// across encounters, breaking ties by most-recent occurrence.
-func dominantSignatureIDLocal(encs []db.PlateEncounter) (int64, bool) {
-	counts := map[int64]int{}
-	for _, e := range encs {
-		if e.SignatureID.Valid {
-			counts[e.SignatureID.Int64]++
-		}
-	}
-	var bestID int64
-	var bestCount int
-	for id, n := range counts {
-		if n > bestCount {
-			bestID = id
-			bestCount = n
-		}
-	}
-	if bestCount == 0 {
-		return 0, false
-	}
-	return bestID, true
-}
-
-// signatureToVehicleAttributes converts a vehicle_signatures row to the
-// engine's VehicleAttributes shape. Exposes only the fields the
-// notification body cares about; other signature columns (track id,
-// confidence breakdown) stay internal.
-func signatureToVehicleAttributes(sig db.VehicleSignature) *alpr.VehicleAttributes {
-	return &alpr.VehicleAttributes{
-		Color:    pgTextOrEmpty(sig.Color),
-		Make:     pgTextOrEmpty(sig.Make),
-		Model:    pgTextOrEmpty(sig.Model),
-		BodyType: pgTextOrEmpty(sig.BodyType),
-	}
-}
-
-// pgTextOrEmpty returns the string value of a pgtype.Text or "" when
-// the column is NULL. Tiny helper used only by signatureToVehicleAttributes.
-func pgTextOrEmpty(t pgtype.Text) string {
-	if !t.Valid {
-		return ""
-	}
-	return t.String
 }
 
 // decodePlateHashB64Local decodes the base64-URL-no-padding form used

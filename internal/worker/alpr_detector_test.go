@@ -80,18 +80,12 @@ type fakeQuerier struct {
 	detectorProcessed  map[string]bool
 
 	// Recorded writes.
-	signatures        []db.UpsertSignatureByKeyParams
-	signatureCounts   map[string]int   // signature_key -> sample_count
-	signatureIDs      map[string]int64 // signature_key -> id
-	nextSignatureID   int64
 	detections        []db.InsertDetectionParams
 	detectionRows     []db.InsertDetectionRow
-	detectionUpdates  []db.UpdateDetectionSignatureParams
 	markDetectorCalls int
 
 	// Failure injection.
 	insertErr   error
-	upsertErr   error
 	getRouteErr error
 	getGeomErr  error
 	markErr     error
@@ -102,8 +96,6 @@ func newFakeQuerier() *fakeQuerier {
 	return &fakeQuerier{
 		extractorProcessed: make(map[string]bool),
 		detectorProcessed:  make(map[string]bool),
-		signatureCounts:    make(map[string]int),
-		signatureIDs:       make(map[string]int64),
 	}
 }
 
@@ -136,32 +128,6 @@ func (f *fakeQuerier) GetRouteGeometryAndTimes(_ context.Context, _ db.GetRouteG
 	}, nil
 }
 
-func (f *fakeQuerier) UpsertSignatureByKey(_ context.Context, arg db.UpsertSignatureByKeyParams) (db.VehicleSignature, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.upsertErr != nil {
-		return db.VehicleSignature{}, f.upsertErr
-	}
-	f.signatures = append(f.signatures, arg)
-	id, ok := f.signatureIDs[arg.SignatureKey]
-	if !ok {
-		f.nextSignatureID++
-		id = f.nextSignatureID
-		f.signatureIDs[arg.SignatureKey] = id
-	}
-	f.signatureCounts[arg.SignatureKey]++
-	return db.VehicleSignature{
-		ID:           id,
-		SignatureKey: arg.SignatureKey,
-		Make:         arg.Make,
-		Model:        arg.Model,
-		Color:        arg.Color,
-		BodyType:     arg.BodyType,
-		Confidence:   arg.Confidence,
-		SampleCount:  int32(f.signatureCounts[arg.SignatureKey]),
-	}, nil
-}
-
 func (f *fakeQuerier) InsertDetection(_ context.Context, arg db.InsertDetectionParams) (db.InsertDetectionRow, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -189,13 +155,6 @@ func (f *fakeQuerier) InsertDetection(_ context.Context, arg db.InsertDetectionP
 	}
 	f.detectionRows = append(f.detectionRows, row)
 	return row, nil
-}
-
-func (f *fakeQuerier) UpdateDetectionSignature(_ context.Context, arg db.UpdateDetectionSignatureParams) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.detectionUpdates = append(f.detectionUpdates, arg)
-	return nil
 }
 
 func (f *fakeQuerier) MarkDetectorProcessed(_ context.Context, arg db.MarkDetectorProcessedParams) error {
@@ -404,22 +363,11 @@ func TestALPRDetector_BasicWriteAndComplete(t *testing.T) {
 
 	det := &fakeDetector{}
 	det.detect = func(_ int, _ []byte) ([]alpr.Detection, error) {
-		yMin := 100
-		conf := 0.9
 		return []alpr.Detection{
 			{
 				PlateText:  "ABC123",
 				Confidence: 0.95,
 				BBox:       alpr.Rect{X: 10, Y: 20, W: 100, H: 50},
-				Vehicle: &alpr.VehicleAttributes{
-					Make:         "toyota",
-					Model:        "camry",
-					Color:        "silver",
-					BodyType:     "sedan",
-					SignatureKey: "toyota|camry|silver|sedan",
-					YearMin:      &yMin,
-					Confidence:   &conf,
-				},
 			},
 		}, nil
 	}
@@ -493,23 +441,6 @@ func TestALPRDetector_BasicWriteAndComplete(t *testing.T) {
 	// BBox JSON should round-trip to the engine's rect.
 	if !bytes.Contains(q.detections[0].Bbox, []byte(`"x":10`)) {
 		t.Errorf("bbox = %s, want x=10", q.detections[0].Bbox)
-	}
-
-	// Signature: same key seen twice -> sample_count = 2.
-	if got := q.signatureCounts["toyota|camry|silver|sedan"]; got != 2 {
-		t.Errorf("signature sample_count = %d, want 2", got)
-	}
-	// Detection update: both rows should have signature_id = 1.
-	if got := len(q.detectionUpdates); got != 2 {
-		t.Fatalf("detection updates = %d, want 2", got)
-	}
-	for i, u := range q.detectionUpdates {
-		if !u.SignatureID.Valid || u.SignatureID.Int64 != 1 {
-			t.Errorf("update[%d] signature_id = %+v, want 1", i, u.SignatureID)
-		}
-		if !u.DetMake.Valid || u.DetMake.String != "toyota" {
-			t.Errorf("update[%d] det_make = %+v, want toyota", i, u.DetMake)
-		}
 	}
 
 	// Completion event fired exactly once.
@@ -750,51 +681,6 @@ func TestALPRDetector_CompleteFiresOncePerRoute(t *testing.T) {
 	events := drainEvents(completions)
 	if len(events) != 1 {
 		t.Fatalf("got %d completion events, want exactly 1: %+v", len(events), events)
-	}
-}
-
-// TestALPRDetector_NoSignatureSkipsUpsert asserts that a detection
-// without Vehicle attributes does NOT touch vehicle_signatures. The
-// detection row still lands; only the signature path is skipped.
-func TestALPRDetector_NoSignatureSkipsUpsert(t *testing.T) {
-	keyring := freshKeyring(t)
-	q := newFakeQuerier()
-	q.routeStartTime = time.Now().UTC()
-	q.geometryWKT, q.geometryTimes = makeStraightWKT(60)
-	q.segmentsTotal = 1
-	q.extractorProcessed[progressKey("d", "r", 0)] = true
-
-	det := &fakeDetector{}
-	det.detect = func(_ int, _ []byte) ([]alpr.Detection, error) {
-		return []alpr.Detection{
-			{PlateText: "PLAIN", Confidence: 0.95, BBox: alpr.Rect{X: 0, Y: 0, W: 10, H: 10}},
-		}, nil
-	}
-
-	frames := make(chan ExtractedFrame, 1)
-	completions := make(chan RouteAlprDetectionsComplete, 1)
-	w := NewALPRDetector(frames, det, q, &fakePool{}, nil, keyring, nil, completions)
-	w.alprEnabledForTest = trueP()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	go func() { w.Run(ctx); close(done) }()
-
-	frames <- ExtractedFrame{DongleID: "d", Route: "r", Segment: 0, FrameOffsetMs: 100, JPEG: []byte("f")}
-	close(frames)
-	<-done
-
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.detections) != 1 {
-		t.Fatalf("got %d detections, want 1", len(q.detections))
-	}
-	if len(q.signatures) != 0 {
-		t.Errorf("got %d signature upserts, want 0 (vehicle was nil)", len(q.signatures))
-	}
-	if len(q.detectionUpdates) != 0 {
-		t.Errorf("got %d detection-signature updates, want 0", len(q.detectionUpdates))
 	}
 }
 

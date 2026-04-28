@@ -25,7 +25,7 @@ func TestClient_Health_Success(t *testing.T) {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"ok":true,"model":"yolo+mvit","version":"0.1.5","region":"us","supports_attributes":false,"engine_loaded":true}`)
+		_, _ = io.WriteString(w, `{"ok":true,"model":"yolo+mvit","version":"0.1.5","region":"us","engine_loaded":true}`)
 	}))
 	defer srv.Close()
 
@@ -96,7 +96,7 @@ func TestClient_Detect_Success(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"detections":[{"plate":"ABC123","confidence":0.91,"bbox":{"x":10,"y":20,"w":80,"h":40},"vehicle":null}]}`)
+		_, _ = io.WriteString(w, `{"detections":[{"plate":"ABC123","confidence":0.91,"bbox":{"x":10,"y":20,"w":80,"h":40}}]}`)
 	}))
 	defer srv.Close()
 
@@ -111,201 +111,6 @@ func TestClient_Detect_Success(t *testing.T) {
 	d := dets[0]
 	if d.PlateText != "ABC123" || d.Confidence < 0.9 || d.BBox.W != 80 {
 		t.Fatalf("unexpected detection: %+v", d)
-	}
-	if d.Vehicle != nil {
-		t.Fatalf("expected vehicle nil for explicit null, got %+v", d.Vehicle)
-	}
-}
-
-// TestClient_Detect_VehicleFullAttributes covers the happy path where
-// the engine emits every attribute including a stable signature_key.
-// All fields must round-trip through JSON unchanged.
-func TestClient_Detect_VehicleFullAttributes(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"detections":[{
-			"plate":"ABC123",
-			"confidence":0.91,
-			"bbox":{"x":0,"y":0,"w":10,"h":10},
-			"vehicle":{
-				"make":"toyota",
-				"model":"camry",
-				"year_min":2018,
-				"year_max":2022,
-				"color":"silver",
-				"body_type":"sedan",
-				"confidence":0.83,
-				"signature_key":"toyota|camry|silver|sedan"
-			}
-		}]}`)
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL, time.Second)
-	dets, err := c.Detect(context.Background(), []byte("frame"))
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
-	if len(dets) != 1 {
-		t.Fatalf("expected 1 detection, got %d", len(dets))
-	}
-	v := dets[0].Vehicle
-	if v == nil {
-		t.Fatalf("expected non-nil Vehicle")
-	}
-	if v.Make != "toyota" || v.Model != "camry" || v.Color != "silver" || v.BodyType != "sedan" {
-		t.Fatalf("unexpected attributes: %+v", v)
-	}
-	if v.YearMin == nil || *v.YearMin != 2018 {
-		t.Fatalf("expected YearMin=2018, got %v", v.YearMin)
-	}
-	if v.YearMax == nil || *v.YearMax != 2022 {
-		t.Fatalf("expected YearMax=2022, got %v", v.YearMax)
-	}
-	if v.Confidence == nil || *v.Confidence < 0.82 || *v.Confidence > 0.84 {
-		t.Fatalf("expected Confidence~=0.83, got %v", v.Confidence)
-	}
-	if v.SignatureKey != "toyota|camry|silver|sedan" {
-		t.Fatalf("unexpected signature_key %q", v.SignatureKey)
-	}
-}
-
-// TestClient_Detect_VehiclePartialAttributes covers the case where the
-// engine confidently identified color + body_type but dropped make and
-// model to JSON null. The signature_key reflects only the non-null
-// attributes.
-func TestClient_Detect_VehiclePartialAttributes(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"detections":[{
-			"plate":"ABC123",
-			"confidence":0.91,
-			"bbox":{"x":0,"y":0,"w":10,"h":10},
-			"vehicle":{
-				"make":null,
-				"model":null,
-				"year_min":null,
-				"year_max":null,
-				"color":"silver",
-				"body_type":"sedan",
-				"confidence":0.61,
-				"signature_key":"silver|sedan"
-			}
-		}]}`)
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL, time.Second)
-	dets, err := c.Detect(context.Background(), []byte("frame"))
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
-	v := dets[0].Vehicle
-	if v == nil {
-		t.Fatalf("expected non-nil Vehicle")
-	}
-	if v.Make != "" || v.Model != "" {
-		t.Fatalf("expected make/model to be empty for JSON null, got make=%q model=%q", v.Make, v.Model)
-	}
-	if v.YearMin != nil || v.YearMax != nil {
-		t.Fatalf("expected year_min/year_max nil, got %v / %v", v.YearMin, v.YearMax)
-	}
-	if v.Color != "silver" || v.BodyType != "sedan" {
-		t.Fatalf("expected color=silver body_type=sedan, got %+v", v)
-	}
-	if v.SignatureKey != "silver|sedan" {
-		t.Fatalf("unexpected signature_key %q", v.SignatureKey)
-	}
-}
-
-// TestClient_Detect_VehicleAllNull covers the case where the engine
-// ran the classifier but every attribute came back below confidence.
-// Vehicle is non-nil (the engine attempted and reported), but every
-// field is zero / empty and signature_key is empty.
-func TestClient_Detect_VehicleAllNull(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"detections":[{
-			"plate":"ABC123",
-			"confidence":0.91,
-			"bbox":{"x":0,"y":0,"w":10,"h":10},
-			"vehicle":{
-				"make":null,
-				"model":null,
-				"year_min":null,
-				"year_max":null,
-				"color":null,
-				"body_type":null,
-				"confidence":null,
-				"signature_key":""
-			}
-		}]}`)
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL, time.Second)
-	dets, err := c.Detect(context.Background(), []byte("frame"))
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
-	v := dets[0].Vehicle
-	if v == nil {
-		t.Fatalf("expected non-nil Vehicle (engine ran the classifier)")
-	}
-	if v.Make != "" || v.Model != "" || v.Color != "" || v.BodyType != "" {
-		t.Fatalf("expected all string attributes empty, got %+v", v)
-	}
-	if v.YearMin != nil || v.YearMax != nil || v.Confidence != nil {
-		t.Fatalf("expected nil pointer attributes, got %+v", v)
-	}
-	if v.SignatureKey != "" {
-		t.Fatalf("expected empty signature_key for all-null, got %q", v.SignatureKey)
-	}
-}
-
-// TestClient_Detect_VehicleKeyMissing covers the case where the engine
-// is built without the attributes plugin (or ALPR_ATTRIBUTES_ENABLED=false)
-// and omits the vehicle key entirely. Vehicle must be nil.
-func TestClient_Detect_VehicleKeyMissing(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		// Note: no "vehicle" key at all in the detection object.
-		_, _ = io.WriteString(w, `{"detections":[{
-			"plate":"ABC123",
-			"confidence":0.91,
-			"bbox":{"x":0,"y":0,"w":10,"h":10}
-		}]}`)
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL, time.Second)
-	dets, err := c.Detect(context.Background(), []byte("frame"))
-	if err != nil {
-		t.Fatalf("Detect: %v", err)
-	}
-	if dets[0].Vehicle != nil {
-		t.Fatalf("expected nil Vehicle when key absent, got %+v", dets[0].Vehicle)
-	}
-}
-
-// TestClient_Health_SupportsAttributesTrue confirms the supports_attributes
-// flag from /health round-trips through HealthInfo. alpr-detection-worker
-// uses this to decide whether to wait for vehicle attributes or call the
-// engine in plate-only mode.
-func TestClient_Health_SupportsAttributesTrue(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"ok":true,"model":"yolo+mvit","version":"0.1.5","region":"us","supports_attributes":true,"engine_loaded":true}`)
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL, time.Second)
-	got, err := c.Health(context.Background())
-	if err != nil {
-		t.Fatalf("Health: %v", err)
-	}
-	if !got.SupportsAttributes {
-		t.Fatalf("expected SupportsAttributes=true")
 	}
 }
 

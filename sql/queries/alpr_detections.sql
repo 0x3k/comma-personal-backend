@@ -25,14 +25,12 @@ RETURNING id, dongle_id, route, segment, frame_offset_ms,
           created_at;
 
 -- name: ListDetectionsForRoute :many
--- All detections for a single route, in chronological order. Used by the
--- encounter aggregator and the per-route review UI. signature_id is
--- included so the aggregator can compute the mode signature per
--- encounter without a second query.
+-- All detections for a single route, in chronological order. Used by
+-- the encounter aggregator and the per-route review UI.
 SELECT id, dongle_id, route, segment, frame_offset_ms,
        plate_ciphertext, plate_hash, bbox, confidence, ocr_corrected,
        gps_lat, gps_lng, gps_heading_deg, frame_ts, thumb_path,
-       created_at, signature_id
+       created_at
 FROM plate_detections
 WHERE dongle_id = $1 AND route = $2
 ORDER BY frame_ts ASC, id ASC;
@@ -112,39 +110,6 @@ SET plate_hash       = sqlc.arg('new_plate_hash'),
     plate_ciphertext = sqlc.narg('new_plate_ciphertext')
 WHERE plate_hash = sqlc.arg('old_plate_hash');
 
--- name: UpdateDetectionSignature :exec
--- Stamp the signature link plus the denormalized vehicle attribute
--- columns onto a single detection row. Called by the signature
--- classifier after it produces a (signature_id, make, model, color,
--- body_type) tuple for a frame. The denormalized columns are
--- intentionally co-written with the FK so review queries that filter
--- by attribute do not have to join through vehicle_signatures.
-UPDATE plate_detections
-SET signature_id        = sqlc.narg('signature_id'),
-    det_make            = sqlc.narg('det_make'),
-    det_model           = sqlc.narg('det_model'),
-    det_color           = sqlc.narg('det_color'),
-    det_body_type       = sqlc.narg('det_body_type'),
-    det_attr_confidence = sqlc.narg('det_attr_confidence')
-WHERE id = sqlc.arg('id');
-
--- name: CountDetectionsBySignatureForPlate :many
--- Group every detection of a given plate_hash by signature_id and
--- return (signature_id, detection_count). NULL signature_id collapses
--- into its own row so the fusion heuristic can compute "share of
--- detections that have ANY signature linked" before deciding whether
--- to score signature_consistent / signature_inconsistent.
---
--- Ordered by detection_count DESC so the dominant signature is first;
--- the heuristic looks at the top entry to decide consistency and at
--- the full list to decide inconsistency.
-SELECT signature_id,
-       COUNT(*)::BIGINT AS detection_count
-FROM plate_detections
-WHERE plate_hash = $1
-GROUP BY signature_id
-ORDER BY detection_count DESC, signature_id ASC NULLS LAST;
-
 -- name: GetDetectionByID :one
 -- Single detection lookup by primary key. Used by the manual-correction
 -- handler to load the dongle_id (for cross-device authorization) and the
@@ -153,7 +118,7 @@ ORDER BY detection_count DESC, signature_id ASC NULLS LAST;
 SELECT id, dongle_id, route, segment, frame_offset_ms,
        plate_ciphertext, plate_hash, bbox, confidence, ocr_corrected,
        gps_lat, gps_lng, gps_heading_deg, frame_ts, thumb_path,
-       created_at, signature_id
+       created_at
 FROM plate_detections
 WHERE id = $1;
 

@@ -36,49 +36,6 @@ func (q *Queries) BulkUpdateDetectionsHashOnly(ctx context.Context, arg BulkUpda
 	return result.RowsAffected(), nil
 }
 
-const countDetectionsBySignatureForPlate = `-- name: CountDetectionsBySignatureForPlate :many
-SELECT signature_id,
-       COUNT(*)::BIGINT AS detection_count
-FROM plate_detections
-WHERE plate_hash = $1
-GROUP BY signature_id
-ORDER BY detection_count DESC, signature_id ASC NULLS LAST
-`
-
-type CountDetectionsBySignatureForPlateRow struct {
-	SignatureID    pgtype.Int8 `json:"signatureId"`
-	DetectionCount int64       `json:"detectionCount"`
-}
-
-// Group every detection of a given plate_hash by signature_id and
-// return (signature_id, detection_count). NULL signature_id collapses
-// into its own row so the fusion heuristic can compute "share of
-// detections that have ANY signature linked" before deciding whether
-// to score signature_consistent / signature_inconsistent.
-//
-// Ordered by detection_count DESC so the dominant signature is first;
-// the heuristic looks at the top entry to decide consistency and at
-// the full list to decide inconsistency.
-func (q *Queries) CountDetectionsBySignatureForPlate(ctx context.Context, plateHash []byte) ([]CountDetectionsBySignatureForPlateRow, error) {
-	rows, err := q.db.Query(ctx, countDetectionsBySignatureForPlate, plateHash)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []CountDetectionsBySignatureForPlateRow
-	for rows.Next() {
-		var i CountDetectionsBySignatureForPlateRow
-		if err := rows.Scan(&i.SignatureID, &i.DetectionCount); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const deleteDetectionsOlderThan = `-- name: DeleteDetectionsOlderThan :execrows
 DELETE FROM plate_detections
 WHERE frame_ts < $1
@@ -190,7 +147,7 @@ const getDetectionByID = `-- name: GetDetectionByID :one
 SELECT id, dongle_id, route, segment, frame_offset_ms,
        plate_ciphertext, plate_hash, bbox, confidence, ocr_corrected,
        gps_lat, gps_lng, gps_heading_deg, frame_ts, thumb_path,
-       created_at, signature_id
+       created_at
 FROM plate_detections
 WHERE id = $1
 `
@@ -212,7 +169,6 @@ type GetDetectionByIDRow struct {
 	FrameTs         pgtype.Timestamptz `json:"frameTs"`
 	ThumbPath       pgtype.Text        `json:"thumbPath"`
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
-	SignatureID     pgtype.Int8        `json:"signatureId"`
 }
 
 // Single detection lookup by primary key. Used by the manual-correction
@@ -239,7 +195,6 @@ func (q *Queries) GetDetectionByID(ctx context.Context, id int64) (GetDetectionB
 		&i.FrameTs,
 		&i.ThumbPath,
 		&i.CreatedAt,
-		&i.SignatureID,
 	)
 	return i, err
 }
@@ -350,7 +305,7 @@ const listDetectionsForRoute = `-- name: ListDetectionsForRoute :many
 SELECT id, dongle_id, route, segment, frame_offset_ms,
        plate_ciphertext, plate_hash, bbox, confidence, ocr_corrected,
        gps_lat, gps_lng, gps_heading_deg, frame_ts, thumb_path,
-       created_at, signature_id
+       created_at
 FROM plate_detections
 WHERE dongle_id = $1 AND route = $2
 ORDER BY frame_ts ASC, id ASC
@@ -378,13 +333,10 @@ type ListDetectionsForRouteRow struct {
 	FrameTs         pgtype.Timestamptz `json:"frameTs"`
 	ThumbPath       pgtype.Text        `json:"thumbPath"`
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
-	SignatureID     pgtype.Int8        `json:"signatureId"`
 }
 
-// All detections for a single route, in chronological order. Used by the
-// encounter aggregator and the per-route review UI. signature_id is
-// included so the aggregator can compute the mode signature per
-// encounter without a second query.
+// All detections for a single route, in chronological order. Used by
+// the encounter aggregator and the per-route review UI.
 func (q *Queries) ListDetectionsForRoute(ctx context.Context, arg ListDetectionsForRouteParams) ([]ListDetectionsForRouteRow, error) {
 	rows, err := q.db.Query(ctx, listDetectionsForRoute, arg.DongleID, arg.Route)
 	if err != nil {
@@ -411,7 +363,6 @@ func (q *Queries) ListDetectionsForRoute(ctx context.Context, arg ListDetections
 			&i.FrameTs,
 			&i.ThumbPath,
 			&i.CreatedAt,
-			&i.SignatureID,
 		); err != nil {
 			return nil, err
 		}
@@ -548,44 +499,4 @@ func (q *Queries) UpdateDetectionPlateHash(ctx context.Context, arg UpdateDetect
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const updateDetectionSignature = `-- name: UpdateDetectionSignature :exec
-UPDATE plate_detections
-SET signature_id        = $1,
-    det_make            = $2,
-    det_model           = $3,
-    det_color           = $4,
-    det_body_type       = $5,
-    det_attr_confidence = $6
-WHERE id = $7
-`
-
-type UpdateDetectionSignatureParams struct {
-	SignatureID       pgtype.Int8   `json:"signatureId"`
-	DetMake           pgtype.Text   `json:"detMake"`
-	DetModel          pgtype.Text   `json:"detModel"`
-	DetColor          pgtype.Text   `json:"detColor"`
-	DetBodyType       pgtype.Text   `json:"detBodyType"`
-	DetAttrConfidence pgtype.Float4 `json:"detAttrConfidence"`
-	ID                int64         `json:"id"`
-}
-
-// Stamp the signature link plus the denormalized vehicle attribute
-// columns onto a single detection row. Called by the signature
-// classifier after it produces a (signature_id, make, model, color,
-// body_type) tuple for a frame. The denormalized columns are
-// intentionally co-written with the FK so review queries that filter
-// by attribute do not have to join through vehicle_signatures.
-func (q *Queries) UpdateDetectionSignature(ctx context.Context, arg UpdateDetectionSignatureParams) error {
-	_, err := q.db.Exec(ctx, updateDetectionSignature,
-		arg.SignatureID,
-		arg.DetMake,
-		arg.DetModel,
-		arg.DetColor,
-		arg.DetBodyType,
-		arg.DetAttrConfidence,
-		arg.ID,
-	)
-	return err
 }

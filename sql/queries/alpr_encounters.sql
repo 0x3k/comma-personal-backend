@@ -3,10 +3,9 @@
 -- plate_hash, first_seen_ts). Re-running the aggregator over the same
 -- route is idempotent: the unique constraint catches the conflict and
 -- the DO UPDATE refreshes the mutable fields (last_seen_ts,
--- detection_count, turn_count, gap, signature_id, status, bbox_last,
--- updated_at). first_seen_ts and bbox_first are NOT updated because
--- they identify the encounter and changing them would defeat
--- idempotency.
+-- detection_count, turn_count, gap, status, bbox_last, updated_at).
+-- first_seen_ts and bbox_first are NOT updated because they identify
+-- the encounter and changing them would defeat idempotency.
 INSERT INTO plate_encounters (
     dongle_id,
     route,
@@ -16,24 +15,22 @@ INSERT INTO plate_encounters (
     detection_count,
     turn_count,
     max_internal_gap_seconds,
-    signature_id,
     status,
     bbox_first,
     bbox_last
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (dongle_id, route, plate_hash, first_seen_ts) DO UPDATE
 SET last_seen_ts             = EXCLUDED.last_seen_ts,
     detection_count          = EXCLUDED.detection_count,
     turn_count               = EXCLUDED.turn_count,
     max_internal_gap_seconds = EXCLUDED.max_internal_gap_seconds,
-    signature_id             = EXCLUDED.signature_id,
     status                   = EXCLUDED.status,
     bbox_last                = EXCLUDED.bbox_last,
     updated_at               = now()
 RETURNING id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
           detection_count, turn_count, max_internal_gap_seconds,
-          signature_id, status, bbox_first, bbox_last,
+          status, bbox_first, bbox_last,
           created_at, updated_at;
 
 -- name: DeleteEncountersForRoute :execrows
@@ -72,7 +69,7 @@ WHERE NOT EXISTS (
 -- per-route review UI ("which plates did we see on this drive").
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,
-       signature_id, status, bbox_first, bbox_last,
+       status, bbox_first, bbox_last,
        created_at, updated_at
 FROM plate_encounters
 WHERE dongle_id = $1 AND route = $2
@@ -85,7 +82,7 @@ ORDER BY first_seen_ts ASC, id ASC;
 -- history. pgx.ErrNoRows when the plate has never been seen.
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,
-       signature_id, status, bbox_first, bbox_last,
+       status, bbox_first, bbox_last,
        created_at, updated_at
 FROM plate_encounters
 WHERE plate_hash = $1
@@ -106,7 +103,7 @@ WHERE plate_hash = $1;
 -- "recurring plate" lookups.
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,
-       signature_id, status, bbox_first, bbox_last,
+       status, bbox_first, bbox_last,
        created_at, updated_at
 FROM plate_encounters
 WHERE plate_hash = $1
@@ -119,7 +116,7 @@ ORDER BY last_seen_ts DESC, id DESC;
 -- the entire history.
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,
-       signature_id, status, bbox_first, bbox_last,
+       status, bbox_first, bbox_last,
        created_at, updated_at
 FROM plate_encounters
 WHERE plate_hash    = $1
@@ -141,7 +138,7 @@ ORDER BY last_seen_ts DESC, id DESC;
 SELECT pe.id, pe.dongle_id, pe.route, pe.plate_hash,
        pe.first_seen_ts, pe.last_seen_ts,
        pe.detection_count, pe.turn_count, pe.max_internal_gap_seconds,
-       pe.signature_id, pe.status, pe.bbox_first, pe.bbox_last,
+       pe.status, pe.bbox_first, pe.bbox_last,
        pe.created_at, pe.updated_at,
        pd.gps_lat AS start_lat,
        pd.gps_lng AS start_lng
@@ -205,24 +202,3 @@ SELECT DISTINCT dongle_id, route
 FROM plate_encounters
 WHERE plate_hash = $1
 ORDER BY dongle_id ASC, route ASC;
-
--- name: ListEncountersForSignatureInArea :many
--- Encounters linked to a vehicle signature whose first detection lies
--- inside a lat/lng bounding box. Used by the signature-fusion heuristic
--- to find "the same vehicle (by signature) showing up in our area" even
--- across partial plate observations. The bbox is supplied as four
--- scalars rather than a PostGIS geometry to keep this query independent
--- of the signature schema's geometry columns.
-SELECT pe.id, pe.dongle_id, pe.route, pe.plate_hash, pe.first_seen_ts,
-       pe.last_seen_ts, pe.detection_count, pe.turn_count,
-       pe.max_internal_gap_seconds, pe.signature_id, pe.status,
-       pe.bbox_first, pe.bbox_last, pe.created_at, pe.updated_at
-FROM plate_encounters pe
-JOIN plate_detections pd ON pd.dongle_id = pe.dongle_id
-                        AND pd.route     = pe.route
-                        AND pd.plate_hash = pe.plate_hash
-                        AND pd.frame_ts  = pe.first_seen_ts
-WHERE pe.signature_id = sqlc.arg('signature_id')
-  AND pd.gps_lat BETWEEN sqlc.arg('min_lat') AND sqlc.arg('max_lat')
-  AND pd.gps_lng BETWEEN sqlc.arg('min_lng') AND sqlc.arg('max_lng')
-ORDER BY pe.last_seen_ts DESC, pe.id DESC;

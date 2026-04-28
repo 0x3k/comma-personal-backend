@@ -39,16 +39,6 @@ import (
 // these to surface the alert promptly without polling. It is NOT
 // emitted on every re-evaluation -- a routine recompute that confirms
 // an already-known alert is intentionally silent.
-//
-// Two flavours, distinguished by which field is set:
-//
-//   - Plate alert: PlateHash is set, SignatureID is nil. The
-//     stalking heuristic raised an alert keyed on a single plate.
-//   - Signature-swap alert: SignatureID is set (non-nil), PlateHash
-//     is empty. The fusion layer detected a single physical vehicle
-//     (by signature) operating under multiple plates in the same
-//     area. Notification channels (push, badge) branch on which
-//     field is non-nil.
 type AlertCreated struct {
 	PlateHash []byte
 	Severity  int
@@ -63,16 +53,6 @@ type AlertCreated struct {
 	// emit the event. Set by the worker via its Now() hook so tests
 	// can assert deterministically.
 	ComputedAt time.Time
-	// SignatureID is non-nil when the event is a signature-swap
-	// alert produced by the fusion layer. The notification UI uses
-	// this to render "vehicle X has been seen with N plates" instead
-	// of the per-plate badge. PlateHash is empty in this mode.
-	SignatureID *int64
-	// PlateHashes is the chain of distinct plate hashes that
-	// contributed to a signature-swap alert. Empty for plate-keyed
-	// alerts. The UI uses it to render the "evidence chain" inside
-	// the alert detail view.
-	PlateHashes [][]byte
 }
 
 // AlertSuppressed is emitted when an operator action causes a
@@ -111,30 +91,12 @@ type HeuristicMetrics interface {
 // HeuristicQuerier is the subset of *db.Queries the worker uses.
 // Carved out so tests can supply an in-memory fake without a real
 // Postgres connection.
-//
-// The fusion-layer methods (CountDetectionsBySignatureForPlate,
-// GetSignature, ListPlatesForSignature, ListPlateHashesForSignatureInWindow,
-// GetWatchlistSignatureSwap, UpsertWatchlistSignatureSwap) ride on the
-// same interface so callers do not have to thread two queriers
-// through. All are no-op safe: if the install lacks signature data
-// the underlying queries return zero rows and FuseSignatures bails
-// out early.
 type HeuristicQuerier interface {
 	ListEncountersForPlateInWindowWithStartGPS(ctx context.Context, arg db.ListEncountersForPlateInWindowWithStartGPSParams) ([]db.ListEncountersForPlateInWindowWithStartGPSRow, error)
 	GetWatchlistByHash(ctx context.Context, plateHash []byte) (db.GetWatchlistByHashRow, error)
 	UpsertWatchlistAlerted(ctx context.Context, arg db.UpsertWatchlistAlertedParams) (db.UpsertWatchlistAlertedRow, error)
 	UpsertWatchlistAlertedPreserveAck(ctx context.Context, arg db.UpsertWatchlistAlertedPreserveAckParams) (db.UpsertWatchlistAlertedPreserveAckRow, error)
 	InsertAlertEvent(ctx context.Context, arg db.InsertAlertEventParams) (db.PlateAlertEvent, error)
-
-	// Fusion-layer reads.
-	CountDetectionsBySignatureForPlate(ctx context.Context, plateHash []byte) ([]db.CountDetectionsBySignatureForPlateRow, error)
-	GetSignature(ctx context.Context, id int64) (db.VehicleSignature, error)
-	ListPlatesForSignature(ctx context.Context, signatureID pgtype.Int8) ([][]byte, error)
-	ListPlateHashesForSignatureInWindow(ctx context.Context, arg db.ListPlateHashesForSignatureInWindowParams) ([]db.ListPlateHashesForSignatureInWindowRow, error)
-
-	// Fusion-layer writes (signature-keyed plate-swap alerts).
-	GetWatchlistSignatureSwap(ctx context.Context, signatureID pgtype.Int8) (db.PlateWatchlist, error)
-	UpsertWatchlistSignatureSwap(ctx context.Context, arg db.UpsertWatchlistSignatureSwapParams) (db.PlateWatchlist, error)
 }
 
 // EncountersUpdatedEvent is the local mirror of
@@ -421,54 +383,9 @@ func (w *Worker) EvaluatePlate(ctx context.Context, plateHash []byte, route, don
 	}
 	res := Score(in)
 
-	// Fusion layer: corroboration + plate-swap detection. Strictly
-	// additive on top of the stalking heuristic. If the install has
-	// no signature-bearing detections (vehicle-attributes engine off
-	// or unsupported), this returns zero/empty and the rest of the
-	// pipeline behaves identically to a pre-fusion build.
-	//
-	// Whitelist suppression at the fusion layer mirrors the stalking
-	// layer: a whitelisted plate contributes neither severity bumps
-	// nor plate-swap alerts. The signature-keyed alert path applies
-	// its own independent whitelist check (every contributing plate
-	// must be non-whitelisted) inside FuseSignatures.
-	var fusion FusionResult
-	if !whitelisted {
-		fusion, err = FuseSignatures(ctx, w.Queries, FusionInput{
-			PlateHash:  plateHash,
-			Now:        now,
-			Thresholds: w.fusionThresholds(ctx),
-		})
-		if err != nil {
-			// A fusion-layer failure is not fatal -- the stalking
-			// heuristic's score is the load-bearing artefact, so we
-			// log and continue. The plate's audit row records what
-			// fusion contributed (zero, in this case).
-			log.Printf("alpr heuristic: fuse signatures for %x: %v", plateHash, err)
-			fusion = FusionResult{}
-		}
-	}
-
-	// Merge fusion components into the audit blob and apply the
-	// fusion severity bump. The bump is added at the score-points
-	// level (matching how stalking components contribute) so the
-	// severityForScore mapping stays the single source of truth.
-	combinedComponents := append([]Component(nil), res.Components...)
-	combinedComponents = append(combinedComponents, fusion.Components...)
-	combinedScore := res.TotalScore + fusion.ExtraSeverity
-	combinedSeverity := severityForScore(combinedScore)
-	// Whitelist override still wins -- if the plate was whitelisted
-	// the stalking layer already zeroed res.TotalScore and emitted
-	// the suppression component. The fusion layer is gated on
-	// !whitelisted above; this assertion is defensive.
-	if whitelisted {
-		combinedScore = 0
-		combinedSeverity = 0
-	}
-
 	// Always insert an alert_events row. The audit trail is the
 	// load-bearing artefact behind every alert badge.
-	componentsJSON, err := json.Marshal(combinedComponents)
+	componentsJSON, err := json.Marshal(res.Components)
 	if err != nil {
 		// json.Marshal on a Component slice should never fail
 		// (Evidence is map[string]any with primitive values), but
@@ -481,7 +398,7 @@ func (w *Worker) EvaluatePlate(ctx context.Context, plateHash []byte, route, don
 		PlateHash:        plateHash,
 		Route:            pgtype.Text{String: route, Valid: route != ""},
 		DongleID:         pgtype.Text{String: dongleID, Valid: dongleID != ""},
-		Severity:         int16(combinedSeverity),
+		Severity:         int16(res.Severity),
 		Components:       componentsJSON,
 		HeuristicVersion: HeuristicVersion,
 	}); err != nil {
@@ -489,26 +406,8 @@ func (w *Worker) EvaluatePlate(ctx context.Context, plateHash []byte, route, don
 	}
 
 	if w.Metrics != nil {
-		w.Metrics.IncALPRHeuristicAlerts(combinedSeverity)
+		w.Metrics.IncALPRHeuristicAlerts(res.Severity)
 	}
-
-	// Process plate-swap alerts independently of the plate-keyed
-	// path. A signature-swap alert can fire on a plate whose own
-	// stalking severity is below threshold (e.g. the operator only
-	// just saw plate #3 of a swap), and a plate's own severity can
-	// rise without any swap happening. Errors per-alert are logged
-	// and do not stop the plate's primary watchlist write below.
-	for _, sa := range fusion.PlateSwapAlerts {
-		if err := w.persistSwapAlert(ctx, sa, route, dongleID, now); err != nil {
-			log.Printf("alpr heuristic: persist swap alert (sig=%d): %v", sa.SignatureID, err)
-		}
-	}
-
-	// Override res.Severity with the combined value so the rest of
-	// the worker (watchlist UPSERT + AlertCreated emission) reasons
-	// about the fully-fused severity.
-	res.Severity = combinedSeverity
-	res.TotalScore = combinedScore
 
 	// Severity 0/1 -- nothing more to do (the audit row above is
 	// the entire artefact). Severity 1 is reserved for manual
@@ -684,90 +583,4 @@ func (w *Worker) floatOr(ctx context.Context, key string, def float64) float64 {
 		return def
 	}
 	return v
-}
-
-// fusionThresholds reads the alpr_signature_* settings and falls back
-// to DefaultFusionThresholds() for any missing or unparseable value.
-// The fusion layer's tunables intentionally live behind a separate
-// settings prefix so a misconfigured fusion threshold does not bleed
-// into the stalking heuristic.
-func (w *Worker) fusionThresholds(ctx context.Context) FusionThresholds {
-	t := DefaultFusionThresholds()
-	if w.Settings == nil {
-		return t
-	}
-	t.ConsistencyShareMin = w.floatOr(ctx, settings.KeyALPRSignatureConsistencyShareMin, t.ConsistencyShareMin)
-	t.ConsistencyPoints = w.floatOr(ctx, settings.KeyALPRSignatureConsistencyPoints, t.ConsistencyPoints)
-	t.ConflictShareMin = w.floatOr(ctx, settings.KeyALPRSignatureConflictShareMin, t.ConflictShareMin)
-	t.ConflictMinSignatures = w.intOr(ctx, settings.KeyALPRSignatureConflictMinSignatures, t.ConflictMinSignatures)
-	t.PlateSwapMinPlates = w.intOr(ctx, settings.KeyALPRSignatureSwapMinPlates, t.PlateSwapMinPlates)
-	t.PlateSwapAreaCellKm = w.floatOr(ctx, settings.KeyALPRSignatureSwapAreaCellKm, t.PlateSwapAreaCellKm)
-	t.PlateSwapLookbackDays = w.intOr(ctx, settings.KeyALPRSignatureSwapLookbackDays, t.PlateSwapLookbackDays)
-	t.PlateSwapSeverity = w.intOr(ctx, settings.KeyALPRSignatureSwapSeverity, t.PlateSwapSeverity)
-	return t
-}
-
-// persistSwapAlert UPSERTs the signature-keyed plate-swap row and
-// emits an AlertCreated when the alert is genuinely new or strictly
-// upgraded. Mirrors the plate-keyed write path in evaluatePlate so
-// the two flavours have parallel ack-preserve / upgrade-clear
-// semantics; the only behavioural difference is keying on
-// signature_id with plate_hash IS NULL.
-func (w *Worker) persistSwapAlert(ctx context.Context, sa SwapAlert, route, dongleID string, now time.Time) error {
-	if w.Queries == nil {
-		return errors.New("queries not configured")
-	}
-	sigParam := pgtype.Int8{Int64: sa.SignatureID, Valid: true}
-
-	// Look up the existing signature-keyed row (if any) so we can
-	// decide whether this is a brand-new alert (emit AlertCreated)
-	// or a re-fire (silently refresh last_alert_at).
-	var (
-		existingSeverity int16
-		existingExists   bool
-	)
-	prior, err := w.Queries.GetWatchlistSignatureSwap(ctx, sigParam)
-	switch {
-	case err == nil:
-		existingExists = true
-		if prior.Severity.Valid {
-			existingSeverity = prior.Severity.Int16
-		}
-	case errors.Is(err, pgx.ErrNoRows):
-		// no existing row -- the alert is new.
-	default:
-		return fmt.Errorf("get signature-swap watchlist: %w", err)
-	}
-
-	alertAt := pgtype.Timestamptz{Time: now, Valid: true}
-	if _, err := w.Queries.UpsertWatchlistSignatureSwap(ctx, db.UpsertWatchlistSignatureSwapParams{
-		SignatureID: sigParam,
-		Severity:    pgtype.Int2{Int16: int16(sa.Severity), Valid: true},
-		AlertAt:     alertAt,
-	}); err != nil {
-		return fmt.Errorf("upsert signature-swap watchlist: %w", err)
-	}
-
-	// Emit AlertCreated only when the alert is genuinely new or its
-	// severity strictly increased. A re-fire of the same signature
-	// at the same severity is intentionally silent.
-	severityStrictlyIncreased := sa.Severity > int(existingSeverity)
-	shouldEmit := !existingExists || severityStrictlyIncreased
-	if !shouldEmit {
-		return nil
-	}
-	sigID := sa.SignatureID
-	plateCopies := make([][]byte, len(sa.PlateHashes))
-	for i, p := range sa.PlateHashes {
-		plateCopies[i] = append([]byte(nil), p...)
-	}
-	w.emit(ctx, AlertCreated{
-		Severity:    sa.Severity,
-		Route:       route,
-		DongleID:    dongleID,
-		ComputedAt:  now,
-		SignatureID: &sigID,
-		PlateHashes: plateCopies,
-	})
-	return nil
 }

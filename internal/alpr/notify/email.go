@@ -282,7 +282,6 @@ func buildTextBody(alert AlertPayload) string {
 	b.WriteString("ALPR alert\n")
 	b.WriteString("Severity: " + strconv.Itoa(alert.Severity) + "\n")
 	b.WriteString("Plate: " + alert.Plate + "\n")
-	b.WriteString("Vehicle: " + alert.VehicleBadge() + "\n")
 	b.WriteString("Evidence: " + summarizeEvidence(alert.Evidence) + "\n")
 	if alert.Route != "" {
 		b.WriteString("Route: " + alert.Route + "\n")
@@ -318,7 +317,6 @@ func buildHTMLBody(alert AlertPayload) string {
 	b.WriteString("<h2>ALPR alert</h2>")
 	b.WriteString("<p><strong>Severity:</strong> " + strconv.Itoa(alert.Severity) + "</p>")
 	b.WriteString("<p><strong>Plate:</strong> " + htmlEscape(alert.Plate) + "</p>")
-	b.WriteString("<p><strong>Vehicle:</strong> " + htmlEscape(alert.VehicleBadge()) + "</p>")
 	b.WriteString("<p><strong>Evidence:</strong> " + htmlEscape(summarizeEvidence(alert.Evidence)) + "</p>")
 	if alert.Route != "" {
 		b.WriteString("<p><strong>Route:</strong> " + htmlEscape(alert.Route) + "</p>")

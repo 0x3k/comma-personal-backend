@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"comma-personal-backend/internal/alpr"
 	"comma-personal-backend/internal/alpr/heuristic"
 )
 
@@ -112,17 +111,16 @@ func (s *WebhookSender) Send(ctx context.Context, alert AlertPayload) error {
 // renaming any of them requires a WebhookPayloadVersion bump and a doc
 // note. New fields are additive (existing receivers ignore them).
 type webhookPayload struct {
-	Type         string                  `json:"type"`
-	Version      string                  `json:"version"`
-	Severity     int                     `json:"severity"`
-	PlateHashB64 string                  `json:"plate_hash_b64"`
-	Plate        string                  `json:"plate"`
-	Vehicle      *alpr.VehicleAttributes `json:"vehicle,omitempty"`
-	Evidence     []heuristic.Component   `json:"evidence"`
-	Route        string                  `json:"route,omitempty"`
-	DongleID     string                  `json:"dongle_id,omitempty"`
-	DashboardURL string                  `json:"dashboard_url,omitempty"`
-	SentAt       string                  `json:"sent_at"`
+	Type         string                `json:"type"`
+	Version      string                `json:"version"`
+	Severity     int                   `json:"severity"`
+	PlateHashB64 string                `json:"plate_hash_b64"`
+	Plate        string                `json:"plate"`
+	Evidence     []heuristic.Component `json:"evidence"`
+	Route        string                `json:"route,omitempty"`
+	DongleID     string                `json:"dongle_id,omitempty"`
+	DashboardURL string                `json:"dashboard_url,omitempty"`
+	SentAt       string                `json:"sent_at"`
 }
 
 // buildWebhookPayload converts an AlertPayload to the wire shape. Kept
@@ -142,7 +140,6 @@ func buildWebhookPayload(alert AlertPayload, sentAt time.Time) webhookPayload {
 		Severity:     alert.Severity,
 		PlateHashB64: alert.PlateHashB64,
 		Plate:        alert.Plate,
-		Vehicle:      alert.Vehicle,
 		Evidence:     evidence,
 		Route:        alert.Route,
 		DongleID:     alert.DongleID,

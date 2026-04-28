@@ -155,7 +155,7 @@ func (q *Queries) DistinctRoutesForEncountersPlateHash(ctx context.Context, plat
 const getMostRecentEncounterForPlate = `-- name: GetMostRecentEncounterForPlate :one
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,
-       signature_id, status, bbox_first, bbox_last,
+       status, bbox_first, bbox_last,
        created_at, updated_at
 FROM plate_encounters
 WHERE plate_hash = $1
@@ -163,13 +163,30 @@ ORDER BY last_seen_ts DESC NULLS LAST, id DESC
 LIMIT 1
 `
 
+type GetMostRecentEncounterForPlateRow struct {
+	ID                    int64              `json:"id"`
+	DongleID              string             `json:"dongleId"`
+	Route                 string             `json:"route"`
+	PlateHash             []byte             `json:"plateHash"`
+	FirstSeenTs           pgtype.Timestamptz `json:"firstSeenTs"`
+	LastSeenTs            pgtype.Timestamptz `json:"lastSeenTs"`
+	DetectionCount        int32              `json:"detectionCount"`
+	TurnCount             int32              `json:"turnCount"`
+	MaxInternalGapSeconds int32              `json:"maxInternalGapSeconds"`
+	Status                string             `json:"status"`
+	BboxFirst             []byte             `json:"bboxFirst"`
+	BboxLast              []byte             `json:"bboxLast"`
+	CreatedAt             pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt             pgtype.Timestamptz `json:"updatedAt"`
+}
+
 // The single most-recently-finished encounter for a plate. Used by the
 // alert/whitelist listing endpoints to populate the latest_route panel
 // (which device, which route, when) without loading the full encounter
 // history. pgx.ErrNoRows when the plate has never been seen.
-func (q *Queries) GetMostRecentEncounterForPlate(ctx context.Context, plateHash []byte) (PlateEncounter, error) {
+func (q *Queries) GetMostRecentEncounterForPlate(ctx context.Context, plateHash []byte) (GetMostRecentEncounterForPlateRow, error) {
 	row := q.db.QueryRow(ctx, getMostRecentEncounterForPlate, plateHash)
-	var i PlateEncounter
+	var i GetMostRecentEncounterForPlateRow
 	err := row.Scan(
 		&i.ID,
 		&i.DongleID,
@@ -180,7 +197,6 @@ func (q *Queries) GetMostRecentEncounterForPlate(ctx context.Context, plateHash 
 		&i.DetectionCount,
 		&i.TurnCount,
 		&i.MaxInternalGapSeconds,
-		&i.SignatureID,
 		&i.Status,
 		&i.BboxFirst,
 		&i.BboxLast,
@@ -239,25 +255,42 @@ func (q *Queries) ListDistinctPlatesEncounteredInWindow(ctx context.Context, arg
 const listEncountersForPlate = `-- name: ListEncountersForPlate :many
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,
-       signature_id, status, bbox_first, bbox_last,
+       status, bbox_first, bbox_last,
        created_at, updated_at
 FROM plate_encounters
 WHERE plate_hash = $1
 ORDER BY last_seen_ts DESC, id DESC
 `
 
+type ListEncountersForPlateRow struct {
+	ID                    int64              `json:"id"`
+	DongleID              string             `json:"dongleId"`
+	Route                 string             `json:"route"`
+	PlateHash             []byte             `json:"plateHash"`
+	FirstSeenTs           pgtype.Timestamptz `json:"firstSeenTs"`
+	LastSeenTs            pgtype.Timestamptz `json:"lastSeenTs"`
+	DetectionCount        int32              `json:"detectionCount"`
+	TurnCount             int32              `json:"turnCount"`
+	MaxInternalGapSeconds int32              `json:"maxInternalGapSeconds"`
+	Status                string             `json:"status"`
+	BboxFirst             []byte             `json:"bboxFirst"`
+	BboxLast              []byte             `json:"bboxLast"`
+	CreatedAt             pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt             pgtype.Timestamptz `json:"updatedAt"`
+}
+
 // All encounters of a single plate across every route, newest first.
 // Backs the plate-detail page and feeds the stalking heuristic's
 // "recurring plate" lookups.
-func (q *Queries) ListEncountersForPlate(ctx context.Context, plateHash []byte) ([]PlateEncounter, error) {
+func (q *Queries) ListEncountersForPlate(ctx context.Context, plateHash []byte) ([]ListEncountersForPlateRow, error) {
 	rows, err := q.db.Query(ctx, listEncountersForPlate, plateHash)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []PlateEncounter
+	var items []ListEncountersForPlateRow
 	for rows.Next() {
-		var i PlateEncounter
+		var i ListEncountersForPlateRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.DongleID,
@@ -268,7 +301,6 @@ func (q *Queries) ListEncountersForPlate(ctx context.Context, plateHash []byte) 
 			&i.DetectionCount,
 			&i.TurnCount,
 			&i.MaxInternalGapSeconds,
-			&i.SignatureID,
 			&i.Status,
 			&i.BboxFirst,
 			&i.BboxLast,
@@ -288,7 +320,7 @@ func (q *Queries) ListEncountersForPlate(ctx context.Context, plateHash []byte) 
 const listEncountersForPlateInWindow = `-- name: ListEncountersForPlateInWindow :many
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,
-       signature_id, status, bbox_first, bbox_last,
+       status, bbox_first, bbox_last,
        created_at, updated_at
 FROM plate_encounters
 WHERE plate_hash    = $1
@@ -303,19 +335,36 @@ type ListEncountersForPlateInWindowParams struct {
 	FirstSeenTs pgtype.Timestamptz `json:"firstSeenTs"`
 }
 
+type ListEncountersForPlateInWindowRow struct {
+	ID                    int64              `json:"id"`
+	DongleID              string             `json:"dongleId"`
+	Route                 string             `json:"route"`
+	PlateHash             []byte             `json:"plateHash"`
+	FirstSeenTs           pgtype.Timestamptz `json:"firstSeenTs"`
+	LastSeenTs            pgtype.Timestamptz `json:"lastSeenTs"`
+	DetectionCount        int32              `json:"detectionCount"`
+	TurnCount             int32              `json:"turnCount"`
+	MaxInternalGapSeconds int32              `json:"maxInternalGapSeconds"`
+	Status                string             `json:"status"`
+	BboxFirst             []byte             `json:"bboxFirst"`
+	BboxLast              []byte             `json:"bboxLast"`
+	CreatedAt             pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt             pgtype.Timestamptz `json:"updatedAt"`
+}
+
 // Encounters for a plate that overlap a given time window. The window is
 // inclusive on both ends. Used by the stalking heuristic to count how
 // many recent times the suspect plate was seen, without paging through
 // the entire history.
-func (q *Queries) ListEncountersForPlateInWindow(ctx context.Context, arg ListEncountersForPlateInWindowParams) ([]PlateEncounter, error) {
+func (q *Queries) ListEncountersForPlateInWindow(ctx context.Context, arg ListEncountersForPlateInWindowParams) ([]ListEncountersForPlateInWindowRow, error) {
 	rows, err := q.db.Query(ctx, listEncountersForPlateInWindow, arg.PlateHash, arg.LastSeenTs, arg.FirstSeenTs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []PlateEncounter
+	var items []ListEncountersForPlateInWindowRow
 	for rows.Next() {
-		var i PlateEncounter
+		var i ListEncountersForPlateInWindowRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.DongleID,
@@ -326,7 +375,6 @@ func (q *Queries) ListEncountersForPlateInWindow(ctx context.Context, arg ListEn
 			&i.DetectionCount,
 			&i.TurnCount,
 			&i.MaxInternalGapSeconds,
-			&i.SignatureID,
 			&i.Status,
 			&i.BboxFirst,
 			&i.BboxLast,
@@ -347,7 +395,7 @@ const listEncountersForPlateInWindowWithStartGPS = `-- name: ListEncountersForPl
 SELECT pe.id, pe.dongle_id, pe.route, pe.plate_hash,
        pe.first_seen_ts, pe.last_seen_ts,
        pe.detection_count, pe.turn_count, pe.max_internal_gap_seconds,
-       pe.signature_id, pe.status, pe.bbox_first, pe.bbox_last,
+       pe.status, pe.bbox_first, pe.bbox_last,
        pe.created_at, pe.updated_at,
        pd.gps_lat AS start_lat,
        pd.gps_lng AS start_lng
@@ -383,7 +431,6 @@ type ListEncountersForPlateInWindowWithStartGPSRow struct {
 	DetectionCount        int32              `json:"detectionCount"`
 	TurnCount             int32              `json:"turnCount"`
 	MaxInternalGapSeconds int32              `json:"maxInternalGapSeconds"`
-	SignatureID           pgtype.Int8        `json:"signatureId"`
 	Status                string             `json:"status"`
 	BboxFirst             []byte             `json:"bboxFirst"`
 	BboxLast              []byte             `json:"bboxLast"`
@@ -422,7 +469,6 @@ func (q *Queries) ListEncountersForPlateInWindowWithStartGPS(ctx context.Context
 			&i.DetectionCount,
 			&i.TurnCount,
 			&i.MaxInternalGapSeconds,
-			&i.SignatureID,
 			&i.Status,
 			&i.BboxFirst,
 			&i.BboxLast,
@@ -444,7 +490,7 @@ func (q *Queries) ListEncountersForPlateInWindowWithStartGPS(ctx context.Context
 const listEncountersForRoute = `-- name: ListEncountersForRoute :many
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,
-       signature_id, status, bbox_first, bbox_last,
+       status, bbox_first, bbox_last,
        created_at, updated_at
 FROM plate_encounters
 WHERE dongle_id = $1 AND route = $2
@@ -456,17 +502,34 @@ type ListEncountersForRouteParams struct {
 	Route    string `json:"route"`
 }
 
+type ListEncountersForRouteRow struct {
+	ID                    int64              `json:"id"`
+	DongleID              string             `json:"dongleId"`
+	Route                 string             `json:"route"`
+	PlateHash             []byte             `json:"plateHash"`
+	FirstSeenTs           pgtype.Timestamptz `json:"firstSeenTs"`
+	LastSeenTs            pgtype.Timestamptz `json:"lastSeenTs"`
+	DetectionCount        int32              `json:"detectionCount"`
+	TurnCount             int32              `json:"turnCount"`
+	MaxInternalGapSeconds int32              `json:"maxInternalGapSeconds"`
+	Status                string             `json:"status"`
+	BboxFirst             []byte             `json:"bboxFirst"`
+	BboxLast              []byte             `json:"bboxLast"`
+	CreatedAt             pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt             pgtype.Timestamptz `json:"updatedAt"`
+}
+
 // All encounter rows for a route, ordered by first_seen_ts. Powers the
 // per-route review UI ("which plates did we see on this drive").
-func (q *Queries) ListEncountersForRoute(ctx context.Context, arg ListEncountersForRouteParams) ([]PlateEncounter, error) {
+func (q *Queries) ListEncountersForRoute(ctx context.Context, arg ListEncountersForRouteParams) ([]ListEncountersForRouteRow, error) {
 	rows, err := q.db.Query(ctx, listEncountersForRoute, arg.DongleID, arg.Route)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []PlateEncounter
+	var items []ListEncountersForRouteRow
 	for rows.Next() {
-		var i PlateEncounter
+		var i ListEncountersForRouteRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.DongleID,
@@ -477,79 +540,6 @@ func (q *Queries) ListEncountersForRoute(ctx context.Context, arg ListEncounters
 			&i.DetectionCount,
 			&i.TurnCount,
 			&i.MaxInternalGapSeconds,
-			&i.SignatureID,
-			&i.Status,
-			&i.BboxFirst,
-			&i.BboxLast,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listEncountersForSignatureInArea = `-- name: ListEncountersForSignatureInArea :many
-SELECT pe.id, pe.dongle_id, pe.route, pe.plate_hash, pe.first_seen_ts,
-       pe.last_seen_ts, pe.detection_count, pe.turn_count,
-       pe.max_internal_gap_seconds, pe.signature_id, pe.status,
-       pe.bbox_first, pe.bbox_last, pe.created_at, pe.updated_at
-FROM plate_encounters pe
-JOIN plate_detections pd ON pd.dongle_id = pe.dongle_id
-                        AND pd.route     = pe.route
-                        AND pd.plate_hash = pe.plate_hash
-                        AND pd.frame_ts  = pe.first_seen_ts
-WHERE pe.signature_id = $1
-  AND pd.gps_lat BETWEEN $2 AND $3
-  AND pd.gps_lng BETWEEN $4 AND $5
-ORDER BY pe.last_seen_ts DESC, pe.id DESC
-`
-
-type ListEncountersForSignatureInAreaParams struct {
-	SignatureID pgtype.Int8   `json:"signatureId"`
-	MinLat      pgtype.Float8 `json:"minLat"`
-	MaxLat      pgtype.Float8 `json:"maxLat"`
-	MinLng      pgtype.Float8 `json:"minLng"`
-	MaxLng      pgtype.Float8 `json:"maxLng"`
-}
-
-// Encounters linked to a vehicle signature whose first detection lies
-// inside a lat/lng bounding box. Used by the signature-fusion heuristic
-// to find "the same vehicle (by signature) showing up in our area" even
-// across partial plate observations. The bbox is supplied as four
-// scalars rather than a PostGIS geometry to keep this query independent
-// of the signature schema's geometry columns.
-func (q *Queries) ListEncountersForSignatureInArea(ctx context.Context, arg ListEncountersForSignatureInAreaParams) ([]PlateEncounter, error) {
-	rows, err := q.db.Query(ctx, listEncountersForSignatureInArea,
-		arg.SignatureID,
-		arg.MinLat,
-		arg.MaxLat,
-		arg.MinLng,
-		arg.MaxLng,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []PlateEncounter
-	for rows.Next() {
-		var i PlateEncounter
-		if err := rows.Scan(
-			&i.ID,
-			&i.DongleID,
-			&i.Route,
-			&i.PlateHash,
-			&i.FirstSeenTs,
-			&i.LastSeenTs,
-			&i.DetectionCount,
-			&i.TurnCount,
-			&i.MaxInternalGapSeconds,
-			&i.SignatureID,
 			&i.Status,
 			&i.BboxFirst,
 			&i.BboxLast,
@@ -576,24 +566,22 @@ INSERT INTO plate_encounters (
     detection_count,
     turn_count,
     max_internal_gap_seconds,
-    signature_id,
     status,
     bbox_first,
     bbox_last
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (dongle_id, route, plate_hash, first_seen_ts) DO UPDATE
 SET last_seen_ts             = EXCLUDED.last_seen_ts,
     detection_count          = EXCLUDED.detection_count,
     turn_count               = EXCLUDED.turn_count,
     max_internal_gap_seconds = EXCLUDED.max_internal_gap_seconds,
-    signature_id             = EXCLUDED.signature_id,
     status                   = EXCLUDED.status,
     bbox_last                = EXCLUDED.bbox_last,
     updated_at               = now()
 RETURNING id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
           detection_count, turn_count, max_internal_gap_seconds,
-          signature_id, status, bbox_first, bbox_last,
+          status, bbox_first, bbox_last,
           created_at, updated_at
 `
 
@@ -606,21 +594,36 @@ type UpsertEncounterParams struct {
 	DetectionCount        int32              `json:"detectionCount"`
 	TurnCount             int32              `json:"turnCount"`
 	MaxInternalGapSeconds int32              `json:"maxInternalGapSeconds"`
-	SignatureID           pgtype.Int8        `json:"signatureId"`
 	Status                string             `json:"status"`
 	BboxFirst             []byte             `json:"bboxFirst"`
 	BboxLast              []byte             `json:"bboxLast"`
+}
+
+type UpsertEncounterRow struct {
+	ID                    int64              `json:"id"`
+	DongleID              string             `json:"dongleId"`
+	Route                 string             `json:"route"`
+	PlateHash             []byte             `json:"plateHash"`
+	FirstSeenTs           pgtype.Timestamptz `json:"firstSeenTs"`
+	LastSeenTs            pgtype.Timestamptz `json:"lastSeenTs"`
+	DetectionCount        int32              `json:"detectionCount"`
+	TurnCount             int32              `json:"turnCount"`
+	MaxInternalGapSeconds int32              `json:"maxInternalGapSeconds"`
+	Status                string             `json:"status"`
+	BboxFirst             []byte             `json:"bboxFirst"`
+	BboxLast              []byte             `json:"bboxLast"`
+	CreatedAt             pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt             pgtype.Timestamptz `json:"updatedAt"`
 }
 
 // Insert-or-update an encounter row keyed on (dongle_id, route,
 // plate_hash, first_seen_ts). Re-running the aggregator over the same
 // route is idempotent: the unique constraint catches the conflict and
 // the DO UPDATE refreshes the mutable fields (last_seen_ts,
-// detection_count, turn_count, gap, signature_id, status, bbox_last,
-// updated_at). first_seen_ts and bbox_first are NOT updated because
-// they identify the encounter and changing them would defeat
-// idempotency.
-func (q *Queries) UpsertEncounter(ctx context.Context, arg UpsertEncounterParams) (PlateEncounter, error) {
+// detection_count, turn_count, gap, status, bbox_last, updated_at).
+// first_seen_ts and bbox_first are NOT updated because they identify
+// the encounter and changing them would defeat idempotency.
+func (q *Queries) UpsertEncounter(ctx context.Context, arg UpsertEncounterParams) (UpsertEncounterRow, error) {
 	row := q.db.QueryRow(ctx, upsertEncounter,
 		arg.DongleID,
 		arg.Route,
@@ -630,12 +633,11 @@ func (q *Queries) UpsertEncounter(ctx context.Context, arg UpsertEncounterParams
 		arg.DetectionCount,
 		arg.TurnCount,
 		arg.MaxInternalGapSeconds,
-		arg.SignatureID,
 		arg.Status,
 		arg.BboxFirst,
 		arg.BboxLast,
 	)
-	var i PlateEncounter
+	var i UpsertEncounterRow
 	err := row.Scan(
 		&i.ID,
 		&i.DongleID,
@@ -646,7 +648,6 @@ func (q *Queries) UpsertEncounter(ctx context.Context, arg UpsertEncounterParams
 		&i.DetectionCount,
 		&i.TurnCount,
 		&i.MaxInternalGapSeconds,
-		&i.SignatureID,
 		&i.Status,
 		&i.BboxFirst,
 		&i.BboxLast,

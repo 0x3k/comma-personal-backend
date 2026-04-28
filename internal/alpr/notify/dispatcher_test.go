@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"comma-personal-backend/internal/alpr"
 	"comma-personal-backend/internal/alpr/heuristic"
 	"comma-personal-backend/internal/db"
 )
@@ -107,7 +106,6 @@ func basePayload() (AlertPayload, []byte) {
 		Severity:     5,
 		Plate:        "ABC-123",
 		PlateHashB64: EncodePlateHashB64(plateHash),
-		Vehicle:      &alpr.VehicleAttributes{Color: "Silver", Make: "Toyota", Model: "Camry"},
 		Evidence: []heuristic.Component{
 			{Name: heuristic.ComponentCrossRouteCount, Points: 2.0},
 		},

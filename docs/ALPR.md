@@ -154,8 +154,8 @@ tiered passes per run:
    watchlist keep their full audit trail.
 
 `plate_watchlist` and `vehicle_signatures` are **never** touched by the
-worker -- the former is user-curated state, the latter is a small
-long-lived identity index for cross-route fusion.
+worker -- the former is user-curated state, the latter is reserved for
+a future vehicle-attribute classifier (currently inactive).
 
 `DELETE_DRY_RUN=true` (the default on first boot) makes the worker log
 the delete sets it would issue without executing them, so operators can
@@ -256,109 +256,22 @@ severity. `route_turns` is intentionally retained even after ALPR is
 disabled because it has uses outside ALPR (turn-based event detection,
 trip clustering).
 
-### Vehicle attribute classifier
+### Vehicle attribute classifier (deferred)
 
-In addition to the plate text, the engine sidecar runs an optional
-second-stage classifier (currently `open-image-models`) that emits
-make/model/color/body-type per detection. The detection-worker uses
-these attributes to fuse plate reads with shared visual signatures, so
-"same plate via different OCR jitter" and "same vehicle in two adjacent
-frames" can be grouped without relying solely on plate-text equality.
+The original design called for a second-stage classifier (make / model
+/ color / body type) so plate reads could be fused with a vehicle
+signature. The library that scoping work assumed (`open-image-models`)
+turned out to never have shipped that capability, so the entire
+make/model/color/body-type pipeline is **not active** in this build.
+Detections carry plate text + bbox + GPS only; the `vehicle_signatures`
+table exists in the schema for forward compatibility but is never
+populated.
 
-#### Detection response: `vehicle` field
-
-Each detection in the `detections` array carries a `vehicle` field that
-is either `null` (the engine did not run the classifier, or it failed
-to load) or an object with the second-stage classifier output:
-
-```json
-{
-  "plate": "ABC123",
-  "confidence": 0.91,
-  "bbox": {"x": 10, "y": 20, "w": 80, "h": 40},
-  "vehicle": {
-    "make": "toyota",
-    "model": null,
-    "year_min": null,
-    "year_max": null,
-    "color": "silver",
-    "body_type": "sedan",
-    "confidence": 0.61,
-    "signature_key": "toyota|silver|sedan"
-  }
-}
-```
-
-Field semantics:
-
-- **`make`**, **`model`**, **`color`**: lowercased strings, or `null`
-  when the per-attribute confidence is below
-  `ALPR_ATTRIBUTES_MIN_CONFIDENCE` (default `0.5`). Downstream relies
-  on null-vs-present, NOT on absolute confidence values, so the engine
-  drops uncertain attributes rather than guessing.
-- **`year_min`**, **`year_max`**: integer year range, or `null`. The
-  current classifier (`open-image-models`) does not predict year, so
-  these are always `null` today; the fields exist so a future
-  classifier swap does not require a contract change.
-- **`body_type`**: one of `sedan`, `suv`, `truck`, `hatchback`,
-  `coupe`, `van`, `wagon`, `motorcycle`, `other`, or `null`. Upstream
-  class names that do not map cleanly to this taxonomy become `null`
-  (we do not silently bucket unknown shapes into `other`).
-- **`confidence`**: aggregate score for the `vehicle` payload, computed
-  as the minimum surviving per-attribute confidence (most pessimistic;
-  matches "every reported attribute is at least this confident"). May
-  be `null` when no attribute survived the gate.
-- **`signature_key`**: see "Vehicle signature canonicalization" below.
-
-The `/health` endpoint reports a `supports_attributes` flag that
-mirrors `ALPR_ATTRIBUTES_ENABLED`; callers can use it to decide whether
-to expect the `vehicle` payload at all.
-
-#### Vehicle signature canonicalization
-
-`signature_key` is generated server-side (Python is the authoritative
-implementation, mirrored verbatim by the Go client) so canonicalization
-rules cannot drift between the engine and any re-derivation in callers.
-The rules are:
-
-1. **Lowercase** every component.
-2. **Strip** leading and trailing whitespace.
-3. **Drop** `null` and empty-string components entirely. The wire
-   format never contains double pipes; the count of pipe separators
-   equals `count(non-null components) - 1`.
-4. **Join** the surviving components in fixed order:
-   `make | model | color | body_type`.
-5. If every component is `null` or empty, the value is the empty
-   string `""`. Downstream consumers (the encounter aggregator, the
-   signature fusion heuristic) treat this as a non-grouping detection.
-
-Examples:
-
-| make | model | color | body_type | `signature_key` |
-|------|-------|-------|-----------|-----------------|
-| `toyota` | `camry` | `silver` | `sedan` | `toyota\|camry\|silver\|sedan` |
-| `null` | `null` | `silver` | `sedan` | `silver\|sedan` |
-| `toyota` | `null` | `silver` | `sedan` | `toyota\|silver\|sedan` |
-| `null` | `null` | `null` | `null` | `""` |
-
-The canonicalization is deterministic for any fixed input, including
-when the upstream classifier exhibits jitter in the third decimal of
-the per-attribute confidence (the gate at `ALPR_ATTRIBUTES_MIN_CONFIDENCE`
-absorbs that jitter cleanly when the labels themselves agree).
-
-#### Disabling the attribute classifier
-
-Set `ALPR_ATTRIBUTES_ENABLED=false` (env var, inside the engine
-container) to skip the second-stage classifier entirely:
-
-- `vehicle: null` on every detection.
-- `/health` reports `supports_attributes: false`.
-- The classifier is not loaded, no model weights are pulled, and the
-  per-frame latency drops back to the plate-only baseline.
-
-This is the documented compute-savings escape hatch; useful on
-under-resourced hardware where the operator only wants plate text and
-does not need vehicle grouping.
+The path to re-enable is documented in
+[`ALPR-ENGINE-DECISION.md`](ALPR-ENGINE-DECISION.md): swap a real
+classifier (PaddleClas PULC `vehicle_attribute` is the closest fit) into
+the engine sidecar. Until then there is no `vehicle` field on detection
+responses and no signature-fusion alerting.
 
 ## 5. Hardware requirements
 
@@ -395,31 +308,6 @@ retention, US plate region):
 If you have terabytes of historical routes you want to backfill, run
 the GPU variant of the engine for that pass and switch back to CPU
 afterwards (see Deployment).
-
-### Attribute-classifier latency budget
-
-When `ALPR_ATTRIBUTES_ENABLED=true` (the default), the second-stage
-classifier runs once per frame on the same numpy array as the plate
-detector (image-level, not per-bbox). The targets below are based on
-the spike harness measurements (see `tools/alpr-spike/bench.py`) plus
-public benchmarks for `open-image-models` v0.2.x.
-
-| Hardware | Plate-only mean | Plate + attributes mean | Notes |
-|---|---|---|---|
-| **CPU x86 (8-core modern)** | ~120-180 ms | **~150-210 ms (target <=30 ms overhead)** | open-image-models adds ~25-35 ms per frame on CPU; comfortably within the 5s server-side timeout. |
-| **GPU (RTX 3060+, CUDA EP)** | ~25-40 ms | **~30-45 ms (target <=10 ms overhead)** | ONNX Runtime CUDA EP runs the attribute classifier and the plate detector concurrently in the same session pool. |
-
-The targets above are budgets, not commitments: if a future
-`open-image-models` release exceeds them, this doc and the
-`docker/alpr/pyproject.toml` pin should be updated together. Re-validate
-with `tools/alpr-spike/bench.py --engine fast-alpr --include-attributes`
-on representative dashcam footage before bumping the pin.
-
-If the classifier is the latency hot spot for your workload, set
-`ALPR_ATTRIBUTES_ENABLED=false` (see "Disabling the attribute
-classifier" above) -- the production worker plan in
-`alpr-detection-worker` only requires vehicle attributes for the
-fusion heuristic, not for the primary plate-text path.
 
 ## 6. Enabling ALPR (step by step)
 
@@ -526,9 +414,9 @@ Notes:
 - `route_turns` is **not** in the wipe list. It is intentionally
   retained because it is useful for non-ALPR features (turn-based event
   detection, trip clustering). Drop it manually if you want.
-- `vehicle_signatures` is included for forward compatibility; it is
-  populated only when the optional vehicle-attributes engine is
-  enabled.
+- `vehicle_signatures` is included for forward compatibility; it sits
+  empty in current builds (the vehicle-attribute classifier is deferred
+  -- see Section 4).
 - The `RESTART IDENTITY CASCADE` clause resets the row IDs so
   re-enabling later starts fresh.
 - The encryption key in `.env` is unaffected. Removing the key string

@@ -148,7 +148,6 @@ func (e *alprCleanupTestEnv) seedEncounter(ctx context.Context, dongle, route st
 		DetectionCount:        1,
 		TurnCount:             0,
 		MaxInternalGapSeconds: 0,
-		SignatureID:           pgtype.Int8{Valid: false},
 		Status:                "active",
 		BboxFirst:             bbox,
 		BboxLast:              bbox,
