@@ -58,6 +58,46 @@ services:
     ports:
       - "${FRONTEND_PORT:-80}:3000"
 
+  # ALPR (automatic license plate recognition) engine sidecar. Opt-in via
+  # the `alpr` profile -- bare `docker compose up` does NOT start it.
+  # Bring it up with `make alpr-up`. See docs/ALPR.md for the GPU variant
+  # and docs/ALPR-ENGINE-DECISION.md for the engine choice rationale.
+  #
+  # The image is built locally (no upstream image bundles the HTTP wrapper
+  # this project requires); tag is `comma-alpr:dev`.
+  alpr:
+    profiles: ["alpr"]
+    build:
+      context: .
+      dockerfile: docker/alpr/Dockerfile
+    image: comma-alpr:dev
+    container_name: comma-alpr
+    restart: unless-stopped
+    environment:
+      ALPR_REGION: ${ALPR_REGION:-us}
+      ALPR_LOG_LEVEL: ${ALPR_LOG_LEVEL:-info}
+    # No host port published in prod -- the backend talks to `alpr:8081`
+    # over the internal compose network. Uncomment the line below to expose
+    # the engine on the host for local curl / debugging.
+    # ports:
+    #   - "8081:8081"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/health >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    # GPU activation: uncomment the device_requests block below and switch
+    # the Dockerfile base image to a CUDA-enabled variant per the
+    # instructions in docs/ALPR.md. Requires nvidia-docker2 on the host.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: ["gpu"]
+
 volumes:
   pgdata:
   storage:

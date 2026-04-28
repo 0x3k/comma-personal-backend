@@ -5,7 +5,8 @@
        lint lint-backend lint-frontend type-check \
        sqlc db-migrate clean \
        db-up db-down db-logs \
-       prod-up prod-down prod-build prod-logs
+       prod-up prod-down prod-build prod-logs \
+       alpr-up alpr-down alpr-build alpr-logs alpr-pull
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -121,6 +122,32 @@ prod-down: ## Stop full stack
 
 prod-logs: ## Tail logs from all prod services
 	docker compose --profile prod logs -f
+
+# ---------------------------------------------------------------------------
+# Docker: ALPR engine sidecar (opt-in via the `alpr` compose profile)
+# ---------------------------------------------------------------------------
+# These targets activate the optional ALPR (license plate recognition)
+# sidecar described in docs/ALPR.md. The service is gated by
+# `profiles: [alpr]` in docker-compose.yml so bare `docker compose up`
+# never starts it. Composes cleanly with the prod stack:
+# `make prod-up && make alpr-up` brings up everything including the
+# sidecar.
+
+alpr-up: ## Start the ALPR engine sidecar (opt-in)
+	docker compose --profile alpr up -d alpr
+
+alpr-down: ## Stop and remove the ALPR engine sidecar
+	docker compose --profile alpr stop alpr
+	docker compose --profile alpr rm -f alpr
+
+alpr-build: ## Build the ALPR engine sidecar image (comma-alpr:dev)
+	docker compose --profile alpr build alpr
+
+alpr-logs: ## Tail ALPR engine sidecar logs
+	docker compose --profile alpr logs -f alpr
+
+alpr-pull: ## Pull any prebuilt images referenced by the alpr service
+	docker compose --profile alpr pull alpr
 
 # ---------------------------------------------------------------------------
 # Cleanup
