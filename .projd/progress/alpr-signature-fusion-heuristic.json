@@ -1,7 +1,7 @@
 {
   "id": "alpr-signature-fusion-heuristic",
   "name": "Vehicle-signature fusion: corroboration + plate-swap detection",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 6,
   "blocked_by": ["alpr-stalking-heuristic", "alpr-vehicle-attributes-engine"],
   "branch": "agent/alpr-signature-fusion-heuristic",
@@ -18,5 +18,5 @@
     "Tests with synthetic encounter sets exercising: plate-swap (3 plates / 1 signature in 1 area => alert), plate-swap suppressed by whitelist on each underlying plate, signature-consistent path (raises plate severity by 0.5), signature-inconsistent flag emitted but no alert raised, missing-signature path (every detection has signature_id=NULL => function returns 0/empty).",
     "Performance: this runs after stalking-heuristic on each AlertCreated/EncountersUpdated event; ensure queries use the (signature_id) index from alpr-vehicle-signature-schema and stay under 100ms on a database with ~1M detection rows."
   ],
-  "notes": ""
+  "notes": "Implemented across three commits: schema migration 018 (nullable plate_hash + partial unique indexes for the signature-keyed alert path), four new sqlc queries (CountDetectionsBySignatureForPlate, GetWatchlistSignatureSwap, UpsertWatchlistSignatureSwap, ListPlateHashesForSignatureInWindow), and the FuseSignatures function with worker integration. SignatureFusionVersion is 'fusion-v1.0.0' to track independently from the stalking heuristic's HeuristicVersion. Eight new alpr_signature_* settings keys expose the fusion thresholds. Twelve fusion-specific tests cover plate-confirmation, signature-conflict, plate-swap (3 plates / 1 sig / 1 area), whitelist suppression (full and partial), lookback windowing, missing-signature path, refire silence, and the fusion-bumps-severity worker integration. All existing heuristic, worker, settings, db, and cmd/server tests continue to pass."
 }
