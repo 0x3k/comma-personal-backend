@@ -1,10 +1,11 @@
 {
   "id": "alpr-tuning-ui",
   "name": "Heuristic tuning UI + re-evaluate-history endpoint",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 9,
   "blocked_by": ["alpr-watchlist-page"],
-  "branch": "",
+  "base_branch": "feat/alpr",
+  "branch": "agent/alpr-tuning-ui",
   "summary": "Power-user tuning surface for the heuristic. Lets the user adjust thresholds at runtime without touching env vars or restarting. Mostly relevant after a few weeks of operation when they have data to calibrate against (own car triggering false alerts, real stalking patterns missed at default thresholds, etc.). Includes a 'Re-evaluate alerts' action that re-runs the heuristic over recent history so the user can see threshold changes applied to known data.",
   "acceptance_criteria": [
     "New section in the ALPR settings card (or a sub-page if it grows large) titled 'Tuning'. Reachable from alpr-settings-onboarding-ui Advanced collapsible.",
