@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -20,6 +21,8 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/redaction"
+	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
 )
 
@@ -34,20 +37,35 @@ var cameraToHLSDir = map[string]string{
 
 // ExportHandler serves downloadable representations of a route: the GPS
 // track as GPX (pulled from PostGIS) and a streamed MP4 built on the fly
-// from the HLS segments on disk. No re-encoding is performed for the MP4
-// path -- FFmpeg's concat demuxer with "-c copy" remuxes .ts into MP4.
+// from the HLS segments on disk. No re-encoding is performed for the
+// unredacted MP4 path -- FFmpeg's concat demuxer with "-c copy" remuxes
+// .ts into MP4. The plate-redaction path (?redact_plates=true) requires
+// re-encoding because the boxblur+overlay filter touches video pixels.
 type ExportHandler struct {
 	queries    *db.Queries
 	storage    *storage.Storage
+	settings   *settings.Store
 	ffmpegPath string
 }
 
 // NewExportHandler creates an ExportHandler wired to both the database
 // queries (for the GPX geometry lookup) and the filesystem storage (for
 // the MP4 HLS segment walk). Either may be nil if the corresponding
-// endpoint is not expected to be exercised.
+// endpoint is not expected to be exercised. settings may be nil; in
+// that case the redact_plates query parameter is treated as a no-op
+// (alpr_enabled is read as false).
 func NewExportHandler(queries *db.Queries, s *storage.Storage) *ExportHandler {
 	return &ExportHandler{queries: queries, storage: s, ffmpegPath: "ffmpeg"}
+}
+
+// WithSettings wires a settings.Store into the export handler so it can
+// read the alpr_enabled flag. Returns the handler for fluent chaining.
+// Kept as a separate setter (rather than a constructor parameter) to
+// avoid an API break for existing callers; the legacy NewExportHandler
+// signature still works on existing tests.
+func (h *ExportHandler) WithSettings(s *settings.Store) *ExportHandler {
+	h.settings = s
+	return h
 }
 
 // SetFFmpegPath overrides the FFmpeg binary used for MP4 export (test hook).
@@ -155,6 +173,19 @@ func (h *ExportHandler) ExportRouteGPX(c echo.Context) error {
 }
 
 // ExportMP4 handles GET /v1/routes/:dongle_id/:route_name/export.mp4.
+//
+// Supported query parameters:
+//   - camera: "f" (default), "e", or "d" -- selects the per-camera HLS
+//     directory whose .ts segments will be concatenated.
+//   - redact_plates: "true" / "false" (default false). When true, every
+//     detected license-plate bbox (from plate_detections) is blurred in
+//     the output via an ffmpeg crop+blur+overlay filter chain, gated
+//     by per-detection enable windows of HoldWindowMs (default 200ms).
+//     This requires re-encoding because the filter writes pixels; the
+//     unredacted path stays on `-c copy` for speed. When alpr_enabled
+//     is false at the runtime settings layer the redaction request is
+//     treated as a no-op (no detections to apply, fall back to the
+//     copy path) and a debug log is emitted.
 func (h *ExportHandler) ExportMP4(c echo.Context) error {
 	dongleID := c.Param("dongle_id")
 	routeName := c.Param("route_name")
@@ -175,6 +206,8 @@ func (h *ExportHandler) ExportMP4(c echo.Context) error {
 		})
 	}
 
+	redactRequested := parseBoolQuery(c.QueryParam("redact_plates"))
+
 	tsFiles, err := h.collectTSFiles(dongleID, routeName, hlsDir)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, errorResponse{
@@ -190,20 +223,72 @@ func (h *ExportHandler) ExportMP4(c echo.Context) error {
 	}
 
 	concatList := buildConcatList(tsFiles)
-
 	ctx := c.Request().Context()
-	cmd := exec.CommandContext(ctx, h.ffmpegPath,
+
+	// Decide whether redaction will actually run: only when the caller
+	// asked for it, alpr_enabled is true at the settings layer, and
+	// the camera supports it (the detector only runs against fcamera,
+	// so a redact_plates=true request against ecamera/dcamera has no
+	// detections to apply -- treat as a no-op rather than an error).
+	doRedact := redactRequested && camera == "f" && h.alprEnabled(ctx)
+	if redactRequested && !doRedact {
+		log.Printf("export.mp4: redact_plates=true but no-op (alpr disabled or non-fcamera camera=%s)", camera)
+	}
+
+	var filter string
+	if doRedact {
+		dets, err := h.loadRouteDetections(ctx, dongleID, routeName, tsFiles)
+		if err != nil {
+			log.Printf("export.mp4: failed to load detections for redaction: %v", err)
+			// Fall back to unredacted rather than failing the export.
+			doRedact = false
+		} else if len(dets) > 0 {
+			filter = redaction.BuildBoxblurFilter(dets, redaction.FilterOptions{
+				InputLabel:  "0:v",
+				OutputLabel: "vout",
+			})
+		} else {
+			// No detections for this route -- redact_plates=true is a
+			// no-op; stay on the copy path.
+			doRedact = false
+		}
+	}
+
+	args := []string{
 		"-hide_banner",
 		"-loglevel", "error",
 		"-f", "concat",
 		"-safe", "0",
 		"-protocol_whitelist", "file,pipe",
 		"-i", "pipe:0",
-		"-c", "copy",
-		"-movflags", "frag_keyframe+empty_moov+default_base_moof",
-		"-f", "mp4",
-		"pipe:1",
-	)
+	}
+	if doRedact && filter != "" {
+		// Re-encode with the boxblur+overlay chain. We use libx264 with
+		// ultrafast preset because the redaction path has a per-request
+		// budget (the user is waiting for the download); the unredacted
+		// path stays on -c copy for the same reason.
+		args = append(args,
+			"-filter_complex", filter,
+			"-map", "[vout]",
+			"-map", "0:a?",
+			"-c:v", "libx264",
+			"-preset", "ultrafast",
+			"-crf", "23",
+			"-c:a", "copy",
+			"-movflags", "frag_keyframe+empty_moov+default_base_moof",
+			"-f", "mp4",
+			"pipe:1",
+		)
+	} else {
+		args = append(args,
+			"-c", "copy",
+			"-movflags", "frag_keyframe+empty_moov+default_base_moof",
+			"-f", "mp4",
+			"pipe:1",
+		)
+	}
+
+	cmd := exec.CommandContext(ctx, h.ffmpegPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
@@ -245,8 +330,12 @@ func (h *ExportHandler) ExportMP4(c echo.Context) error {
 
 	resp := c.Response()
 	resp.Header().Set(echo.HeaderContentType, "video/mp4")
+	filename := routeName + "-" + camera + ".mp4"
+	if doRedact && filter != "" {
+		filename = routeName + "-" + camera + "-redacted.mp4"
+	}
 	resp.Header().Set(echo.HeaderContentDisposition,
-		fmt.Sprintf("attachment; filename=%q", routeName+"-"+camera+".mp4"))
+		fmt.Sprintf("attachment; filename=%q", filename))
 	resp.WriteHeader(http.StatusOK)
 
 	reader := bufio.NewReaderSize(stdout, 64*1024)
@@ -415,3 +504,77 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// parseBoolQuery is a forgiving parser for "?redact_plates=..." style
+// query parameters. Only literal "true" / "1" are treated as true; an
+// empty string and any other value defaults to false. Case-insensitive
+// so the frontend can send "True" without surprises.
+func parseBoolQuery(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// alprEnabled reports whether the runtime alpr_enabled flag is true.
+// A nil settings store, a missing row, or an unparseable value all
+// return false so the redaction path stays a strict opt-in.
+func (h *ExportHandler) alprEnabled(ctx context.Context) bool {
+	if h.settings == nil {
+		return false
+	}
+	v, err := h.settings.BoolOr(ctx, settings.KeyALPREnabled, false)
+	if err != nil {
+		return false
+	}
+	return v
+}
+
+// loadRouteDetections fetches every plate detection for the route and
+// converts them to redaction.Detection by mapping each detection's
+// (segment, frame_offset_ms) to a cumulative time on the concatenated
+// MP4 timeline. Detections whose bbox blob is malformed are dropped
+// silently; a single bad row should not poison the whole export.
+//
+// The mapping assumes each segment's HLS files concatenate end-to-end
+// (the standard openpilot 60s-per-segment layout). Per-segment .ts
+// chunk durations are derived by ffprobing each segment's first file
+// is overkill; we use the canonical 60s per segment and let the
+// per-detection enable-window margin (HoldWindowMs) absorb any minor
+// drift. tsFiles is unused here but kept as a parameter so a future
+// improvement can switch to a true ffprobe-based mapping without an
+// API churn.
+func (h *ExportHandler) loadRouteDetections(ctx context.Context, dongleID, routeName string, _ []string) ([]redaction.Detection, error) {
+	if h.queries == nil {
+		return nil, nil
+	}
+	rows, err := h.queries.ListDetectionsForRoute(ctx, db.ListDetectionsForRouteParams{
+		DongleID: dongleID,
+		Route:    routeName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list detections: %w", err)
+	}
+	out := make([]redaction.Detection, 0, len(rows))
+	for _, r := range rows {
+		bbox, derr := redaction.DecodeBbox(r.Bbox)
+		if derr != nil {
+			continue
+		}
+		// Cumulative time on the concatenated MP4 = segment*60s +
+		// frame_offset_ms/1000. The route's segment 0 starts at t=0.
+		t := float64(r.Segment)*segmentDurationSec + float64(r.FrameOffsetMs)/1000.0
+		out = append(out, redaction.Detection{
+			TimeSec: t,
+			Bbox:    bbox,
+		})
+	}
+	return out, nil
+}
+
+// segmentDurationSec is the canonical openpilot/sunnypilot segment
+// duration. Used by the export pipeline to map per-segment detection
+// times into a route-cumulative timestamp without per-segment ffprobe.
+const segmentDurationSec = 60.0

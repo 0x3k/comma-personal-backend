@@ -138,7 +138,7 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	v1Routes := e.Group("/v1/routes", sessionOrJWT)
 	routeHandler.RegisterPreservedRoute(v1Routes)
 	routeHandler.RegisterAnnotationReadRoutes(v1Routes)
-	api.NewExportHandler(d.queries, d.store).RegisterRoutes(v1Routes)
+	api.NewExportHandler(d.queries, d.store).WithSettings(d.settings).RegisterRoutes(v1Routes)
 	api.NewSignalsHandler(d.queries, d.store).RegisterRoutes(v1Routes)
 	api.NewThumbnailHandler(d.store).RegisterRoutes(v1Routes)
 	api.NewTurnsHandler(d.queries).RegisterRoutes(v1Routes)
@@ -155,7 +155,8 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	// mounted directly on the top-level Echo instance below -- they must
 	// not be gated on the session middleware because the whole point is
 	// to let an unauthenticated viewer see a single shared route.
-	shareHandler := api.NewShareHandler(d.queries, d.store, d.cfg.SessionSecret)
+	shareHandler := api.NewShareHandler(d.queries, d.store, d.cfg.SessionSecret).
+		WithRedaction(d.settings, d.redactionBuilder, d.cfg.StoragePath)
 	v1RoutesSessionOnly := e.Group("/v1/routes", sessionOnly)
 	shareHandler.RegisterCreateRoute(v1RoutesSessionOnly)
 	shareHandler.RegisterPublicRoutes(e)

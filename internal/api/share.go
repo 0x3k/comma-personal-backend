@@ -15,6 +15,8 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/redaction"
+	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/share"
 	"comma-personal-backend/internal/storage"
 )
@@ -50,10 +52,28 @@ var shareMediaFiles = map[string]bool{
 // the HLS transcoder writes under each segment folder. Requests routed to
 // any other sub-path are rejected with 404 before the filesystem is
 // touched.
+//
+// "qcamera" is included because the share viewer plays it back as a
+// fallback when none of the HEVC streams are available, and the
+// alpr-video-redaction-export feature serves the redacted variant of
+// qcamera HLS on tokens whose RedactPlates flag is true.
 var shareMediaCameraDirs = map[string]bool{
 	"fcamera": true,
 	"ecamera": true,
 	"dcamera": true,
+	"qcamera": true,
+}
+
+// RedactionTrigger is the share handler's escape hatch into the
+// redacted-HLS-variant builder. The handler calls Trigger when a
+// redacted-share request observes that the cached variant is missing;
+// the implementation (worker.RedactionBuilder) enqueues a one-shot
+// build and the handler returns 503 + Retry-After: 30 to the viewer.
+// Kept as an interface (rather than a direct *worker.RedactionBuilder
+// dependency) to avoid an import cycle and to keep the share handler
+// unit-testable without a real ffmpeg.
+type RedactionTrigger interface {
+	Trigger(dongleID, route string) bool
 }
 
 // ShareHandler issues and consumes public read-only share links for a
@@ -66,6 +86,10 @@ type ShareHandler struct {
 	queries       *db.Queries
 	storage       *storage.Storage
 	sessionSecret []byte
+
+	settings          *settings.Store
+	redactionTrigger  RedactionTrigger
+	storageRootForRed string
 
 	// now is overridable in tests to exercise the expiry path without sleeping.
 	now func() time.Time
@@ -83,24 +107,51 @@ func NewShareHandler(queries *db.Queries, s *storage.Storage, sessionSecret stri
 	}
 }
 
+// WithRedaction wires the alpr_enabled gate (settings) plus the
+// redacted-HLS-variant builder trigger into the share handler.
+// storageRoot is the on-disk base path used to compute the cached
+// variant directory under each segment. All three may be omitted for
+// callers that do not care about redaction; the handler then serves
+// every share link with redact_plates=false, which matches the
+// pre-feature behaviour.
+func (h *ShareHandler) WithRedaction(s *settings.Store, t RedactionTrigger, storageRoot string) *ShareHandler {
+	h.settings = s
+	h.redactionTrigger = t
+	h.storageRootForRed = storageRoot
+	return h
+}
+
 // createShareRequest is the JSON body accepted by POST
 // /v1/routes/:dongle_id/:route_name/share. ExpiresInHours is optional;
 // zero/negative values fall back to defaultShareExpiresHours, and values
 // above maxShareExpiresHours are clamped down to the cap rather than
 // rejected so a sloppy caller still gets a link (the response carries the
 // actual expiry).
+//
+// RedactPlates is optional and defaults to true (privacy-respecting
+// outbound default for share links). The frontend share-creation modal
+// surfaces this as a checkbox; the operator can opt out per-link, but
+// the recipient cannot bypass the flag because it is signed into the
+// token and the HMAC covers it. Use a *bool so we can distinguish "not
+// provided" (apply default-true) from "explicitly false".
 type createShareRequest struct {
-	ExpiresInHours int `json:"expires_in_hours"`
+	ExpiresInHours int   `json:"expires_in_hours"`
+	RedactPlates   *bool `json:"redact_plates"`
 }
 
 // createShareResponse is the JSON body returned on POST success. The URL
 // is absolute so clients can display or copy it without extra work; the
 // token alone is also included because some integrations (e.g. a bot
 // posting into chat) prefer to stitch the URL themselves.
+//
+// RedactPlates echoes the flag baked into the token so the operator
+// can confirm what they minted. It is informational only -- the token
+// is the source of truth at view time.
 type createShareResponse struct {
-	URL       string    `json:"url"`
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
+	URL          string    `json:"url"`
+	Token        string    `json:"token"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	RedactPlates bool      `json:"redact_plates"`
 }
 
 // shareSegment mirrors the per-segment block returned by GET
@@ -188,6 +239,15 @@ func (h *ShareHandler) CreateShare(c echo.Context) error {
 	}
 	expiresAt := h.now().Add(time.Duration(hours) * time.Hour)
 
+	// Default redact_plates to true: outbound shares should not
+	// broadcast other people's plates. The modal pre-checks the box
+	// and the wire format mirrors that default. nil means "field
+	// omitted by the client" -- treat as default.
+	redact := true
+	if req.RedactPlates != nil {
+		redact = *req.RedactPlates
+	}
+
 	ctx := c.Request().Context()
 	route, err := h.queries.GetRoute(ctx, db.GetRouteParams{
 		DongleID:  dongleID,
@@ -206,7 +266,9 @@ func (h *ShareHandler) CreateShare(c echo.Context) error {
 		})
 	}
 
-	token, err := share.Sign(h.sessionSecret, route.ID, expiresAt)
+	token, err := share.SignWithOptions(h.sessionSecret, route.ID, expiresAt, share.Options{
+		RedactPlates: redact,
+	})
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, errorResponse{
 			Error: "failed to sign share token",
@@ -216,9 +278,10 @@ func (h *ShareHandler) CreateShare(c echo.Context) error {
 
 	url := buildShareURL(c.Request(), token)
 	return c.JSON(http.StatusOK, createShareResponse{
-		URL:       url,
-		Token:     token,
-		ExpiresAt: expiresAt,
+		URL:          url,
+		Token:        token,
+		ExpiresAt:    expiresAt,
+		RedactPlates: redact,
 	})
 }
 
@@ -332,8 +395,16 @@ func (h *ShareHandler) GetShareMedia(c echo.Context) error {
 // /v1/share/:token/segments/:segment_num/:camera/:file. It targets the HLS
 // output under the per-camera sub-directory; the :file parameter is the
 // playlist or a .ts chunk.
+//
+// When the token's RedactPlates flag is true and the camera is qcamera
+// (the only stream the share viewer plays back today), the handler
+// serves from the cached qcamera-redacted/ variant instead. Cache
+// misses kick off a one-shot build and return 503 + Retry-After: 30
+// so the player polls until ready. Cameras the redactor does not yet
+// process (fcamera/ecamera/dcamera) are served unredacted; this is a
+// known no-op and matches the alpr_enabled=false fallback.
 func (h *ShareHandler) GetShareCameraMedia(c echo.Context) error {
-	routeID, _, handlerErr := h.consumeToken(c.Param("token"))
+	parsed, handlerErr := h.consumeTokenFull(c.Param("token"))
 	if handlerErr != nil {
 		return writeShareTokenError(c, handlerErr)
 	}
@@ -362,14 +433,55 @@ func (h *ShareHandler) GetShareCameraMedia(c echo.Context) error {
 		})
 	}
 
-	route, routeErr := h.routeByID(c.Request().Context(), routeID)
+	route, routeErr := h.routeByID(c.Request().Context(), parsed.RouteID)
 	if routeErr != nil {
 		return writeShareTokenError(c, routeErr)
 	}
 
 	segDir := h.storage.Path(route.DongleID, route.RouteName, strconv.Itoa(segNum), "")
-	path := filepath.Join(segDir, camera, file)
+	cameraDir := camera
+
+	if parsed.RedactPlates && camera == "qcamera" && h.alprEnabled(c.Request().Context()) {
+		// Redacted-variant path: serve from qcamera-redacted/ if it
+		// exists, otherwise return 503 + Retry-After while the
+		// background builder renders it. Future-proofing: when the
+		// detector starts running on additional cameras, extend the
+		// camera == "qcamera" guard above.
+		redactedDir := filepath.Join(segDir, redaction.RedactedQcameraDir)
+		redactedPath := filepath.Join(redactedDir, file)
+		if _, err := os.Stat(redactedPath); err == nil {
+			return serveShareFile(c, redactedPath, file)
+		}
+		// Cache miss: trigger a build and return 503.
+		if h.redactionTrigger != nil {
+			h.redactionTrigger.Trigger(route.DongleID, route.RouteName)
+		}
+		c.Response().Header().Set("Retry-After", "30")
+		return c.JSON(http.StatusServiceUnavailable, errorResponse{
+			Error: "redacted variant is being prepared; retry in a few seconds",
+			Code:  http.StatusServiceUnavailable,
+		})
+	}
+
+	path := filepath.Join(segDir, cameraDir, file)
 	return serveShareFile(c, path, file)
+}
+
+// alprEnabled returns true when the ALPR runtime flag is set. The
+// share handler consults this so a token that signed RedactPlates=true
+// but landed on a server with ALPR disabled degrades to serving the
+// unredacted source instead of an indefinite 503 (no detections will
+// ever arrive to populate a redacted variant). Mirrors the export
+// handler's gate.
+func (h *ShareHandler) alprEnabled(ctx context.Context) bool {
+	if h.settings == nil {
+		return false
+	}
+	v, err := h.settings.BoolOr(ctx, settings.KeyALPREnabled, false)
+	if err != nil {
+		return false
+	}
+	return v
 }
 
 // shareStatusError is a typed error used by the internal helpers to signal
@@ -408,28 +520,39 @@ func writeShareTokenError(c echo.Context, err error) error {
 // Gone, anything else (tamper, wrong secret, malformed) collapses to 401,
 // and a missing session secret produces 501 Not Implemented.
 func (h *ShareHandler) consumeToken(token string) (int32, time.Time, error) {
+	parsed, err := h.consumeTokenFull(token)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	return parsed.RouteID, parsed.ExpiresAt, nil
+}
+
+// consumeTokenFull is like consumeToken but returns the full validated
+// payload so the media handlers can branch on RedactPlates without a
+// second parse + verify pass.
+func (h *ShareHandler) consumeTokenFull(token string) (share.ParsedToken, error) {
 	if len(h.sessionSecret) == 0 {
-		return 0, time.Time{}, &shareStatusError{
+		return share.ParsedToken{}, &shareStatusError{
 			status:  http.StatusNotImplemented,
 			message: "share links are disabled: SESSION_SECRET is not configured",
 		}
 	}
-	routeID, exp, err := share.ParseFull(h.sessionSecret, token, h.now())
+	parsed, err := share.ParseTokenAt(h.sessionSecret, token, h.now())
 	if err != nil {
 		switch {
 		case errors.Is(err, share.ErrExpired):
-			return 0, time.Time{}, &shareStatusError{
+			return share.ParsedToken{}, &shareStatusError{
 				status:  http.StatusGone,
 				message: "share link has expired",
 			}
 		default:
-			return 0, time.Time{}, &shareStatusError{
+			return share.ParsedToken{}, &shareStatusError{
 				status:  http.StatusUnauthorized,
 				message: "invalid share token",
 			}
 		}
 	}
-	return routeID, exp, nil
+	return parsed, nil
 }
 
 // routeByID looks up a route from its primary key and converts pgx.ErrNoRows

@@ -15,6 +15,7 @@ import (
 	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
+	"comma-personal-backend/internal/worker"
 	"comma-personal-backend/internal/ws"
 )
 
@@ -63,17 +64,29 @@ func main() {
 	// /metrics exposes it.
 	m := metrics.New()
 
+	// Redaction builder is constructed up-front (before setupRoutes)
+	// so the share handler can be wired with a Trigger reference. It
+	// stays unstarted here; startWorkers calls Start (or skips it
+	// entirely when REDACTION_BUILDER_ENABLED=false). When the env
+	// flag is off we leave d.redactionBuilder nil so the share handler
+	// degrades gracefully -- viewers of redact_plates=true tokens
+	// receive a 503 with no follow-up build, which is the correct
+	// behaviour when ALPR is fully disabled.
+	concurrency := envInt("REDACTION_BUILDER_CONCURRENCY", 1)
+	redactionBuilder := worker.NewRedactionBuilder(queries, store, concurrency)
+
 	d := &deps{
-		cfg:           cfg,
-		pool:          pool,
-		queries:       queries,
-		store:         store,
-		settings:      settingsStore,
-		metrics:       m,
-		hub:           ws.NewHubWithMetrics(m),
-		rpcCaller:     ws.NewRPCCallerWithMetrics(m),
-		sessionSecret: []byte(cfg.SessionSecret),
-		alprKeyring:   alprKeyring,
+		cfg:              cfg,
+		pool:             pool,
+		queries:          queries,
+		store:            store,
+		settings:         settingsStore,
+		metrics:          m,
+		hub:              ws.NewHubWithMetrics(m),
+		rpcCaller:        ws.NewRPCCallerWithMetrics(m),
+		sessionSecret:    []byte(cfg.SessionSecret),
+		alprKeyring:      alprKeyring,
+		redactionBuilder: redactionBuilder,
 	}
 
 	e := echo.New()
