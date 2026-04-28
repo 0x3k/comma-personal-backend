@@ -1,7 +1,7 @@
 {
   "id": "alpr-docs",
   "name": "ALPR documentation: README + docs/ALPR.md + DEPLOYMENT.md",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 7,
   "blocked_by": ["alpr-engine-service"],
   "branch": "agent/alpr-docs",
@@ -18,5 +18,5 @@
     "Cross-references: every settings key, env var, and endpoint named in docs/ALPR.md must match the canonical names in the actual implementation features. Do a grep pass before merging to catch drift.",
     "Tone: factual, non-alarmist, non-promotional. The user is enabling a tool; the docs help them use it responsibly. Avoid marketing language ('powerful AI-driven', 'seamlessly integrated'); prefer concrete description ('processes ~2 frames per second per route at default settings; ~30 ms per frame on a mid-range CPU')."
   ],
-  "notes": ""
+  "notes": "Cross-reference grep verified all settings keys (alpr_enabled, alpr_disclaimer_version, alpr_disclaimer_acked_at, alpr_disclaimer_acked_jurisdiction), env vars (ALPR_ENCRYPTION_KEY, ALPR_ENGINE_URL, ALPR_REGION, ALPR_FPS, ALPR_CONFIDENCE_MIN, ALPR_RETENTION_DAYS_UNFLAGGED, ALPR_RETENTION_DAYS_FLAGGED, ALPR_NOTIFY_MIN_SEVERITY), and disclaimer constant (2026-04-v1) match canonical names in internal/settings/alpr.go, internal/config/alpr.go, and internal/api/settings_alpr.go. README API table lists only currently-registered ALPR endpoints (GET/PUT /v1/settings/alpr, POST /v1/settings/alpr/disclaimer/ack) under 'currently registered'; the broader endpoint list from the original acceptance criteria (alerts, watchlist, plates, /turns, etc.) is moved to a 'Planned (not yet implemented)' subsection because those endpoints are not yet on feat/alpr. Smoke tests pass (vet, fmt, lint, type-check, alpr-schema)."
 }
