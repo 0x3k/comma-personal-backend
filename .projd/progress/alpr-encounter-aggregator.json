@@ -1,10 +1,11 @@
 {
   "id": "alpr-encounter-aggregator",
   "name": "Group raw detections into per-route encounters",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 4,
   "blocked_by": ["alpr-detection-worker"],
-  "branch": "",
+  "branch": "agent/alpr-encounter-aggregator",
+  "base_branch": "feat/alpr",
   "summary": "Groups consecutive raw detections of the same plate within a single route into 'encounters.' A plate seen 30 times in a 2-minute window with no detection gaps over 30 s is one encounter, not 30 detection points. Encounters are what the stalking heuristic and the UI consume. Triggered by RouteAlprDetectionsComplete from the detection worker. Idempotent -- re-running on the same route replaces prior encounters in a transaction so we can reprocess after manual corrections or threshold tuning.",
   "acceptance_criteria": [
     "New worker internal/worker/alpr_aggregator.go. Started from cmd/server/workers.go, gated on runtime alpr_enabled.",
