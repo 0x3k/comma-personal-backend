@@ -99,6 +99,13 @@ type deps struct {
 	// holds a (RedactionTrigger interface) reference to it so 503 +
 	// Retry-After responses kick off a build.
 	redactionBuilder *worker.RedactionBuilder
+
+	// alprBackfill is the singleton goroutine that drives the opt-in
+	// historical-backfill state machine. The API handler holds a
+	// reference (via the ALPRBackfillTrigger interface) so a
+	// successful POST /v1/alpr/backfill/start can wake the worker
+	// without waiting for its idle poll.
+	alprBackfill *worker.ALPRBackfill
 }
 
 // alprClientTimeout is the per-request budget the ALPR client applies on

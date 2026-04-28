@@ -341,6 +341,25 @@ func startWorkers(ctx context.Context, d *deps) {
 	log.Printf("alpr aggregator started (concurrency=%d, encounter_gap_seconds=%g)",
 		aggregatorConcurrency, encounterGap)
 
+	// ALPR historical backfill: opt-in resumable singleton worker that
+	// walks pre-existing routes through the same extraction pipeline
+	// as live ingest. The worker shares the engine queue via the same
+	// d.alprFrames channel the live extractor produces onto, but at a
+	// throttled rate (default 0.5 fps via ALPR_BACKFILL_FPS_BUDGET).
+	// At every route boundary it re-reads its DB-row state so
+	// pause/resume/cancel from the API are honoured cooperatively.
+	// Always started so the API endpoints work even when no job has
+	// been queued; the worker idles when there's no running row.
+	backfillSink := &worker.ChannelFrameSink{
+		Frames: d.alprFrames,
+		Depth:  func() int { return len(d.alprFrames) },
+	}
+	d.alprBackfill = worker.NewALPRBackfill(d.queries, d.store, d.settings, backfillSink, d.metrics)
+	d.alprBackfill.FPSBudget = worker.EnvFloatALPRBackfillFPSBudget()
+	d.alprBackfill.DefaultFramesPerSecond = defaultFPS
+	go d.alprBackfill.Run(ctx)
+	log.Printf("alpr backfill worker started (fps_budget=%g)", d.alprBackfill.FPSBudget)
+
 	// ALPR stalking heuristic worker: consumes EncountersUpdated
 	// events from the aggregator and re-scores each affected plate.
 	// Started AFTER the aggregator so d.alprEncountersUpdated is
