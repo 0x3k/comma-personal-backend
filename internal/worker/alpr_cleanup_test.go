@@ -630,23 +630,26 @@ func TestALPRCleanupWorker_NeverTouchesWatchlistOrSignatures(t *testing.T) {
 // regressions that might add one.
 func TestALPRCleanupWorker_RunDoesNotFireImmediately(t *testing.T) {
 	env := newALPRCleanupTestEnv(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// seedCtx is used for setup/assertion so it stays alive past the
+	// runCtx deadline. runCtx is the worker's lifecycle context.
+	seedCtx := context.Background()
+	runCtx, cancel := context.WithTimeout(seedCtx, 500*time.Millisecond)
 	defer cancel()
 
 	now := time.Date(2025, 1, 30, 12, 0, 0, 0, time.UTC)
 	plate := hashPlate("BACKFILL1")
-	staleID := env.seedDetection(ctx, "dongle_a", "route_a", plate, now.Add(-60*24*time.Hour))
+	staleID := env.seedDetection(seedCtx, "dongle_a", "route_a", plate, now.Add(-60*24*time.Hour))
 
 	w := env.newWorker(now, 30, 365, false)
 	w.Interval = 10 * time.Second // way longer than the test window
 	done := make(chan struct{})
 	go func() {
-		w.Run(ctx)
+		w.Run(runCtx)
 		close(done)
 	}()
 	<-done
 
-	if !env.detectionExists(ctx, staleID) {
+	if !env.detectionExists(seedCtx, staleID) {
 		t.Error("Run() must not perform a cleanup pass at startup; the stale detection should still exist")
 	}
 }
@@ -659,13 +662,15 @@ func TestALPRCleanupWorker_RunDoesNotFireImmediately(t *testing.T) {
 func TestALPRCleanupWorker_DisabledFlagStopsScheduling(t *testing.T) {
 	env := newALPRCleanupTestEnv(t)
 
-	// Enough time for a couple of ticks at the test's interval.
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	// seedCtx outlives runCtx so the post-Run assertion still has a
+	// usable context after the worker's lifecycle expires.
+	seedCtx := context.Background()
+	runCtx, cancel := context.WithTimeout(seedCtx, 250*time.Millisecond)
 	defer cancel()
 
 	now := time.Date(2025, 1, 30, 12, 0, 0, 0, time.UTC)
 	plate := hashPlate("DISABLED1")
-	staleID := env.seedDetection(ctx, "dongle_a", "route_a", plate, now.Add(-60*24*time.Hour))
+	staleID := env.seedDetection(seedCtx, "dongle_a", "route_a", plate, now.Add(-60*24*time.Hour))
 
 	disabled := false
 	w := &ALPRCleanupWorker{
@@ -680,12 +685,12 @@ func TestALPRCleanupWorker_DisabledFlagStopsScheduling(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		w.Run(ctx)
+		w.Run(runCtx)
 		close(done)
 	}()
 	<-done
 
-	if !env.detectionExists(ctx, staleID) {
+	if !env.detectionExists(seedCtx, staleID) {
 		t.Error("disabled alpr_enabled must skip ticker-driven passes; stale detection should still exist")
 	}
 }
