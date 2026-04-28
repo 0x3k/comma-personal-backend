@@ -247,7 +247,7 @@ func (w *Worker) Run(ctx context.Context) {
 				go func(plateHash []byte, route, dongle string) {
 					defer wg.Done()
 					defer func() { <-sem }()
-					if err := w.evaluatePlate(ctx, plateHash, route, dongle); err != nil {
+					if err := w.EvaluatePlate(ctx, plateHash, route, dongle); err != nil {
 						log.Printf("alpr heuristic: %x in %s/%s: %v", plateHash, dongle, route, err)
 					}
 				}(plate, ev.Route, ev.DongleID)
@@ -272,10 +272,95 @@ func (w *Worker) drain(ctx context.Context) {
 	}
 }
 
-// evaluatePlate is the per-plate work unit: load inputs, call Score,
-// persist result, emit alert if appropriate. Public via Run; exposed
-// here for direct invocation by tests + an admin API in a follow-up.
-func (w *Worker) evaluatePlate(ctx context.Context, plateHash []byte, route, dongleID string) error {
+// DryRunResult is the outcome of EvaluatePlateDryRun: the severity
+// the plate would land at under the current settings, plus the
+// existing watchlist severity for diff'ing. The dry-run path is the
+// preview surface behind POST /v1/alpr/heuristic/reevaluate?dry_run=true;
+// callers iterate the affected plates, tally results into bucket counts,
+// and return the before/after histogram to the operator.
+type DryRunResult struct {
+	// PriorSeverity is the watchlist row's severity before the
+	// dry-run, or 0 when no watchlist row exists yet.
+	PriorSeverity int
+	// ProposedSeverity is the severity Score returned for the plate
+	// under the active Thresholds. Whitelisted plates always
+	// proposed-score as 0 (matching the live worker's whitelist
+	// override).
+	ProposedSeverity int
+	// Whitelisted reports whether the plate is currently
+	// whitelisted, surfaced separately so the UI can label
+	// "whitelisted" rows distinctly from "score below threshold".
+	Whitelisted bool
+}
+
+// EvaluatePlateDryRun scores a single plate against the current
+// settings without writing watchlist updates, alert_events, or
+// emitting AlertCreated. Used by the re-evaluation endpoint's
+// dry-run path so the operator can preview how a tuning change
+// re-shapes the alert histogram.
+func (w *Worker) EvaluatePlateDryRun(ctx context.Context, plateHash []byte) (DryRunResult, error) {
+	if w.Queries == nil {
+		return DryRunResult{}, errors.New("queries not configured")
+	}
+	if w.Now == nil {
+		w.Now = time.Now
+	}
+	now := w.Now()
+	thresholds := w.thresholds(ctx)
+	lookbackDays := w.lookbackDays(ctx)
+	windowStart := now.Add(-time.Duration(lookbackDays) * 24 * time.Hour)
+	rows, err := w.Queries.ListEncountersForPlateInWindowWithStartGPS(ctx, db.ListEncountersForPlateInWindowWithStartGPSParams{
+		PlateHash:   plateHash,
+		LastSeenTs:  pgtype.Timestamptz{Time: windowStart, Valid: true},
+		FirstSeenTs: pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		return DryRunResult{}, fmt.Errorf("list encounters: %w", err)
+	}
+	encs := make([]Encounter, 0, len(rows))
+	for _, r := range rows {
+		encs = append(encs, encounterFromRow(r))
+	}
+	var (
+		priorSeverity int
+		whitelisted   bool
+	)
+	wl, err := w.Queries.GetWatchlistByHash(ctx, plateHash)
+	switch {
+	case err == nil:
+		whitelisted = wl.Kind == "whitelist"
+		if wl.Severity.Valid {
+			priorSeverity = int(wl.Severity.Int16)
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+		// no prior row.
+	default:
+		return DryRunResult{}, fmt.Errorf("get watchlist: %w", err)
+	}
+	res := Score(ScoringInput{
+		PlateHash:        plateHash,
+		RecentEncounters: encs,
+		Whitelisted:      whitelisted,
+		Thresholds:       thresholds,
+	})
+	return DryRunResult{
+		PriorSeverity:    priorSeverity,
+		ProposedSeverity: res.Severity,
+		Whitelisted:      whitelisted,
+	}, nil
+}
+
+// EvaluatePlate is the per-plate work unit: load inputs, call Score,
+// persist result, emit alert if appropriate. Driven internally by
+// Run, exported so the heuristic re-evaluation API
+// (POST /v1/alpr/heuristic/reevaluate) can synchronously rescore a
+// plate without going through the EncountersUpdated channel. The
+// route / dongleID arguments are tagged onto the alert_events row and
+// any AlertCreated emitted; for ad-hoc re-runs (no causal route) the
+// caller supplies an empty string and the audit trail records that
+// the row was produced by a manual re-evaluation rather than a
+// pipeline event.
+func (w *Worker) EvaluatePlate(ctx context.Context, plateHash []byte, route, dongleID string) error {
 	if w.Queries == nil {
 		return errors.New("queries not configured")
 	}
@@ -557,6 +642,10 @@ func (w *Worker) thresholds(ctx context.Context) Thresholds {
 	t.AreaCellKm = w.floatOr(ctx, settings.KeyALPRHeuristicAreaCellKm, t.AreaCellKm)
 	t.TimingWindowHours = w.floatOr(ctx, settings.KeyALPRHeuristicTimingWindowHours, t.TimingWindowHours)
 	t.TimingPoints = w.floatOr(ctx, settings.KeyALPRHeuristicTimingPoints, t.TimingPoints)
+	t.SeverityBuckets[0] = w.floatOr(ctx, settings.KeyALPRHeuristicSeverityBucketSev2, t.SeverityBuckets[0])
+	t.SeverityBuckets[1] = w.floatOr(ctx, settings.KeyALPRHeuristicSeverityBucketSev3, t.SeverityBuckets[1])
+	t.SeverityBuckets[2] = w.floatOr(ctx, settings.KeyALPRHeuristicSeverityBucketSev4, t.SeverityBuckets[2])
+	t.SeverityBuckets[3] = w.floatOr(ctx, settings.KeyALPRHeuristicSeverityBucketSev5, t.SeverityBuckets[3])
 	return t
 }
 

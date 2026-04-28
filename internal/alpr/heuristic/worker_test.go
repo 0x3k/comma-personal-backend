@@ -372,7 +372,7 @@ func TestWorker_NoEncountersWritesAuditOnly(t *testing.T) {
 	w.Now = func() time.Time { return baseTime }
 
 	plate := []byte{0x01, 0x02}
-	if err := w.evaluatePlate(context.Background(), plate, "r", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 	// One audit row, severity 0, no watchlist row.
@@ -401,7 +401,7 @@ func TestWorker_NewAlertEmitsAlertCreated(t *testing.T) {
 	// Score 4.0 -> severity 3 (turns 5 -> 3pt; persistence 9m -> 1.0).
 	q.seedEncounter(plate, "r1", baseTime.Add(-30*time.Minute), baseTime.Add(-21*time.Minute), 5, 0, 0, false)
 
-	if err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 	wl := q.watchlist[string(plate)]
@@ -439,7 +439,7 @@ func TestWorker_AckPreservedOnReEvaluation(t *testing.T) {
 	// Re-evaluation produces same severity 3.
 	q.seedEncounter(plate, "r1", baseTime.Add(-30*time.Minute), baseTime.Add(-21*time.Minute), 5, 0, 0, false)
 
-	if err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 	wl := q.watchlist[string(plate)]
@@ -477,7 +477,7 @@ func TestWorker_SeverityUpgradeClearsAck(t *testing.T) {
 			40.0+float64(i)*0.5, -73.0, true)
 	}
 
-	if err := w.evaluatePlate(context.Background(), plate, "r5", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r5", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 	wl := q.watchlist[string(plate)]
@@ -509,7 +509,7 @@ func TestWorker_NoEmitOnConfirmAtSameSeverity(t *testing.T) {
 	q.seedWatchlist(plate, "alerted", 3, time.Time{})
 	q.seedEncounter(plate, "r1", baseTime.Add(-30*time.Minute), baseTime.Add(-21*time.Minute), 5, 0, 0, false)
 
-	if err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -531,7 +531,7 @@ func TestWorker_NeverDemotes(t *testing.T) {
 	// -> 1.0 = 4.0).
 	q.seedEncounter(plate, "r1", baseTime.Add(-30*time.Minute), baseTime.Add(-21*time.Minute), 5, 0, 0, false)
 
-	if err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 	wl := q.watchlist[string(plate)]
@@ -556,7 +556,7 @@ func TestWorker_WhitelistSuppression(t *testing.T) {
 			40.0+float64(i)*0.5, -73.0, true)
 	}
 
-	if err := w.evaluatePlate(context.Background(), plate, "r5", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r5", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 	if len(q.alertEvents) != 1 {
@@ -613,7 +613,7 @@ func TestWorker_ListErrorPropagatesPerPlate(t *testing.T) {
 	w.Now = func() time.Time { return baseTime }
 
 	plate := []byte{0x44}
-	err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA")
+	err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA")
 	if err == nil {
 		t.Fatal("expected error when list fails")
 	}
@@ -666,7 +666,7 @@ func TestWorker_MetricsCalled(t *testing.T) {
 	plate := []byte{0x99}
 	q.seedEncounter(plate, "r1", baseTime.Add(-30*time.Minute), baseTime.Add(-21*time.Minute), 5, 0, 0, false)
 
-	if err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 	if m.evals != 1 {
@@ -707,7 +707,7 @@ func TestWorker_FusionPlateSwap_EmitsSignatureKeyedAlert(t *testing.T) {
 		q.seedSignaturePlateInWindow(9, ph, 50, 50, 40.0, -73.0, baseTime.Add(-2*time.Hour))
 	}
 
-	if err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -775,7 +775,7 @@ func TestWorker_FusionPlateSwap_RefireSilentOnSameSeverity(t *testing.T) {
 		SignatureID:  pgtype.Int8{Int64: 11, Valid: true},
 	}
 
-	if err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -813,7 +813,7 @@ func TestWorker_FusionConsistencyBumpsPlateSeverity(t *testing.T) {
 	q.seedDetectionCount(plate, 13, 10)
 	q.seedSignature(13, "subaru|outback|silver|wagon")
 
-	if err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 	wl := q.watchlist[string(plate)]
@@ -859,7 +859,7 @@ func TestWorker_FusionWhitelistedPlateSkipsFusion(t *testing.T) {
 		q.seedSignaturePlateInWindow(17, ph, 70, 70, 42.0, -75.0, baseTime.Add(-2*time.Hour))
 	}
 
-	if err := w.evaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
+	if err := w.EvaluatePlate(context.Background(), plate, "r1", "dongleA"); err != nil {
 		t.Fatal(err)
 	}
 

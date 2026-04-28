@@ -148,6 +148,32 @@ const (
 	// timing window threshold is met. Default 1.0.
 	KeyALPRHeuristicTimingPoints = "alpr_heuristic_timing_points"
 
+	// KeyALPRHeuristicSeverityBucketSev2 is the lower edge of the
+	// severity-2 bucket -- a TotalScore at or above this value
+	// produces severity >= 2. Default 2.0. Validated monotonically
+	// against the higher tiers at the API layer.
+	KeyALPRHeuristicSeverityBucketSev2 = "alpr_heuristic_severity_bucket_sev2"
+
+	// KeyALPRHeuristicSeverityBucketSev3 is the lower edge of
+	// severity 3. Default 4.0. Must satisfy sev3 >= sev2.
+	KeyALPRHeuristicSeverityBucketSev3 = "alpr_heuristic_severity_bucket_sev3"
+
+	// KeyALPRHeuristicSeverityBucketSev4 is the lower edge of
+	// severity 4. Default 6.0. Must satisfy sev4 >= sev3.
+	KeyALPRHeuristicSeverityBucketSev4 = "alpr_heuristic_severity_bucket_sev4"
+
+	// KeyALPRHeuristicSeverityBucketSev5 is the lower edge of
+	// severity 5. Default 8.0. Must satisfy sev5 >= sev4.
+	KeyALPRHeuristicSeverityBucketSev5 = "alpr_heuristic_severity_bucket_sev5"
+
+	// KeyALPRHeuristicPersistenceMinutesMin is the alias key surfaced
+	// by the tuning UI for the lower (mid) persistence threshold.
+	// The internal heuristic still reads
+	// KeyALPRHeuristicPersistenceMinutesMid; this alias keeps the
+	// settings-key namespace readable in the tuning surface ("min" =
+	// the smallest persistence above which any points are awarded).
+	KeyALPRHeuristicPersistenceMinutesMin = KeyALPRHeuristicPersistenceMinutesMid
+
 	// --- Signature-fusion layer (alpr-signature-fusion-heuristic).
 	//
 	// The fusion-layer keys live behind the alpr_signature_* prefix

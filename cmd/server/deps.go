@@ -94,6 +94,16 @@ type deps struct {
 	// poll).
 	alprAlertCreated chan heuristic.AlertCreated
 
+	// alprHeuristicWorker is the long-running heuristic worker
+	// constructed in startWorkers. The re-evaluation API endpoint
+	// holds a reference so it can synchronously invoke
+	// EvaluatePlate / EvaluatePlateDryRun against the same instance
+	// that consumes EncountersUpdated events; this keeps the
+	// per-plate code path identical between the live aggregator
+	// pipeline and the operator-triggered rescore. Nil when the
+	// worker has not yet been wired (e.g. minimal test bootstraps).
+	alprHeuristicWorker *heuristic.Worker
+
 	// alprAlertSuppressed is the inverse of alprAlertCreated: emitted
 	// when an operator action (currently: whitelisting an alerted
 	// plate) takes a watchlist row out of the open-alerts bucket.
