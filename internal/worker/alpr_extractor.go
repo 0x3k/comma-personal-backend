@@ -152,12 +152,33 @@ type ALPRExtractorMetrics interface {
 	ObserveWorkerRun(worker string, d time.Duration)
 }
 
+// ALPRExtractorQuerier is the subset of *db.Queries that the worker
+// uses. Carved out as an interface so tests can supply a fake without
+// a real Postgres connection. The production wiring passes
+// *db.Queries directly; the type-assertion happens implicitly via
+// duck-typing because *db.Queries already implements every method
+// here with identical signatures.
+type ALPRExtractorQuerier interface {
+	ListRecentRoutes(ctx context.Context, limit int32) ([]db.Route, error)
+	IsExtractorProcessed(ctx context.Context, arg db.IsExtractorProcessedParams) (bool, error)
+	MarkExtractorProcessed(ctx context.Context, arg db.MarkExtractorProcessedParams) error
+}
+
+// Compile-time assertion that *db.Queries implements the worker's
+// querier contract. If sqlc regenerates a method with a changed
+// signature this fails the build at the import boundary -- which is
+// exactly when the operator has the most context to fix it.
+var _ ALPRExtractorQuerier = (*db.Queries)(nil)
+
 // ALPRExtractor is the long-running fcamera->JPEG worker. Construct via
 // NewALPRExtractor; start with Run.
 type ALPRExtractor struct {
 	// Queries provides idempotency markers via alpr_segment_progress and
-	// route discovery via ListRecentRoutes. Required.
-	Queries *db.Queries
+	// route discovery via ListRecentRoutes. Required at run time. The
+	// type is the small ALPRExtractorQuerier interface (rather than
+	// *db.Queries) so tests can swap in a fake without standing up a
+	// Postgres connection. Production wiring passes *db.Queries.
+	Queries ALPRExtractorQuerier
 
 	// Storage resolves on-disk paths for fcamera.hevc and is used to
 	// list segments per route. Required.
@@ -217,7 +238,7 @@ type ALPRExtractor struct {
 // NewALPRExtractor wires defaults but does not start the worker. Caller
 // must populate Queries / Storage; everything else has a sensible
 // default.
-func NewALPRExtractor(q *db.Queries, store *storage.Storage, settingsStore *settings.Store, frames chan ExtractedFrame, m ALPRExtractorMetrics) *ALPRExtractor {
+func NewALPRExtractor(q ALPRExtractorQuerier, store *storage.Storage, settingsStore *settings.Store, frames chan ExtractedFrame, m ALPRExtractorMetrics) *ALPRExtractor {
 	return &ALPRExtractor{
 		Queries:                q,
 		Storage:                store,
@@ -368,10 +389,19 @@ func (e *ALPRExtractor) scanLimit() int32 {
 	return DefaultALPRExtractorScanLimit
 }
 
+// alprEnabledForTest is a test-only override. When non-nil, alprEnabled
+// returns the dereferenced value instead of consulting Settings. This
+// avoids spinning up a real settings.Store + Postgres connection for
+// the worker's own unit tests; production code never touches it.
+var alprEnabledForTest *bool
+
 // alprEnabled reads the runtime master flag. A missing settings store
 // or an unreadable row both fall back to false: the conservative choice
 // for a feature the operator must explicitly opt in to.
 func (e *ALPRExtractor) alprEnabled(ctx context.Context) bool {
+	if alprEnabledForTest != nil {
+		return *alprEnabledForTest
+	}
 	if e.Settings == nil {
 		return false
 	}
