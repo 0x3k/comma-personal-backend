@@ -181,7 +181,9 @@ type ALPRDetectorMetrics interface {
 // ALPRDetectorQuerier is the subset of *db.Queries the worker uses.
 // Defining the interface here lets the test pass a fake without a real
 // Postgres connection. Production wires *db.Queries (which already
-// implements every method).
+// implements every method directly); WithTxQuerier returns the
+// interface so the same fake can be used inside the per-detection
+// transaction without forcing a real *db.Queries return type.
 type ALPRDetectorQuerier interface {
 	GetRoute(ctx context.Context, arg db.GetRouteParams) (db.Route, error)
 	GetRouteGeometryAndTimes(ctx context.Context, arg db.GetRouteGeometryWKTParams) (db.RouteGeometryAndTimes, error)
@@ -190,18 +192,41 @@ type ALPRDetectorQuerier interface {
 	UpdateDetectionSignature(ctx context.Context, arg db.UpdateDetectionSignatureParams) error
 	MarkDetectorProcessed(ctx context.Context, arg db.MarkDetectorProcessedParams) error
 	CountRouteDetectorProgress(ctx context.Context, arg db.CountRouteDetectorProgressParams) (db.CountRouteDetectorProgressRow, error)
-	WithTx(tx pgx.Tx) *db.Queries
+	ListDetectionsForRoute(ctx context.Context, arg db.ListDetectionsForRouteParams) ([]db.ListDetectionsForRouteRow, error)
+	// WithTxQuerier returns a querier bound to the given pgx.Tx. The
+	// production *db.Queries-backed adapter wraps q.WithTx(tx) so the
+	// returned value still implements every method of this interface.
+	// Test fakes typically just return themselves (the in-memory
+	// state already participates in the test's notion of a
+	// transaction).
+	WithTxQuerier(tx pgx.Tx) ALPRDetectorQuerier
 }
 
-// Compile-time assertion that *db.Queries satisfies the worker's
-// querier contract. WithTx returns *db.Queries (not the interface), so
-// the wrapper QueriesAdapter below is what we actually plug in for the
-// production path.
-//
-// (We can't write `var _ ALPRDetectorQuerier = (*db.Queries)(nil)`
-// directly because WithTx's return type would not be assignable to the
-// interface -- the interface needs a concrete *db.Queries to thread
-// into a transactional sub-call.)
+// pgxQuerier wraps a *db.Queries so it can satisfy ALPRDetectorQuerier.
+// We need a wrapper because WithTxQuerier's return type is the
+// interface (so a fake can return itself), while *db.Queries.WithTx
+// returns *db.Queries. The wrapper bridges the two without forcing a
+// public method on *db.Queries.
+type pgxQuerier struct {
+	*db.Queries
+}
+
+// WrapPgxQueries adapts a *db.Queries to the worker's ALPRDetectorQuerier
+// interface. Used at wiring time in cmd/server.
+func WrapPgxQueries(q *db.Queries) ALPRDetectorQuerier {
+	return &pgxQuerier{Queries: q}
+}
+
+// WithTxQuerier returns a pgxQuerier whose embedded *db.Queries is
+// bound to tx. The interface return type lets the worker thread the
+// transactional querier through code that also accepts a fake.
+func (p *pgxQuerier) WithTxQuerier(tx pgx.Tx) ALPRDetectorQuerier {
+	return &pgxQuerier{Queries: p.Queries.WithTx(tx)}
+}
+
+// Compile-time assertion that the production wrapper satisfies the
+// worker's querier contract.
+var _ ALPRDetectorQuerier = (*pgxQuerier)(nil)
 
 // ALPRDetectorTxBeginner is the transactional pool interface. Production
 // passes *pgxpool.Pool. Tests can supply a stub.
@@ -751,7 +776,7 @@ func (w *ALPRDetector) persistDetection(
 			_ = tx.Rollback(ctx)
 		}
 	}()
-	qtx := w.Queries.WithTx(tx)
+	qtx := w.Queries.WithTxQuerier(tx)
 
 	var sigID pgtype.Int8
 	var detMake, detModel, detColor, detBodyType pgtype.Text
@@ -931,15 +956,7 @@ func (w *ALPRDetector) markSegmentAndMaybeEmit(ctx context.Context, frame Extrac
 // to track a per-route in-memory counter that would be wrong after a
 // restart.
 func (w *ALPRDetector) listRouteDetections(ctx context.Context, dongleID, route string) (int, error) {
-	q, ok := w.Queries.(interface {
-		ListDetectionsForRoute(ctx context.Context, arg db.ListDetectionsForRouteParams) ([]db.ListDetectionsForRouteRow, error)
-	})
-	if !ok {
-		// The fake querier in tests doesn't have to implement
-		// this; treat as "unknown" rather than failing.
-		return 0, nil
-	}
-	rows, err := q.ListDetectionsForRoute(ctx, db.ListDetectionsForRouteParams{
+	rows, err := w.Queries.ListDetectionsForRoute(ctx, db.ListDetectionsForRouteParams{
 		DongleID: dongleID,
 		Route:    route,
 	})

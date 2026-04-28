@@ -270,7 +270,7 @@ func startWorkers(ctx context.Context, d *deps) {
 	detector := worker.NewALPRDetector(
 		d.alprFrames,
 		d.ALPRClient(),
-		d.queries,
+		worker.WrapPgxQueries(d.queries),
 		d.pool,
 		d.settings,
 		d.alprKeyring,
