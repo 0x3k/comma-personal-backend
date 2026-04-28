@@ -29,6 +29,37 @@ func (q *Queries) DeleteDetectionsOlderThan(ctx context.Context, frameTs pgtype.
 	return result.RowsAffected(), nil
 }
 
+const deleteDetectionsOlderThanExcludingFlagged = `-- name: DeleteDetectionsOlderThanExcludingFlagged :execrows
+DELETE FROM plate_detections d
+WHERE d.frame_ts < $1
+  AND d.plate_hash NOT IN (
+        SELECT UNNEST($2::BYTEA[])
+  )
+`
+
+type DeleteDetectionsOlderThanExcludingFlaggedParams struct {
+	FrameTs       pgtype.Timestamptz `json:"frameTs"`
+	FlaggedHashes [][]byte           `json:"flaggedHashes"`
+}
+
+// Tiered retention sweep: delete detections older than $1 EXCEPT those
+// whose plate_hash is in the supplied "flagged set" $2. The flagged set
+// is computed by the worker as the union of alerted+unacked watchlist
+// rows and severity >= 4 alerted rows; whitelisted and note-kind rows
+// are intentionally NOT in the flagged set so the operator's "this is
+// fine" classification drops the plate to the unflagged retention tier.
+// Returns the number of rows deleted.
+//
+// The NOT IN (SELECT UNNEST(...)) form expands the bytea[] argument to
+// a row set Postgres can hash for the anti-join.
+func (q *Queries) DeleteDetectionsOlderThanExcludingFlagged(ctx context.Context, arg DeleteDetectionsOlderThanExcludingFlaggedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteDetectionsOlderThanExcludingFlagged, arg.FrameTs, arg.FlaggedHashes)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDetectionsOlderThanForUnflagged = `-- name: DeleteDetectionsOlderThanForUnflagged :execrows
 DELETE FROM plate_detections d
 WHERE d.frame_ts < $1

@@ -11,6 +11,32 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteOrphanedAlertEvents = `-- name: DeleteOrphanedAlertEvents :execrows
+DELETE FROM plate_alert_events e
+WHERE e.computed_at < $1
+  AND NOT EXISTS (
+        SELECT 1 FROM plate_watchlist w
+        WHERE w.plate_hash = e.plate_hash
+  )
+`
+
+// Retention sweep: drop alert events older than the supplied cutoff
+// whose plate_hash is no longer in plate_watchlist. The watchlist row
+// is the load-bearing record for an active alert; once an operator has
+// removed it (or it was never persisted because the alert was demoted),
+// the heuristic evaluations behind it become trail-only and can age out
+// after a generous review window. Plates still on the watchlist keep
+// their full evaluation history regardless of computed_at -- the audit
+// trail is the basis for the "why is this plate alerted" UI.
+// Returns the number of rows deleted.
+func (q *Queries) DeleteOrphanedAlertEvents(ctx context.Context, computedAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOrphanedAlertEvents, computedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertAlertEvent = `-- name: InsertAlertEvent :one
 INSERT INTO plate_alert_events (
     plate_hash,

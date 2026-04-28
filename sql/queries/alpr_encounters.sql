@@ -44,6 +44,29 @@ RETURNING id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
 DELETE FROM plate_encounters
 WHERE dongle_id = $1 AND route = $2;
 
+-- name: DeleteOrphanedEncounters :execrows
+-- Retention sweep: drop encounter rows whose underlying detections have
+-- already been pruned. After the per-detection retention pass runs, an
+-- encounter whose entire (first_seen_ts, last_seen_ts) window has been
+-- emptied of detections has no evidence left and should be cleaned up
+-- to keep the per-route review UI from showing zombie rows.
+--
+-- Match semantics: an encounter survives if ANY detection still exists
+-- with the same (dongle_id, route, plate_hash) AND a frame_ts inside
+-- the encounter's [first_seen_ts, last_seen_ts] window. The plate_hash
+-- column scopes the join so an encounter for plate A is not kept alive
+-- by detections of plate B that happen to overlap in time.
+-- Returns the number of orphan encounter rows deleted.
+DELETE FROM plate_encounters pe
+WHERE NOT EXISTS (
+        SELECT 1
+        FROM plate_detections d
+        WHERE d.dongle_id  = pe.dongle_id
+          AND d.route      = pe.route
+          AND d.plate_hash = pe.plate_hash
+          AND d.frame_ts BETWEEN pe.first_seen_ts AND pe.last_seen_ts
+  );
+
 -- name: ListEncountersForRoute :many
 -- All encounter rows for a route, ordered by first_seen_ts. Powers the
 -- per-route review UI ("which plates did we see on this drive").
