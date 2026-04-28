@@ -61,6 +61,10 @@ type Metrics struct {
 	alprEngineLatencySeconds prometheus.Histogram
 	alprEngineErrorsTotal    *prometheus.CounterVec
 	alprDetectorQueueDepth   prometheus.Gauge
+
+	alprEncountersTotal      prometheus.Counter
+	alprEncounterComputeSecs prometheus.Histogram
+	alprEncountersPerRoute   prometheus.Histogram
 }
 
 // New creates a Metrics backed by a fresh registry. Use NewWithRegistry to
@@ -238,6 +242,27 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 				Help: "Instantaneous depth of the extractor->detector frame channel as observed by the detection worker.",
 			},
 		),
+
+		alprEncountersTotal: prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "alpr_encounters_total",
+				Help: "Total number of plate_encounters rows persisted by the ALPR encounter aggregator.",
+			},
+		),
+		alprEncounterComputeSecs: prometheus.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "alpr_encounter_compute_seconds",
+				Help:    "Wall-clock duration of the ALPR encounter aggregator processing a single route end-to-end.",
+				Buckets: defaultDurationBuckets,
+			},
+		),
+		alprEncountersPerRoute: prometheus.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "alpr_encounters_per_route",
+				Help:    "Number of encounters emitted per route by the ALPR encounter aggregator.",
+				Buckets: []float64{0, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000},
+			},
+		),
 	}
 
 	reg.MustRegister(
@@ -263,6 +288,9 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 		m.alprEngineLatencySeconds,
 		m.alprEngineErrorsTotal,
 		m.alprDetectorQueueDepth,
+		m.alprEncountersTotal,
+		m.alprEncounterComputeSecs,
+		m.alprEncountersPerRoute,
 	)
 
 	return m
@@ -493,4 +521,34 @@ func (m *Metrics) SetALPRDetectorQueueDepth(n int) {
 		return
 	}
 	m.alprDetectorQueueDepth.Set(float64(n))
+}
+
+// AddALPREncounters bumps the cumulative counter of plate_encounters
+// rows persisted by the encounter aggregator. n may be zero (a no-op)
+// so callers don't need to special-case empty results.
+func (m *Metrics) AddALPREncounters(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.alprEncountersTotal.Add(float64(n))
+}
+
+// ObserveALPREncounterCompute records the wall-clock duration of one
+// route's encounter computation pass.
+func (m *Metrics) ObserveALPREncounterCompute(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.alprEncounterComputeSecs.Observe(d.Seconds())
+}
+
+// ObserveALPREncountersPerRoute records the number of encounters the
+// aggregator emitted for one route. Recorded for every route the
+// aggregator processes (including zero) so the histogram captures the
+// full distribution.
+func (m *Metrics) ObserveALPREncountersPerRoute(n int) {
+	if m == nil {
+		return
+	}
+	m.alprEncountersPerRoute.Observe(float64(n))
 }
