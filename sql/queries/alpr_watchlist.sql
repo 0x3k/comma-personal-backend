@@ -136,6 +136,15 @@ WHERE kind = $1
 ORDER BY updated_at DESC, id DESC
 LIMIT $2 OFFSET $3;
 
+-- name: UpdateWatchlistNotes :execrows
+-- Sets the notes column on a watchlist row. Used by the alert-note
+-- handler so the operator can jot context ("this is the white truck
+-- from Tuesday") next to a plate. NULL clears the existing note.
+UPDATE plate_watchlist
+SET notes      = $2,
+    updated_at = now()
+WHERE plate_hash = $1;
+
 -- name: AckWatchlist :execrows
 -- Mark a plate's watchlist row as acknowledged at the given time. The
 -- alert feed treats acked rows as "seen", de-emphasizing them in the UI

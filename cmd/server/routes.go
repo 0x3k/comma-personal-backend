@@ -258,6 +258,23 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	v1Plates := e.Group("/v1/plates", sessionOnly, alprEncountersHandler.RequireEnabled())
 	alprEncountersHandler.RegisterPlateDetail(v1Plates)
 
+	// ALPR alert center + whitelist. All endpoints session-only --
+	// alerts are user-curated state and a device JWT must never list
+	// or mutate them. Routes register regardless of the runtime flag
+	// so the frontend can render a clean disabled state from a 503;
+	// requireAlprEnabled short-circuits each request when the flag is
+	// off (or the keyring is unconfigured). The handler emits
+	// AlertSuppressed on the dedicated channel when a whitelist
+	// transition takes a row out of the open-alerts bucket.
+	alprWatchlistHandler := api.NewALPRWatchlistHandler(
+		d.queries,
+		d.settings,
+		d.alprKeyring,
+		d.alprAlertSuppressed,
+	)
+	v1AlprSession := e.Group("/v1", sessionOnly, alprWatchlistHandler.RequireEnabled())
+	alprWatchlistHandler.RegisterRoutes(v1AlprSession)
+
 	// Per-device trip stats live at /v1/devices/:dongle_id/stats, so they
 	// accept either a session cookie or a device JWT via the shared read group.
 	tripHandler.RegisterStatsRoute(v1ConfigRead)

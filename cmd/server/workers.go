@@ -380,6 +380,11 @@ func startWorkers(ctx context.Context, d *deps) {
 	// record -- a missed AlertCreated only delays the badge
 	// invalidation, not the alert itself.
 	d.alprAlertCreated = make(chan heuristic.AlertCreated, 64)
+	// AlertSuppressed counterpart -- emitted by the watchlist API
+	// when an operator whitelists a previously-alerted plate. Future
+	// notification consumers subscribe to both channels to keep the
+	// dashboard badge counter consistent.
+	d.alprAlertSuppressed = make(chan heuristic.AlertSuppressed, 64)
 	heuristicBridge := make(chan heuristic.EncountersUpdatedEvent, cap(d.alprEncountersUpdated))
 	go func() {
 		for ev := range d.alprEncountersUpdated {

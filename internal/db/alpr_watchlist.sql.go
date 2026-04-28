@@ -275,6 +275,29 @@ func (q *Queries) UnackWatchlist(ctx context.Context, plateHash []byte) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const updateWatchlistNotes = `-- name: UpdateWatchlistNotes :execrows
+UPDATE plate_watchlist
+SET notes      = $2,
+    updated_at = now()
+WHERE plate_hash = $1
+`
+
+type UpdateWatchlistNotesParams struct {
+	PlateHash []byte      `json:"plateHash"`
+	Notes     pgtype.Text `json:"notes"`
+}
+
+// Sets the notes column on a watchlist row. Used by the alert-note
+// handler so the operator can jot context ("this is the white truck
+// from Tuesday") next to a plate. NULL clears the existing note.
+func (q *Queries) UpdateWatchlistNotes(ctx context.Context, arg UpdateWatchlistNotesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateWatchlistNotes, arg.PlateHash, arg.Notes)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const upsertWatchlistAlerted = `-- name: UpsertWatchlistAlerted :one
 INSERT INTO plate_watchlist (
     plate_hash,
