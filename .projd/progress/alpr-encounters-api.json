@@ -1,10 +1,11 @@
 {
   "id": "alpr-encounters-api",
   "name": "REST endpoints: route plates + plate cross-route history",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 4,
   "blocked_by": ["alpr-encounter-aggregator"],
-  "branch": "",
+  "branch": "agent/alpr-encounters-api",
+  "base_branch": "feat/alpr",
   "summary": "Read endpoints the UI uses to surface plate sightings. Two routes: per-route encounters (for the route detail timeline overlay) and per-plate cross-route history (for the plate detail page). Routes always register; runtime alpr_enabled gating returns 503 when off so the frontend can render a clear 'feature disabled' state instead of crashing on 404. Plate text is decrypted only inside handlers and only after authentication via the standard checkDongleAccess pattern.",
   "acceptance_criteria": [
     "Routes registered in cmd/server/routes.go regardless of alpr_enabled. Each handler checks runtime flag at request time and returns 503 with {error: 'alpr_disabled', detail: 'Enable ALPR in Settings to use this endpoint.'} when off. Add a small middleware helper requireAlprEnabled to avoid copy-paste.",
