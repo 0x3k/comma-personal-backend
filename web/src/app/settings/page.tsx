@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { ErrorMessage } from "@/components/ui/ErrorMessage";
 import { Toast } from "@/components/ui/Toast";
+import { AlprSettingsCard } from "@/components/alpr/AlprSettingsCard";
 
 /**
  * Default dongle ID used when none is configured.
@@ -745,6 +746,9 @@ export default function SettingsPage() {
         onToast={setStorageToast}
         onDismissToast={() => setStorageToast(null)}
       />
+
+      {/* Optional services -> ALPR onboarding card */}
+      <AlprSettingsCard />
     </PageWrapper>
   );
 }
