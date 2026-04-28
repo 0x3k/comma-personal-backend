@@ -68,10 +68,11 @@ type fakeQuerier struct {
 	mu sync.Mutex
 
 	// Per-route configuration the test seeds before running.
-	routeStartTime time.Time
-	geometryTimes  []int64
-	geometryWKT    string
-	segmentsTotal  int
+	routeStartTime      time.Time
+	geometryTimes       []int64
+	geometryWKT         string
+	segmentsTotal       int
+	segmentsWithFcamera *int // nil => mirror segmentsTotal (legacy default)
 
 	// Pre-set per-segment progress so the test can simulate "the
 	// extractor has processed segments 0..N already". The detection
@@ -190,10 +191,15 @@ func (f *fakeQuerier) CountRouteDetectorProgress(_ context.Context, arg db.Count
 			det++
 		}
 	}
+	withFcamera := int64(f.segmentsTotal)
+	if f.segmentsWithFcamera != nil {
+		withFcamera = int64(*f.segmentsWithFcamera)
+	}
 	return db.CountRouteDetectorProgressRow{
-		ExtractorProcessed: ext,
-		DetectorProcessed:  det,
-		SegmentsTotal:      int64(f.segmentsTotal),
+		ExtractorProcessed:  ext,
+		DetectorProcessed:   det,
+		SegmentsTotal:       int64(f.segmentsTotal),
+		SegmentsWithFcamera: withFcamera,
 	}, nil
 }
 
@@ -455,6 +461,103 @@ func TestALPRDetector_BasicWriteAndComplete(t *testing.T) {
 	}
 	if events[0].TotalDetections != 2 {
 		t.Errorf("event total_detections = %d, want 2", events[0].TotalDetections)
+	}
+}
+
+// TestALPRDetector_CompletesWhenSomeSegmentsLackFcamera is the
+// regression for IH-009: a route with three segments, where the
+// middle segment has no fcamera.hevc, must still emit a
+// RouteAlprDetectionsComplete after the last fcamera-bearing
+// segment is detector-processed. Before the fix the gate compared
+// extractor_processed against segments_total (which counts all
+// three rows), so the event was suppressed forever.
+func TestALPRDetector_CompletesWhenSomeSegmentsLackFcamera(t *testing.T) {
+	keyring := freshKeyring(t)
+	q := newFakeQuerier()
+	q.routeStartTime = time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	q.geometryWKT, q.geometryTimes = makeStraightWKT(180)
+	// Three segments in the segments table; only segments 0 and 2
+	// have fcamera_uploaded set. Segment 1 was uploaded as rlog/qlog
+	// but its fcamera.hevc never made it (e.g. throttled, or the
+	// upload failed), so the extractor will skip it and never write
+	// a progress row.
+	q.segmentsTotal = 3
+	withFcamera := 2
+	q.segmentsWithFcamera = &withFcamera
+	q.extractorProcessed[progressKey("dongle1", "2024-01-01--12-00-00", 0)] = true
+	q.extractorProcessed[progressKey("dongle1", "2024-01-01--12-00-00", 2)] = true
+
+	det := &fakeDetector{}
+	det.detect = func(_ int, _ []byte) ([]alpr.Detection, error) {
+		return nil, nil
+	}
+
+	frames := make(chan ExtractedFrame, 2)
+	completions := make(chan RouteAlprDetectionsComplete, 1)
+	w := NewALPRDetector(frames, det, q, &fakePool{}, nil, keyring, nil, completions)
+	w.alprEnabledForTest = trueP()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+
+	// Detector sees only segments 0 and 2 (1 had no fcamera, so the
+	// extractor never produced frames for it). After segment 2's
+	// frame is marked, ExtractorProcessed (2) >= SegmentsWithFcamera
+	// (2) and the completion event must fire even though
+	// SegmentsTotal (3) is still ahead.
+	frames <- ExtractedFrame{DongleID: "dongle1", Route: "2024-01-01--12-00-00", Segment: 0, FrameOffsetMs: 500, JPEG: []byte("a")}
+	frames <- ExtractedFrame{DongleID: "dongle1", Route: "2024-01-01--12-00-00", Segment: 2, FrameOffsetMs: 500, JPEG: []byte("b")}
+	close(frames)
+	<-done
+
+	events := drainEvents(completions)
+	if len(events) != 1 {
+		t.Fatalf("got %d completion events, want 1: %+v", len(events), events)
+	}
+	if events[0].DongleID != "dongle1" || events[0].Route != "2024-01-01--12-00-00" {
+		t.Errorf("event = %+v, want dongle1/2024-01-01--12-00-00", events[0])
+	}
+}
+
+// TestALPRDetector_DoesNotCompleteWhileFcameraSegmentsPending is the
+// inverse of the regression above: with two fcamera-bearing segments
+// in the route, the completion event must NOT fire after only the
+// first one has been detector-processed. The gate must hold until
+// every fcamera-bearing segment is done.
+func TestALPRDetector_DoesNotCompleteWhileFcameraSegmentsPending(t *testing.T) {
+	keyring := freshKeyring(t)
+	q := newFakeQuerier()
+	q.routeStartTime = time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	q.geometryWKT, q.geometryTimes = makeStraightWKT(180)
+	q.segmentsTotal = 2
+	withFcamera := 2
+	q.segmentsWithFcamera = &withFcamera
+	// Only segment 0 has been extractor-processed so far.
+	q.extractorProcessed[progressKey("dongle1", "2024-01-01--12-00-00", 0)] = true
+
+	det := &fakeDetector{}
+	det.detect = func(_ int, _ []byte) ([]alpr.Detection, error) {
+		return nil, nil
+	}
+
+	frames := make(chan ExtractedFrame, 1)
+	completions := make(chan RouteAlprDetectionsComplete, 1)
+	w := NewALPRDetector(frames, det, q, &fakePool{}, nil, keyring, nil, completions)
+	w.alprEnabledForTest = trueP()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+
+	frames <- ExtractedFrame{DongleID: "dongle1", Route: "2024-01-01--12-00-00", Segment: 0, FrameOffsetMs: 500, JPEG: []byte("a")}
+	close(frames)
+	<-done
+
+	if events := drainEvents(completions); len(events) != 0 {
+		t.Fatalf("got %d completion events while a fcamera-bearing segment is still pending, want 0: %+v", len(events), events)
 	}
 }
 

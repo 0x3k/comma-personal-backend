@@ -832,14 +832,15 @@ func (w *ALPRDetector) markSegmentAndMaybeEmit(ctx context.Context, frame Extrac
 	//   - the extractor has touched at least one segment (so we know
 	//     the producer reached this route at all),
 	//   - every extractor-processed segment is also detector-processed,
-	//   - the extractor has processed every fcamera-bearing segment
-	//     in segments_total. (Some segments may not have an
-	//     fcamera.hevc, so segments_total is an upper bound; matching
-	//     it on extractor_processed is the strongest signal we have
-	//     that the producer is fully done.)
+	//   - the extractor has processed every fcamera-bearing segment.
+	//     segments_with_fcamera is the count of segments whose
+	//     fcamera_uploaded flag is set; gating on segments_total here
+	//     would block routes whose device skipped fcamera on some
+	//     segments (throttling, upload failure, fcamera disabled),
+	//     because such segments never enter the ALPR pipeline at all.
 	if progress.ExtractorProcessed == 0 ||
 		progress.DetectorProcessed < progress.ExtractorProcessed ||
-		progress.ExtractorProcessed < progress.SegmentsTotal {
+		progress.ExtractorProcessed < progress.SegmentsWithFcamera {
 		return
 	}
 
@@ -874,8 +875,11 @@ func (w *ALPRDetector) markSegmentAndMaybeEmit(ctx context.Context, frame Extrac
 	default:
 		// Buffered channel was full and the consumer is slow.
 		// Drop the event with a warn rather than blocking the
-		// detection loop -- the encounter aggregator can fall
-		// back to its periodic "find unaggregated routes" scan.
+		// detection loop. The aggregator has no periodic
+		// catch-up scan, so a dropped event means this route's
+		// encounters are not aggregated until the operator
+		// triggers a manual re-process. Size the channel
+		// generously when wiring the worker.
 		log.Printf("alpr detector: detections-complete channel full; dropping event for %s/%s", frame.DongleID, frame.Route)
 	}
 }
