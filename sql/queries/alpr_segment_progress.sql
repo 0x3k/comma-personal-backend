@@ -50,20 +50,22 @@ SELECT COALESCE(
 )::BOOLEAN AS processed;
 
 -- name: CountRouteDetectorProgress :one
--- Returns (extractor_processed, detector_processed, segments_total) for
--- a route. The detection worker calls this after MarkDetectorProcessed
--- to decide whether the route is fully done so it can emit a
--- RouteAlprDetectionsComplete event exactly once.
+-- Returns (extractor_processed, detector_processed, segments_total,
+-- segments_with_fcamera) for a route. The detection worker calls this
+-- after MarkDetectorProcessed to decide whether the route is fully
+-- done so it can emit a RouteAlprDetectionsComplete event exactly once.
 --
 -- extractor_processed counts alpr_segment_progress rows whose
 -- processed_at_extractor is set; detector_processed counts those whose
 -- processed_at_detector is set; segments_total counts segments table
--- rows for the route. The route is fully detector-processed when
--- detector_processed = extractor_processed = segments_total. Comparing
--- against segments_total alone is not sufficient because the extractor
--- only inserts rows for segments that actually had an fcamera.hevc on
--- disk -- a segment without front-camera video never enters the ALPR
--- pipeline and would otherwise prevent the route from ever completing.
+-- rows for the route; segments_with_fcamera counts segments table rows
+-- whose fcamera_uploaded flag is set. The route is fully
+-- detector-processed when extractor_processed >= segments_with_fcamera
+-- and detector_processed >= extractor_processed. Comparing against
+-- segments_total is not sufficient because the extractor only inserts
+-- rows for segments that actually had an fcamera.hevc on disk -- a
+-- segment without front-camera video never enters the ALPR pipeline
+-- and would otherwise prevent the route from ever completing.
 SELECT
     (SELECT COUNT(*) FROM alpr_segment_progress p
      WHERE p.dongle_id = sqlc.arg('dongle_id')
@@ -79,4 +81,10 @@ SELECT
      JOIN routes r ON r.id = seg.route_id
      WHERE r.dongle_id  = sqlc.arg('dongle_id')
        AND r.route_name = sqlc.arg('route'))::BIGINT
-        AS segments_total;
+        AS segments_total,
+    (SELECT COUNT(*) FROM segments seg
+     JOIN routes r ON r.id = seg.route_id
+     WHERE r.dongle_id      = sqlc.arg('dongle_id')
+       AND r.route_name     = sqlc.arg('route')
+       AND seg.fcamera_uploaded)::BIGINT
+        AS segments_with_fcamera;

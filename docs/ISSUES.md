@@ -1,6 +1,7 @@
 # Issues
 
-> Last audited: 2026-04-22
+> Last audited: 2026-04-28
+> Last fixed: 2026-04-28
 
 | ID | Severity | Status | Title |
 |----|----------|--------|-------|
@@ -12,6 +13,7 @@
 | IH-006 | low | fixed | `HandleWebSocket` returns an error after `upgrader.Upgrade` already wrote the HTTP error response |
 | IH-007 | high | fixed | `TripHandler.GetStats` and `GetTripByRoute` reject every session-authenticated request with 403 |
 | IH-008 | high | fixed | `SignalsHandler.GetRouteSignals` rejects every session-authenticated request with 403 |
+| IH-009 | medium | fixed | ALPR detector route-completion event never fires for routes that have any segment without `fcamera.hevc` |
 
 ---
 
@@ -205,3 +207,43 @@
   A byproduct of fixing IH-007 by routing through `checkDongleAccess` is that the same migration can be applied here for free.
 
 - **Suggested fix**: Swap the hand-rolled check for `if handled, err := checkDongleAccess(c, dongleID); handled { return err }`. Optionally audit the package once more: `internal/api/signals.go`, `internal/api/trip.go`, and `internal/api/device_live.go`/`snapshot.go` are the only remaining files that inspect `ContextKeyDongleID` directly. `DeviceLiveHandler.GetLive` does no dongle check at all (it authorizes implicitly via the hub lookup), which is a separate, lower-severity consideration not tracked here.
+
+---
+
+## IH-009: ALPR detector route-completion event never fires for routes that have any segment without `fcamera.hevc`
+
+- **Severity**: medium
+- **Category**: logic
+- **Location**: `internal/worker/alpr_detector.go:840-844`, `internal/worker/alpr_extractor.go:420-447`, `sql/queries/alpr_segment_progress.sql:52-82`
+- **Status**: fixed
+- **Description**: After every detector pass on a segment, `ALPRDetector.maybeEmitRouteCompletion` calls `CountRouteDetectorProgress` and only emits the `RouteAlprDetectionsComplete` event when:
+
+  ```go
+  if progress.ExtractorProcessed == 0 ||
+      progress.DetectorProcessed < progress.ExtractorProcessed ||
+      progress.ExtractorProcessed < progress.SegmentsTotal {
+      return
+  }
+  ```
+
+  `extractor_processed` counts `alpr_segment_progress` rows whose `processed_at_extractor` IS NOT NULL; `segments_total` counts every row in the `segments` table for the route. The extractor only inserts a progress row for segments that actually have an `fcamera.hevc` on disk -- `segmentNeedsExtract` (`alpr_extractor.go:420-447`) returns `false` and never marks the segment processed when the file is missing:
+
+  ```go
+  if !e.Storage.Exists(dongleID, route, segName, FCameraFile) {
+      return false
+  }
+  ```
+
+  Segment rows are created by `internal/api/upload.go:trackUpload` on every upload (rlog/qlog/qcamera/etc.), independently of whether the device ever uploads `fcamera.hevc`. So any route where at least one segment is missing front-camera video -- the device throttled fcamera, an upload failed, or the user disabled fcamera uploads -- ends up with `extractor_processed < segments_total` permanently, the third clause of the guard is always true, and the completion event is never emitted.
+
+  The Go comment at lines 836-839 acknowledges that "some segments may not have an fcamera.hevc, so segments_total is an upper bound", but the condition still requires equality, which contradicts the comment. The detector code's "channel full" branch at line 879 logs that the event was dropped and notes "the encounter aggregator can fall back to its periodic 'find unaggregated routes' scan" -- but no such periodic scan exists; `ALPRAggregator.Run` (`alpr_aggregator.go:236-288`) only acts on events arriving via the `Completions` channel. So the dropped/never-emitted events are lost outright: encounters for affected routes are never aggregated, and the heuristic alerts that depend on `EncountersUpdated` never fire for them.
+
+  Concretely:
+  - Routes with even one segment missing `fcamera.hevc` are silently excluded from ALPR encounter aggregation, plate-detail history, and watchlist alerts.
+  - The condition is masked in tests because the test fixtures upload `fcamera.hevc` for every segment they create.
+
+- **Suggested fix**: Replace `progress.ExtractorProcessed < progress.SegmentsTotal` with a check that the extractor has finished every fcamera-bearing segment, not every segment in the table. Two reasonable shapes:
+  1. Have the extractor insert a "skipped" row in `alpr_segment_progress` (with `processed_at_extractor` set) for segments it deliberately skips because `fcamera.hevc` is missing, so `extractor_processed` matches `segments_total` again. This keeps the existing equality test working.
+  2. Add a `segments_with_fcamera` count to `CountRouteDetectorProgress` (using `EXISTS (SELECT 1 FROM segments WHERE ... AND fcamera_uploaded)` or similar) and gate completion on `progress.ExtractorProcessed >= progress.SegmentsWithFcamera`.
+
+  Either fix should be paired with a regression test that creates a route whose middle segment has no `fcamera.hevc` and asserts that the completion event still fires after the last fcamera-bearing segment is detector-processed. While in the area, drop the misleading "encounter aggregator can fall back" comment at `alpr_detector.go:877-878` (or actually wire up such a fallback in the aggregator).
