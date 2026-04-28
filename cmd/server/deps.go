@@ -9,6 +9,7 @@ import (
 	"comma-personal-backend/internal/alpr"
 	alprcrypto "comma-personal-backend/internal/alpr/crypto"
 	"comma-personal-backend/internal/alpr/heuristic"
+	"comma-personal-backend/internal/alpr/notify"
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/metrics"
@@ -106,6 +107,14 @@ type deps struct {
 	// successful POST /v1/alpr/backfill/start can wake the worker
 	// without waiting for its idle poll.
 	alprBackfill *worker.ALPRBackfill
+
+	// alprNotify is the alert-notification dispatcher (email + webhook
+	// fan-out). Constructed in main.go so cmd/server can hand a
+	// reference to setupRoutes (for the POST /v1/alpr/notify/test
+	// endpoint) and to startWorkers (which spawns the AlertCreated
+	// subscriber goroutine). Non-nil even when no senders are
+	// configured -- the dispatcher's no-config path is a no-op.
+	alprNotify *notify.Dispatcher
 }
 
 // alprClientTimeout is the per-request budget the ALPR client applies on

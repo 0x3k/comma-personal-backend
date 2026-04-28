@@ -239,6 +239,15 @@ func setupRoutes(e *echo.Echo, d *deps) {
 		alprBackfillHandler.RegisterRoutes(v1ConfigWrite)
 	}
 
+	// ALPR notification test endpoint. Session-only -- a device JWT
+	// must never be able to make the backend send mail or POST to a
+	// user-configured webhook. The dispatcher itself is constructed in
+	// main.go regardless of UI-auth state; we only register the route
+	// when UI auth is on.
+	if d.cfg.UIAuthEnabled() {
+		api.NewALPRNotifyHandler(d.alprNotify).RegisterRoutes(v1ConfigWrite)
+	}
+
 	// ALPR encounters / plate-detail read endpoints. Routes register
 	// regardless of the runtime alpr_enabled flag so the frontend can
 	// render a clean "feature disabled" state from a 503 response
