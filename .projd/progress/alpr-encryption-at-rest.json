@@ -1,7 +1,7 @@
 {
   "id": "alpr-encryption-at-rest",
   "name": "Plate text encryption + stable hash identity",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 2,
   "blocked_by": ["alpr-schema"],
   "branch": "agent/alpr-encryption-at-rest",
