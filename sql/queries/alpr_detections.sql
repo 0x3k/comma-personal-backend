@@ -92,3 +92,19 @@ UPDATE plate_detections
 SET plate_hash       = sqlc.arg('new_plate_hash'),
     plate_ciphertext = sqlc.narg('new_plate_ciphertext')
 WHERE plate_hash = sqlc.arg('old_plate_hash');
+
+-- name: UpdateDetectionSignature :exec
+-- Stamp the signature link plus the denormalized vehicle attribute
+-- columns onto a single detection row. Called by the signature
+-- classifier after it produces a (signature_id, make, model, color,
+-- body_type) tuple for a frame. The denormalized columns are
+-- intentionally co-written with the FK so review queries that filter
+-- by attribute do not have to join through vehicle_signatures.
+UPDATE plate_detections
+SET signature_id        = sqlc.narg('signature_id'),
+    det_make            = sqlc.narg('det_make'),
+    det_model           = sqlc.narg('det_model'),
+    det_color           = sqlc.narg('det_color'),
+    det_body_type       = sqlc.narg('det_body_type'),
+    det_attr_confidence = sqlc.narg('det_attr_confidence')
+WHERE id = sqlc.arg('id');

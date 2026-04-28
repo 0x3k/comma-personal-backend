@@ -1,10 +1,11 @@
 {
   "id": "alpr-disclaimer-gate",
   "name": "ALPR first-enable disclaimer + jurisdictional ack",
-  "status": "pending",
+  "status": "complete",
   "priority": 2,
   "blocked_by": ["alpr-config"],
-  "branch": "",
+  "branch": "agent/alpr-disclaimer-gate",
+  "base_branch": "feat/alpr",
   "summary": "Backend half of the first-time-enable disclaimer flow. The frontend (alpr-settings-onboarding-ui) shows the modal; this feature owns the recorded acknowledgement and refuses to set alpr_enabled=true without it. The disclaimer is jurisdictional because ALPR data has different legal status in different places (Illinois BIPA, EU GDPR, UK DPA, etc.) -- the user picks their jurisdiction so the ack captures their declared context for audit. Bumping the disclaimer version (a constant in code) re-prompts on next enable; prior acks are preserved as audit trail but do not satisfy the gate at the new version.",
   "acceptance_criteria": [
     "New settings keys: alpr_disclaimer_version (text), alpr_disclaimer_acked_at (timestamptz null), alpr_disclaimer_acked_jurisdiction (text null). Use existing internal/settings store.",
@@ -17,5 +18,5 @@
     "Backend tests: ack with mismatched version => 409; PUT enabled=true without ack => 412; PUT enabled=true with stale version after constant bump => 412; happy path (ack then enable) => 200; unack via setting alpr_enabled=false does NOT clear the ack (user shouldn't be re-prompted on toggle off/on within a version).",
     "alpr_audit_log records action='alpr_disclaimer_ack' with payload {jurisdiction, version} on every successful ack."
   ],
-  "notes": ""
+  "notes": "Implemented in internal/api/settings_alpr.go (POST /v1/settings/alpr/disclaimer/ack handler, audit-log emit, jurisdiction-aware GET shape, 412 envelope on PUT enable=true now uses error='alpr_disclaimer_required' + current_version when disclaimer is missing) and internal/settings/alpr.go (added KeyALPRDisclaimerAckedJurisdiction). ALPRDisclaimerCurrentVersion bumped to '2026-04-v1' and converted from const to var so tests can simulate a bump. Audit rows ('alpr_disclaimer_ack', and 'disclaimer_ack_superseded' on a version transition) use the existing InsertAudit query from alpr-schema. Wired in cmd/server/routes.go via the existing v1ConfigWrite (session-only) group."
 }
