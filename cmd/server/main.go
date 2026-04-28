@@ -54,6 +54,7 @@ func main() {
 	// across restarts. logALPRStartup emits a single info line summarising
 	// the merged settings only when ALPR is currently enabled, so the
 	// expected default (off) produces no log noise.
+	verifyALPRKeyring(cfg.ALPR)
 	seedALPRDefaults(settingsStore, cfg.ALPR)
 	logALPRStartup(settingsStore, cfg.ALPR)
 
