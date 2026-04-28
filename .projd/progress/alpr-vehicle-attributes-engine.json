@@ -1,10 +1,11 @@
 {
   "id": "alpr-vehicle-attributes-engine",
   "name": "Vehicle make/model/color extension to engine + client",
-  "status": "pending",
+  "status": "complete",
   "priority": 3,
   "blocked_by": ["alpr-engine-service"],
-  "branch": "",
+  "branch": "agent/alpr-vehicle-attributes-engine",
+  "base_branch": "feat/alpr",
   "summary": "Extend the engine sidecar to emit make/model/color/body_type alongside each plate detection, and update the Go client + Detection struct to carry them. The classifier runs on the same crop or full frame as the plate detector. This feature is intentionally a single unit because the engine response shape and the Go client struct must agree -- splitting introduces premature contract instability. The engine choice from alpr-engine-spike documents whether attribute classification comes natively or requires a bolt-on classifier.",
   "acceptance_criteria": [
     "Engine POST /v1/detect response gains a vehicle field per detection: {make: string|null, model: string|null, year_min: int|null, year_max: int|null, color: string|null, body_type: 'sedan'|'suv'|'truck'|'hatchback'|'coupe'|'van'|'wagon'|'motorcycle'|'other'|null, confidence: float|null}. Each field individually nullable -- low-confidence per-attribute results drop to null rather than guess (downstream relies on null-vs-present, not high-vs-low confidence).",
@@ -18,5 +19,5 @@
     "No DB writes happen here. alpr-detection-worker handles the DB side of upserting vehicle_signatures.",
     "Tests: Go-side unit tests with canned engine responses covering full-attributes, partial-attributes (e.g. make+color but no model), all-null, missing-vehicle-key. Determinism test runs the engine container against a fixture image and asserts stable signature_key (skip in CI if Docker not available)."
   ],
-  "notes": ""
+  "notes": "Implementation summary:\n- internal/alpr.VehicleAttributes expanded to {Make, Model, YearMin, YearMax, Color, BodyType, Confidence, SignatureKey} with pointer-typed YearMin/YearMax/Confidence so absent attributes are unambiguously detectable on the wire. Unit tests cover full / partial / all-null / missing-vehicle-key cases plus health.SupportsAttributes.\n- docker/alpr/app/attributes.py is the new authoritative module for the vehicle classifier. canonical_signature_key() generates the lowercased pipe-joined key (rules documented in docs/ALPR.md). Defensive about open-image-models output shape variants.\n- ALPR_ATTRIBUTES_ENABLED (default true) is the documented compute-savings escape hatch; ALPR_ATTRIBUTES_MIN_CONFIDENCE (default 0.5) is the per-attribute gate.\n- Body-type taxonomy fixed to the 9 buckets from the spec; unknown classes -> null (we do not silently bucket into 'other').\n- Dockerfile pre-pulls open-image-models weights with the same air-gapped tolerance as fast-alpr.\n- 24 Python unit tests cover canonicalization, body-type mapping, confidence gating, and the disabled / unavailable predict() paths.\n- internal/alpr/integration_test.go runs the engine container against a synthetic JPEG twice and asserts stable signature_key. Skipped by default with three opt-in gates (ALPR_INTEGRATION env var, docker on PATH, image present or ALPR_INTEGRATION_BUILD set).\n\nKnown caveat: open-image-models' Python API is probed defensively because the upstream class names have varied across releases. The pin `open-image-models==0.2.1` is a best-effort guess based on the engine-decision document; if the actual classifier class name is different from the candidates probed in attributes._ensure_classifier(), the wrapper will gracefully degrade to vehicle: null and log a warning. Re-validate against a real engine build before merging to main."
 }

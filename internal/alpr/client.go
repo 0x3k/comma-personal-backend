@@ -62,16 +62,57 @@ type Rect struct {
 	H float64 `json:"h"`
 }
 
-// VehicleAttributes is a forward-compatible placeholder for the second
-// stage of ALPR (make / color / body type) owned by a later feature
-// (alpr-vehicle-attributes-engine). All fields are optional so a Detection
-// observed before that feature lands carries Vehicle == nil.
+// VehicleAttributes carries the second-stage classifier output (make /
+// model / year / color / body type) emitted by the ALPR engine
+// alongside each plate detection. Owned by feature
+// alpr-vehicle-attributes-engine and consumed downstream by
+// alpr-detection-worker / alpr-encounter-aggregator.
+//
+// Every field is individually nullable on the wire -- the engine drops
+// low-confidence per-attribute predictions to null rather than emitting
+// a low-confidence guess (downstream code relies on null-vs-present,
+// not high-vs-low confidence). On the Go side this maps to:
+//
+//   - String fields (Make, Model, Color, BodyType): empty string when
+//     the engine emitted JSON null OR omitted the key. Callers should
+//     treat "" as "absent". Distinguishing "engine attempted and got
+//     null" from "engine never tried" is not useful at this layer; the
+//     supports_attributes flag on /health covers the latter.
+//   - YearMin / YearMax: *int. nil for "no prediction"; a value (even
+//     0) means the engine did predict a year range. open-image-models
+//     does not predict year today so these are nil in practice; the
+//     fields are wired so a future classifier swap does not require a
+//     contract change.
+//   - Confidence: *float64. nil if the engine did not score the
+//     attributes as a whole. open-image-models reports per-class
+//     confidence; the wrapper currently aggregates to the top-level
+//     confidence by reporting the minimum surviving per-attribute
+//     confidence (most pessimistic, matches "all attributes are at
+//     least this confident").
+//   - SignatureKey: stable, canonical string identifier for grouping
+//     detections that share vehicle attributes. The engine generates
+//     this (Python is the authoritative implementation so canonical-
+//     ization rules cannot drift between Python and Go re-derivations).
+//     Format: lowercased, pipe-separated, fixed order
+//     "make|model|color|body_type". Null fields are dropped entirely;
+//     "silver|sedan" is valid when make+model are unknown. If every
+//     attribute is null the engine emits an empty string, which the Go
+//     client surfaces unchanged.
+//
+// VehicleAttributes is always carried as *VehicleAttributes on a
+// Detection so callers can distinguish "engine omitted vehicle" (nil)
+// from "engine ran the classifier and got nothing" (non-nil with all
+// fields zero). This matters for ALPR_ATTRIBUTES_ENABLED=false, which
+// must produce nil for every detection.
 type VehicleAttributes struct {
-	Make       string  `json:"make,omitempty"`
-	Model      string  `json:"model,omitempty"`
-	Color      string  `json:"color,omitempty"`
-	BodyType   string  `json:"body_type,omitempty"`
-	Confidence float64 `json:"confidence,omitempty"`
+	Make         string   `json:"make,omitempty"`
+	Model        string   `json:"model,omitempty"`
+	YearMin      *int     `json:"year_min,omitempty"`
+	YearMax      *int     `json:"year_max,omitempty"`
+	Color        string   `json:"color,omitempty"`
+	BodyType     string   `json:"body_type,omitempty"`
+	Confidence   *float64 `json:"confidence,omitempty"`
+	SignatureKey string   `json:"signature_key,omitempty"`
 }
 
 // Detection is one plate read returned by the engine for a single frame.
