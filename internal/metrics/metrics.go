@@ -51,6 +51,10 @@ type Metrics struct {
 	turnDetectorRunsTotal    *prometheus.CounterVec
 	turnDetectorTurnsEmitted prometheus.Counter
 	turnDetectorRunSeconds   prometheus.Histogram
+
+	alprFramesExtractedTotal *prometheus.CounterVec
+	alprExtractorSegmentSecs prometheus.Histogram
+	alprExtractorQueueDepth  prometheus.Gauge
 }
 
 // New creates a Metrics backed by a fresh registry. Use NewWithRegistry to
@@ -173,6 +177,27 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 				Buckets: defaultDurationBuckets,
 			},
 		),
+
+		alprFramesExtractedTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "alpr_frames_extracted_total",
+				Help: "Total number of frames the ALPR extractor pushed onto its output channel, labeled by result (ok|error).",
+			},
+			[]string{"result"},
+		),
+		alprExtractorSegmentSecs: prometheus.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "alpr_extractor_segment_seconds",
+				Help:    "Wall-clock duration of the ALPR extractor processing a single fcamera segment end-to-end.",
+				Buckets: defaultDurationBuckets,
+			},
+		),
+		alprExtractorQueueDepth: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "alpr_extractor_queue_depth",
+				Help: "Current depth of the ALPR extractor->detector frame channel.",
+			},
+		),
 	}
 
 	reg.MustRegister(
@@ -190,6 +215,9 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 		m.turnDetectorRunsTotal,
 		m.turnDetectorTurnsEmitted,
 		m.turnDetectorRunSeconds,
+		m.alprFramesExtractedTotal,
+		m.alprExtractorSegmentSecs,
+		m.alprExtractorQueueDepth,
 	)
 
 	return m
@@ -331,4 +359,41 @@ func (m *Metrics) ObserveTurnDetectorRun(d time.Duration) {
 		return
 	}
 	m.turnDetectorRunSeconds.Observe(d.Seconds())
+}
+
+// IncALPRFrameExtracted increments the per-frame counter labeled by
+// outcome. result should be "ok" or "error" but any string is accepted.
+func (m *Metrics) IncALPRFrameExtracted(result string) {
+	if m == nil {
+		return
+	}
+	m.alprFramesExtractedTotal.WithLabelValues(result).Inc()
+}
+
+// AddALPRFramesExtracted bumps the per-frame counter by n. Useful for
+// emitting a single counter add per segment rather than once per frame
+// when the worker has tallied a batch.
+func (m *Metrics) AddALPRFramesExtracted(result string, n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.alprFramesExtractedTotal.WithLabelValues(result).Add(float64(n))
+}
+
+// ObserveALPRExtractorSegment records the wall-clock duration of a
+// single fcamera segment passing through the ALPR extractor.
+func (m *Metrics) ObserveALPRExtractorSegment(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.alprExtractorSegmentSecs.Observe(d.Seconds())
+}
+
+// SetALPRExtractorQueueDepth publishes the current depth of the
+// extractor->detector frame channel.
+func (m *Metrics) SetALPRExtractorQueueDepth(n int) {
+	if m == nil {
+		return
+	}
+	m.alprExtractorQueueDepth.Set(float64(n))
 }

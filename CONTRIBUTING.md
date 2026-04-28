@@ -60,6 +60,22 @@ All checks must pass. PRs with failing tests or lint errors will not be merged.
 - Shared components go in `web/src/components/`
 - API types and client code live in `web/src/lib/`
 
+## ALPR engine container
+
+The optional ALPR sidecar (`comma-alpr`) is excluded from CI builds by
+default because it pulls a multi-GB ML image. If you are working on
+ALPR-adjacent code and want the engine locally, build and start it
+explicitly:
+
+```bash
+make alpr-build   # first time only
+make alpr-up
+```
+
+The sidecar is gated by the `alpr` Compose profile, so bare
+`docker compose up` does not start it. See [docs/ALPR.md](docs/ALPR.md)
+for the full operator setup.
+
 ## Pull requests
 
 - Open a PR against `main`

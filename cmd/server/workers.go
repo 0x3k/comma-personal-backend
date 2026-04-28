@@ -205,4 +205,34 @@ func startWorkers(ctx context.Context, d *deps) {
 	} else {
 		log.Printf("transcoder worker: disabled via TRANSCODER_ENABLED=false")
 	}
+
+	// ALPR frame extractor: producer half of the ALPR pipeline. Always
+	// started so the runtime alpr_enabled flag controls behaviour
+	// without a process restart; the worker self-gates internally and
+	// remains effectively idle when ALPR is off (one DB read per
+	// PollInterval). The output channel is allocated here -- not in
+	// the worker -- so the future detection worker can read from the
+	// same instance via deps. Channel capacity is ALPR_EXTRACTOR_BUFFER
+	// (default 32). Concurrency is ALPR_EXTRACTOR_CONCURRENCY (default
+	// 1) but is also seeded from cfg.ALPR.ExtractorConcurrency so the
+	// existing config plumbing stays the source of truth.
+	bufCap := envInt("ALPR_EXTRACTOR_BUFFER", worker.DefaultALPRExtractorBuffer)
+	d.alprFrames = make(chan worker.ExtractedFrame, bufCap)
+	// Concurrency precedence: explicit env var > ALPRConfig (which is
+	// itself env-derived from ALPR_EXTRACTOR_CONCURRENCY) > 1.
+	alprConcurrency := 1
+	if d.cfg != nil && d.cfg.ALPR != nil && d.cfg.ALPR.ExtractorConcurrency > 0 {
+		alprConcurrency = d.cfg.ALPR.ExtractorConcurrency
+	}
+	alprConcurrency = envInt("ALPR_EXTRACTOR_CONCURRENCY", alprConcurrency)
+	defaultFPS := worker.DefaultALPRExtractorFramesPerSecond
+	if d.cfg != nil && d.cfg.ALPR != nil && d.cfg.ALPR.FramesPerSecond > 0 {
+		defaultFPS = d.cfg.ALPR.FramesPerSecond
+	}
+	extractor := worker.NewALPRExtractor(d.queries, d.store, d.settings, d.alprFrames, d.metrics)
+	extractor.Concurrency = alprConcurrency
+	extractor.DefaultFramesPerSecond = defaultFPS
+	go extractor.Run(ctx)
+	log.Printf("alpr extractor started (concurrency=%d, fps_default=%g, buffer=%d, poll=%s)",
+		alprConcurrency, defaultFPS, bufCap, extractor.PollInterval)
 }
