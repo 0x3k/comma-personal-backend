@@ -1,10 +1,11 @@
 {
   "id": "alpr-vehicle-signature-schema",
   "name": "Vehicle signature schema (make/model/color/body type)",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 2,
   "blocked_by": ["alpr-schema"],
-  "branch": "",
+  "branch": "agent/alpr-vehicle-signature-schema",
+  "base_branch": "feat/alpr",
   "summary": "Schema for vehicle make/model/color/body-type signatures. Stored separately from plate detections so a single physical vehicle (one signature) can be linked to multiple plates over time -- this is what enables plate-swap detection in alpr-signature-fusion-heuristic. plate_detections gets denormalized columns plus a signature_id FK; plate_encounters gets a signature_id FK so encounters carry a single canonical signature derived from the mode of their detections. Adds a small follow-up migration on top of alpr-schema.",
   "acceptance_criteria": [
     "New migration sql/migrations/NNNN_alpr_vehicle_signatures.up.sql + .down.sql, sequenced after the alpr-schema migration.",
