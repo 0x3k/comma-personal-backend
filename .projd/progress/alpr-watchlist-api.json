@@ -1,7 +1,7 @@
 {
   "id": "alpr-watchlist-api",
   "name": "REST endpoints: alerts feed + ack + whitelist + summary",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 5,
   "blocked_by": ["alpr-stalking-heuristic"],
   "branch": "agent/alpr-watchlist-api",
