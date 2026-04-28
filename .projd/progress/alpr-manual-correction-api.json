@@ -1,7 +1,7 @@
 {
   "id": "alpr-manual-correction-api",
   "name": "Manual OCR correction + plate-hash merge endpoints",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 7,
   "blocked_by": ["alpr-watchlist-api"],
   "branch": "agent/alpr-manual-correction-api",
