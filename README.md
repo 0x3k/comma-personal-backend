@@ -268,6 +268,8 @@ The ALPR feature is off by default and must be enabled per [docs/ALPR.md](docs/A
 | GET | `/v1/settings/alpr` | session-or-JWT | Read effective ALPR settings (merged env defaults + DB overrides), engine reachability, encryption-key configured flag, current disclaimer version (`2026-04-v1`), and whether re-ack is required |
 | PUT | `/v1/settings/alpr` | session | Update runtime overrides (`alpr_enabled`, region, fps, confidence, retention, notify severity). Enabling requires both `ALPR_ENCRYPTION_KEY` set and the current disclaimer acked; `409` otherwise |
 | POST | `/v1/settings/alpr/disclaimer/ack` | session | Acknowledge the current disclaimer (`version` must equal `2026-04-v1`); records the ack timestamp and selected jurisdiction |
+| GET | `/v1/routes/:dongle_id/:route_name/plates` | session-or-JWT | Per-route plate encounters (decrypted server-side). Returns `503 alpr_disabled` when `alpr_enabled=false` so the frontend can render a "feature disabled" state. Includes per-encounter signature, watchlist (severity / ack) state, first-bbox, and a `sample_thumb_url` placeholder pointing at `/v1/alpr/detections/:id/thumbnail` (handler is a follow-up; the path is stable) |
+| GET | `/v1/plates/:hash_b64` | session | Cross-route history for a single plate hash (URL-safe base64, no padding). Returns watchlist state, dominant vehicle signature, paginated `encounters[]` (`?limit=`, `?offset=`; default 50, max 200), and a `stats` envelope (`distinct_routes_30d`, `total_detections`, etc.). 404 when no encounters exist for the hash; `503 alpr_disabled` when ALPR is off |
 
 #### Planned (not yet implemented)
 
@@ -277,8 +279,6 @@ table reflects the eventual surface; they will be filled in as their
 implementation features land:
 
 - `GET /v1/routes/:dongle_id/:route_name/turns` -- per-route turn-signal events used by the stalking heuristic
-- `GET /v1/routes/:dongle_id/:route_name/plates` -- per-route plate detections (decrypted server-side)
-- `GET /v1/plates/:hash` -- detail view for a single plate (encounters, alerts)
 - `GET`, `POST /v1/alpr/alerts` -- list and create alert events
 - `POST /v1/alpr/alerts/:hash/ack`, `unack`, `note` -- alert workflow
 - `GET`, `POST`, `DELETE /v1/alpr/whitelist` -- whitelist management
