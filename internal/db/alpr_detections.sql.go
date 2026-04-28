@@ -11,6 +11,31 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bulkUpdateDetectionsHashOnly = `-- name: BulkUpdateDetectionsHashOnly :execrows
+UPDATE plate_detections
+SET plate_hash = $1
+WHERE plate_hash = $2
+`
+
+type BulkUpdateDetectionsHashOnlyParams struct {
+	NewPlateHash []byte `json:"newPlateHash"`
+	OldPlateHash []byte `json:"oldPlateHash"`
+}
+
+// Plate-hash merge path: rewrite plate_hash on every detection that
+// currently points at the source hash, WITHOUT touching plate_ciphertext.
+// Each merged detection keeps its own per-row ciphertext so the original
+// OCR text remains decryptable for that frame -- only the cross-route
+// identity changes. Returns the number of rows rewritten so the merge
+// handler can compute "neither hash had any rows" and 404 the caller.
+func (q *Queries) BulkUpdateDetectionsHashOnly(ctx context.Context, arg BulkUpdateDetectionsHashOnlyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bulkUpdateDetectionsHashOnly, arg.NewPlateHash, arg.OldPlateHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const countDetectionsBySignatureForPlate = `-- name: CountDetectionsBySignatureForPlate :many
 SELECT signature_id,
        COUNT(*)::BIGINT AS detection_count
@@ -122,6 +147,101 @@ func (q *Queries) DeleteDetectionsOlderThanForUnflagged(ctx context.Context, fra
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const distinctRoutesForPlateHash = `-- name: DistinctRoutesForPlateHash :many
+SELECT DISTINCT dongle_id, route
+FROM plate_detections
+WHERE plate_hash = $1
+ORDER BY dongle_id ASC, route ASC
+`
+
+type DistinctRoutesForPlateHashRow struct {
+	DongleID string `json:"dongleId"`
+	Route    string `json:"route"`
+}
+
+// All (dongle_id, route) pairs that have at least one detection for the
+// given plate_hash. Used by the manual-correction + plate-merge handlers
+// to compute the set of routes whose encounter aggregation must be
+// re-run after a plate identity change. Ordered for deterministic
+// enqueue order so the audit log and tests can compare slices.
+func (q *Queries) DistinctRoutesForPlateHash(ctx context.Context, plateHash []byte) ([]DistinctRoutesForPlateHashRow, error) {
+	rows, err := q.db.Query(ctx, distinctRoutesForPlateHash, plateHash)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DistinctRoutesForPlateHashRow
+	for rows.Next() {
+		var i DistinctRoutesForPlateHashRow
+		if err := rows.Scan(&i.DongleID, &i.Route); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getDetectionByID = `-- name: GetDetectionByID :one
+SELECT id, dongle_id, route, segment, frame_offset_ms,
+       plate_ciphertext, plate_hash, bbox, confidence, ocr_corrected,
+       gps_lat, gps_lng, gps_heading_deg, frame_ts, thumb_path,
+       created_at, signature_id
+FROM plate_detections
+WHERE id = $1
+`
+
+type GetDetectionByIDRow struct {
+	ID              int64              `json:"id"`
+	DongleID        string             `json:"dongleId"`
+	Route           string             `json:"route"`
+	Segment         int32              `json:"segment"`
+	FrameOffsetMs   int32              `json:"frameOffsetMs"`
+	PlateCiphertext []byte             `json:"plateCiphertext"`
+	PlateHash       []byte             `json:"plateHash"`
+	Bbox            []byte             `json:"bbox"`
+	Confidence      float32            `json:"confidence"`
+	OcrCorrected    bool               `json:"ocrCorrected"`
+	GpsLat          pgtype.Float8      `json:"gpsLat"`
+	GpsLng          pgtype.Float8      `json:"gpsLng"`
+	GpsHeadingDeg   pgtype.Float4      `json:"gpsHeadingDeg"`
+	FrameTs         pgtype.Timestamptz `json:"frameTs"`
+	ThumbPath       pgtype.Text        `json:"thumbPath"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	SignatureID     pgtype.Int8        `json:"signatureId"`
+}
+
+// Single detection lookup by primary key. Used by the manual-correction
+// handler to load the dongle_id (for cross-device authorization) and the
+// existing plate_hash (for the audit log "before" value) before applying
+// the edit. pgx.ErrNoRows when the id does not exist.
+func (q *Queries) GetDetectionByID(ctx context.Context, id int64) (GetDetectionByIDRow, error) {
+	row := q.db.QueryRow(ctx, getDetectionByID, id)
+	var i GetDetectionByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.DongleID,
+		&i.Route,
+		&i.Segment,
+		&i.FrameOffsetMs,
+		&i.PlateCiphertext,
+		&i.PlateHash,
+		&i.Bbox,
+		&i.Confidence,
+		&i.OcrCorrected,
+		&i.GpsLat,
+		&i.GpsLng,
+		&i.GpsHeadingDeg,
+		&i.FrameTs,
+		&i.ThumbPath,
+		&i.CreatedAt,
+		&i.SignatureID,
+	)
+	return i, err
 }
 
 const insertDetection = `-- name: InsertDetection :one
