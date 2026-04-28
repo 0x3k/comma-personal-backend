@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"comma-personal-backend/internal/api"
@@ -255,9 +256,18 @@ func startWorkers(ctx context.Context, d *deps) {
 	}
 	detectorConcurrency = envInt("ALPR_DETECTOR_CONCURRENCY", detectorConcurrency)
 
+	// ALPR_DETECT_TIMEOUT accepts a Go duration string ("5s", "500ms",
+	// "1m") OR a bare integer (interpreted as seconds for backwards
+	// convenience). Empty falls back to DefaultALPRDetectTimeout.
 	detectTimeout := worker.DefaultALPRDetectTimeout
-	if v := envInt("ALPR_DETECT_TIMEOUT_MS", 0); v > 0 {
-		detectTimeout = time.Duration(v) * time.Millisecond
+	if raw := strings.TrimSpace(os.Getenv("ALPR_DETECT_TIMEOUT")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			detectTimeout = d
+		} else if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			detectTimeout = time.Duration(n) * time.Second
+		} else {
+			log.Printf("warning: ALPR_DETECT_TIMEOUT=%q is not a valid duration; using default %s", raw, detectTimeout)
+		}
 	}
 
 	defaultConfMin := worker.DefaultALPRConfidenceMin

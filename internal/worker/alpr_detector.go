@@ -68,7 +68,6 @@
 package worker
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -110,17 +109,6 @@ const (
 	// config.alprDefaults.ConfidenceMin so seeded and unseeded
 	// behaviour agree.
 	DefaultALPRConfidenceMin = 0.75
-
-	// alprDetectorWorkerName is the metrics label for ObserveWorkerRun
-	// over the worker's main per-frame loop.
-	alprDetectorWorkerName = "alpr_detector"
-
-	// alprToggleCheckInterval is how often the worker re-reads the
-	// alpr_enabled flag while frames are flowing. We don't poll
-	// faster than this even on a busy stream so the settings table
-	// isn't hammered. ~30s matches the extractor's responsiveness
-	// budget.
-	alprToggleCheckInterval = 30 * time.Second
 
 	// alprNearestVertexMaxDelta is the maximum distance, in
 	// milliseconds, from a frame's timestamp to the nearest geometry
@@ -463,18 +451,11 @@ func (w *ALPRDetector) drainAndDiscard(ctx context.Context) {
 	}
 }
 
-// queueDepth returns the input channel's instantaneous length. len(chan)
-// is safe across goroutines and matches the Prometheus gauge contract
+// queueDepth returns the input channel's instantaneous length. len()
+// is defined for receive-only directional channels and is safe to call
+// across goroutines, matching the Prometheus gauge contract
 // (sample-style, no rate semantics).
 func (w *ALPRDetector) queueDepth() int {
-	// Indirect through a typed assertion so a chan-readonly source
-	// (which the field declares for safety) still works for len().
-	type lenner interface {
-		Len() int
-	}
-	_ = lenner(nil)
-	// In Go, len() on a receive-only chan is allowed for a directional
-	// channel value, so we can call it directly.
 	return len(w.Frames)
 }
 
@@ -507,7 +488,7 @@ func (w *ALPRDetector) processFrame(ctx context.Context, frame ExtractedFrame, t
 		// progress -- absent dispatch we'd repeatedly re-process
 		// segments that have no detectable plates.
 		w.metricsIncProcessed("empty")
-		w.markSegmentAndMaybeEmit(ctx, frame, 0)
+		w.markSegmentAndMaybeEmit(ctx, frame)
 		return
 	}
 
@@ -524,7 +505,7 @@ func (w *ALPRDetector) processFrame(ctx context.Context, frame ExtractedFrame, t
 		// against a missing route -- if the metadata worker fills
 		// in geometry later, the next route will pick up.
 		w.metricsIncProcessed("dropped_no_gps")
-		w.markSegmentAndMaybeEmit(ctx, frame, 0)
+		w.markSegmentAndMaybeEmit(ctx, frame)
 		return
 	}
 
@@ -539,7 +520,6 @@ func (w *ALPRDetector) processFrame(ctx context.Context, frame ExtractedFrame, t
 	routeRelMs := frameTsMs - geom.startTime.UnixMilli()
 
 	storedAny := false
-	storedCount := 0
 	for _, det := range detections {
 		if float64(det.Confidence) < confMin {
 			continue
@@ -560,22 +540,19 @@ func (w *ALPRDetector) processFrame(ctx context.Context, frame ExtractedFrame, t
 			continue
 		}
 		storedAny = true
-		storedCount++
 		if w.Metrics != nil {
 			w.Metrics.IncALPRDetection()
 		}
 	}
 	if storedAny {
 		w.metricsIncProcessed("detected")
-	} else {
+	} else if len(detections) > 0 {
 		// All detections were filtered out (low confidence or
 		// no-GPS). Either path is "no rows persisted" -- the
 		// segment still progressed.
-		if len(detections) > 0 {
-			w.metricsIncProcessed("empty")
-		}
+		w.metricsIncProcessed("empty")
 	}
-	w.markSegmentAndMaybeEmit(ctx, frame, storedCount)
+	w.markSegmentAndMaybeEmit(ctx, frame)
 }
 
 // callEngine is the Detector.Detect wrapper that:
@@ -862,12 +839,11 @@ func (w *ALPRDetector) persistDetection(
 // once-per-route so duplicates are impossible even if the worker is
 // restarted and re-marks an already-processed segment.
 //
-// totalDetectionsThisFrame is the number of plate_detections rows
-// just persisted for this single frame. It is summed across the
-// route's segments by re-counting from the database when we believe
-// the route is complete (cheaper and authoritative compared to
-// holding a per-route counter in memory across worker restarts).
-func (w *ALPRDetector) markSegmentAndMaybeEmit(ctx context.Context, frame ExtractedFrame, _ int) {
+// The total-detections count on the emitted event is computed from the
+// database at completion time so a process restart still produces an
+// accurate count when the final segment is the one that committed the
+// last detections.
+func (w *ALPRDetector) markSegmentAndMaybeEmit(ctx context.Context, frame ExtractedFrame) {
 	if w.Queries == nil {
 		return
 	}
@@ -1121,15 +1097,3 @@ func optFloat4(v *float64) pgtype.Float4 {
 	}
 	return pgtype.Float4{Float32: float32(*v), Valid: true}
 }
-
-// alprDetectorBytesEqual is a tiny helper used by tests in this
-// package; it lives here (not in the test file) so it can be referenced
-// from a future package_test fixture without duplication. Returns
-// bytes.Equal which the linter would otherwise flag as a missing
-// import in lint_test.
-//
-// Currently unused outside tests; kept package-private so the lint
-// guard does not flip it to a cross-package dependency.
-//
-//nolint:unused // referenced by future test additions
-var alprDetectorBytesEqual = bytes.Equal

@@ -1,7 +1,7 @@
 {
   "id": "alpr-detection-worker",
   "name": "ALPR detection worker (engine call + GPS join + DB write)",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 3,
   "blocked_by": ["alpr-frame-extractor", "alpr-vehicle-signature-schema", "alpr-encryption-at-rest"],
   "branch": "agent/alpr-detection-worker",
