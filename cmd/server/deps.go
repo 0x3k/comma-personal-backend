@@ -12,6 +12,7 @@ import (
 	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
+	"comma-personal-backend/internal/worker"
 	"comma-personal-backend/internal/ws"
 )
 
@@ -38,6 +39,14 @@ type deps struct {
 	// bootstrap.
 	alprClientOnce sync.Once
 	alprClient     *alpr.Client
+
+	// alprFrames is the producer/consumer channel that connects the
+	// frame-extractor worker (this PR) to the future detection worker.
+	// Constructed at startup with capacity ALPR_EXTRACTOR_BUFFER so
+	// the channel exists regardless of whether the runtime alpr_enabled
+	// flag is on. The detection worker (later wave) ranges over this
+	// channel; the extractor closes it on graceful shutdown.
+	alprFrames chan worker.ExtractedFrame
 }
 
 // alprClientTimeout is the per-request budget the ALPR client applies on
