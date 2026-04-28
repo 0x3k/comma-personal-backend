@@ -284,6 +284,22 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	v1AlprSession := e.Group("/v1", sessionOnly, alprWatchlistHandler.RequireEnabled())
 	alprWatchlistHandler.RegisterRoutes(v1AlprSession)
 
+	// ALPR manual-correction + plate-merge endpoints. Session-only --
+	// rewriting plate identity is an operator action; a device JWT
+	// must never trigger one. Mounted on the same v1AlprSession group
+	// so it inherits the requireAlprEnabled gate. The handler runs each
+	// mutation inside a transaction and enqueues a re-trigger event on
+	// d.alprDetectionsComplete after commit so the existing aggregator
+	// + heuristic pipeline picks up the change without inline blocking.
+	alprCorrectionsHandler := api.NewALPRCorrectionsHandler(
+		api.WrapPgxQueriesForCorrections(d.queries),
+		d.pool,
+		d.settings,
+		d.alprKeyring,
+		d.alprDetectionsComplete,
+	)
+	alprCorrectionsHandler.RegisterRoutes(v1AlprSession)
+
 	// Per-device trip stats live at /v1/devices/:dongle_id/stats, so they
 	// accept either a session cookie or a device JWT via the shared read group.
 	tripHandler.RegisterStatsRoute(v1ConfigRead)
