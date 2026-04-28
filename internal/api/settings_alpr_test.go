@@ -32,12 +32,17 @@ func alprValidKeyB64() string {
 
 // alprFakeQuerier is a multi-key in-memory stub for the settings.Querier
 // interface. The retention test fake only stored a single key/value; the
-// ALPR handler reads and writes several rows per request.
+// ALPR handler reads and writes several rows per request. It also
+// implements the alprAuditQuerier surface (InsertAudit) so the same fake
+// can stand in for the audit-log dependency without an extra struct.
 type alprFakeQuerier struct {
 	rows      map[string]string
 	getErr    error
 	upsertErr error
 	insertErr error
+	audit     []db.AlprAuditLog
+	auditErr  error
+	auditNext int64
 }
 
 func newALPRFakeQuerier() *alprFakeQuerier {
@@ -81,17 +86,34 @@ func (f *alprFakeQuerier) InsertSettingIfMissing(_ context.Context, arg db.Inser
 	return nil
 }
 
+func (f *alprFakeQuerier) InsertAudit(_ context.Context, arg db.InsertAuditParams) (db.AlprAuditLog, error) {
+	if f.auditErr != nil {
+		return db.AlprAuditLog{}, f.auditErr
+	}
+	f.auditNext++
+	row := db.AlprAuditLog{
+		ID:        f.auditNext,
+		Action:    arg.Action,
+		Actor:     arg.Actor,
+		Payload:   arg.Payload,
+		CreatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}
+	f.audit = append(f.audit, row)
+	return row, nil
+}
+
 // newALPRTestHandler builds an ALPRSettingsHandler against a fresh in-memory
 // fake querier and the supplied env-derived config. The optional rows map
 // pre-populates the settings table for the test (e.g. simulating a prior
-// disclaimer ack).
+// disclaimer ack). The fake querier is reused as the audit-log backend so
+// tests can assert on f.audit after calling the handler.
 func newALPRTestHandler(t *testing.T, cfg *config.ALPRConfig, rows map[string]string) (*ALPRSettingsHandler, *alprFakeQuerier) {
 	t.Helper()
 	q := newALPRFakeQuerier()
 	for k, v := range rows {
 		q.rows[k] = v
 	}
-	h := NewALPRSettingsHandler(settings.New(q), cfg)
+	h := NewALPRSettingsHandler(settings.New(q), cfg, q)
 	return h, q
 }
 

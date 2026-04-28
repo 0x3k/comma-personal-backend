@@ -223,7 +223,7 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	// ride sessionOrJWT because devices can ask "is ALPR enabled?";
 	// mutations are session-only because a compromised device must never
 	// be able to enable plate recording on itself.
-	alprSettingsHandler := api.NewALPRSettingsHandler(d.settings, d.cfg.ALPR)
+	alprSettingsHandler := api.NewALPRSettingsHandler(d.settings, d.cfg.ALPR, d.queries)
 	alprSettingsHandler.RegisterReadRoutes(v1ConfigRead)
 	alprSettingsHandler.RegisterMutationRoutes(v1ConfigWrite)
 
