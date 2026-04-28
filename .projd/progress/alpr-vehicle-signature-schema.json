@@ -1,7 +1,7 @@
 {
   "id": "alpr-vehicle-signature-schema",
   "name": "Vehicle signature schema (make/model/color/body type)",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 2,
   "blocked_by": ["alpr-schema"],
   "branch": "agent/alpr-vehicle-signature-schema",
