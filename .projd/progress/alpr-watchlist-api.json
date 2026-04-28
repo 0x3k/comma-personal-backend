@@ -1,10 +1,11 @@
 {
   "id": "alpr-watchlist-api",
   "name": "REST endpoints: alerts feed + ack + whitelist + summary",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 5,
   "blocked_by": ["alpr-stalking-heuristic"],
-  "branch": "",
+  "branch": "agent/alpr-watchlist-api",
+  "base_branch": "feat/alpr",
   "summary": "REST endpoints for the alert center and whitelist management. Powers the alert feed UI, ack flow, and the user's ability to whitelist plates they recognize as harmless (own car, family, neighbor). Includes a cheap summary endpoint for the dashboard badge that returns just the open-count + max severity. All endpoints session-only -- alerts are user-curated state and the device has no business querying them. Every mutation writes an alpr_audit_log row for user accountability.",
   "acceptance_criteria": [
     "GET /v1/alpr/alerts (session-only, requireAlprEnabled): paginated alert feed. Default sort: last_alert_at DESC. Filters: ?severity=N (multi via comma), ?status=open|acked|all (default open), ?dongle_id=. Pagination ?limit=&offset=, default 25, max 100. Each item: {plate_hash_b64, plate, signature: {...}|null, severity, kind: 'alerted'|'plate_swap', first_alert_at, last_alert_at, acked_at, encounter_count, latest_route: {dongle_id, route, started_at, address_label}, evidence_summary: 'string'}.",
