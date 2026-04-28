@@ -1,10 +1,11 @@
 {
   "id": "alpr-notification-channels",
   "name": "Email + webhook notifications for high-severity alerts",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 7,
   "blocked_by": ["alpr-stalking-heuristic"],
-  "branch": "",
+  "branch": "agent/alpr-notification-channels",
+  "base_branch": "feat/alpr",
   "summary": "When a stalking alert triggers above a configured severity, optionally notify the user out-of-band via email (SMTP) or generic webhook. Per the threat model: if someone is following you across trips, you might not be reading the dashboard daily. Intentionally lightweight and ALPR-scoped -- a project-wide notifications system is out of scope for this round. Per-plate de-duplication so a single ongoing situation doesn't spam.",
   "acceptance_criteria": [
     "New env vars: ALPR_NOTIFY_EMAIL_TO, ALPR_NOTIFY_SMTP_HOST, ALPR_NOTIFY_SMTP_PORT (default 587), ALPR_NOTIFY_SMTP_USER, ALPR_NOTIFY_SMTP_PASS, ALPR_NOTIFY_SMTP_FROM, ALPR_NOTIFY_SMTP_TLS (default starttls; allow plain or implicit), ALPR_NOTIFY_WEBHOOK_URL, ALPR_NOTIFY_MIN_SEVERITY (default 4), ALPR_NOTIFY_DEDUP_HOURS (default 12), ALPR_DASHBOARD_URL (base URL to construct deep links into the user's deployment).",
