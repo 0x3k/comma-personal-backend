@@ -1,10 +1,11 @@
 {
   "id": "alpr-settings-onboarding-ui",
   "name": "Settings: Optional services -> ALPR card (the on-ramp)",
-  "status": "pending",
+  "status": "complete",
   "priority": 6,
   "blocked_by": ["alpr-watchlist-api", "alpr-disclaimer-gate"],
-  "branch": "",
+  "branch": "agent/alpr-settings-onboarding-ui",
+  "base_branch": "feat/alpr",
   "summary": "The opt-in surface. Settings page gains an 'Optional services' section with an ALPR card -- toggle, disclaimer modal, engine reachability indicator, copy-paste deploy command, and (when running) live status (queue depth, last detection). This is the path the user walks to enable the feature. Goal is 'as simple as the postgres container': they flip a toggle, ack a modal, run one command if the sidecar isn't up, and they're done. Modeled on the existing storage-settings-ui pattern -- check that file for layout conventions.",
   "acceptance_criteria": [
     "New section in web/src/app/settings (matches existing settings layout) titled 'Optional services'. ALPR card is the first (and currently only) card.",
@@ -19,5 +20,5 @@
     "Tests: each of the 4 states render correctly given mocked /v1/settings/alpr responses; ack + enable flow end-to-end with msw; encryption-key-missing path; jurisdiction selection persisted to ack body.",
     "Lint, type-check pass. Manual verification: walk through enable from cold-start, ack disclaimer, see engine-offline state, run make alpr-up in a terminal, watch state transition to engine-online within 10 s."
   ],
-  "notes": ""
+  "notes": "Implemented as web/src/components/alpr/AlprSettingsCard.tsx and wired into web/src/app/settings/page.tsx. Tests at web/src/components/alpr/AlprSettingsCard.test.tsx cover all 4 states, ack+enable flow with jurisdiction persistence, and encryption-key-missing path. Lint, type-check, and full vitest suite (23 tests) pass; smoke is green."
 }

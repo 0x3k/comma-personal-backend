@@ -1,10 +1,11 @@
 {
   "id": "alpr-dashboard-alert-badge",
   "name": "Dashboard alert badge + recent-alerts widget",
-  "status": "pending",
+  "status": "complete",
   "priority": 7,
   "blocked_by": ["alpr-watchlist-api"],
-  "branch": "",
+  "branch": "agent/alpr-dashboard-alert-badge",
+  "base_branch": "feat/alpr",
   "summary": "Make new alerts impossible to miss. The dashboard home page (web/src/app/page.tsx) gets a prominent badge showing open-alert count + worst severity, plus a small 'Recent alerts' widget that links into the alert feed. Hidden entirely when ALPR is disabled OR there are zero open alerts (no zero-state pill -- visual noise is worse than absence here).",
   "acceptance_criteria": [
     "Home page integration: import useAlprSettings(); when disabled, render nothing ALPR-related. When enabled, fetch /v1/alpr/alerts/summary on mount + every 60 s while the document.visibilityState === 'visible' (visibility API check; pause polling when tab hidden to avoid waste).",
