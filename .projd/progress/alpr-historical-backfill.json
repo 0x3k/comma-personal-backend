@@ -1,7 +1,7 @@
 {
   "id": "alpr-historical-backfill",
   "name": "Opt-in resumable ALPR backfill of existing routes",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 8,
   "blocked_by": ["alpr-encounter-aggregator"],
   "branch": "agent/alpr-historical-backfill",
@@ -22,5 +22,5 @@
     "Tests: start -> running -> done state transitions; pause + resume preserves last_processed_route; cancel sets failed; restart-resume from a 'running' row picks up correctly; throttling keeps engine queue under budget (verified by counting frames-per-second pushed to the channel); idempotent re-run produces no duplicate detections; second start while running returns 409.",
     "When alpr_enabled flips to false during backfill: the job pauses (state -> 'paused'), preserving last_processed_route. When the user re-enables, they can resume from the same point."
   ],
-  "notes": ""
+  "notes": "Implemented in agent/alpr-historical-backfill. Schema migration 017, sqlc queries in alpr_backfill_jobs.sql, API handler in internal/api/alpr_backfill.go, worker in internal/worker/alpr_backfill.go, server wiring in cmd/server/{routes,workers,deps}.go. Settings UI integration deferred to alpr-settings-onboarding-ui per the spec note."
 }
