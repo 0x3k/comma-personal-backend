@@ -228,6 +228,25 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	alprSettingsHandler.RegisterReadRoutes(v1ConfigRead)
 	alprSettingsHandler.RegisterMutationRoutes(v1ConfigWrite)
 
+	// ALPR encounters / plate-detail read endpoints. Routes register
+	// regardless of the runtime alpr_enabled flag so the frontend can
+	// render a clean "feature disabled" state from a 503 response
+	// instead of crashing on a 404. The requireAlprEnabled middleware
+	// short-circuits each request when the flag is off (or the
+	// keyring is unconfigured), and the handler decrypts plate text
+	// only after auth has succeeded.
+	//
+	// /v1/routes/:dongle/:route/plates is sessionOrJWT (the device-
+	// facing /upload paths already trust the dongle's own JWT for
+	// reads of its own state). /v1/plates/:hash_b64 is session-only
+	// because a device should never be able to query plate history
+	// across the entire fleet.
+	alprEncountersHandler := api.NewALPREncountersHandler(d.queries, d.settings, d.alprKeyring)
+	v1RoutesAlpr := e.Group("/v1/routes", sessionOrJWT, alprEncountersHandler.RequireEnabled())
+	alprEncountersHandler.RegisterRouteEncounters(v1RoutesAlpr)
+	v1Plates := e.Group("/v1/plates", sessionOnly, alprEncountersHandler.RequireEnabled())
+	alprEncountersHandler.RegisterPlateDetail(v1Plates)
+
 	// Per-device trip stats live at /v1/devices/:dongle_id/stats, so they
 	// accept either a session cookie or a device JWT via the shared read group.
 	tripHandler.RegisterStatsRoute(v1ConfigRead)
