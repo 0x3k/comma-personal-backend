@@ -6,6 +6,7 @@ import (
 	"log"
 	"strconv"
 
+	alprcrypto "comma-personal-backend/internal/alpr/crypto"
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/settings"
 )
@@ -41,6 +42,39 @@ func seedALPRDefaults(store *settings.Store, cfg *config.ALPRConfig) {
 	}
 	if err := store.SeedIntIfMissing(ctx, settings.KeyALPRNotifyMinSeverity, cfg.NotifyMinSeverity); err != nil {
 		log.Printf("warning: failed to seed alpr_notify_min_severity setting: %v", err)
+	}
+}
+
+// checkALPRKeyring inspects ALPR_ENCRYPTION_KEY (carried on cfg) and
+// returns an error if the key is set but the keyring cannot be loaded
+// or fails a round-trip self-check.
+//
+// If ALPR_ENCRYPTION_KEY is unset (the common case for users not opting
+// in to ALPR) this is a silent no-op so disabled installs never see a
+// startup error. The malformed-but-set case is already warned about by
+// config.LoadALPR (which logs but does not abort); this function escalates
+// it to a fatal at the call site because the operator has clearly opted
+// in but the configuration is unusable -- failing fast is friendlier
+// than corrupting data with ciphertext nothing can ever decrypt.
+//
+// Split out from verifyALPRKeyring so the error path is unit-testable
+// without invoking os.Exit via log.Fatalf.
+func checkALPRKeyring(cfg *config.ALPRConfig) error {
+	if cfg == nil || cfg.EncryptionKeyB64 == "" {
+		return nil
+	}
+	k, err := alprcrypto.LoadKeyring(cfg.EncryptionKeyB64)
+	if err != nil {
+		return err
+	}
+	return alprcrypto.VerifyRoundtrip(k)
+}
+
+// verifyALPRKeyring runs at startup, before any handler or worker reads
+// or writes plate ciphertext. Aborts the process on any error.
+func verifyALPRKeyring(cfg *config.ALPRConfig) {
+	if err := checkALPRKeyring(cfg); err != nil {
+		log.Fatalf("ALPR_ENCRYPTION_KEY self-check failed: %v", err)
 	}
 }
 
