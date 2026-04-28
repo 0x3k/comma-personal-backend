@@ -12,7 +12,7 @@ import (
 )
 
 const countTurnsForRoute = `-- name: CountTurnsForRoute :one
-SELECT COUNT(*) AS turn_count
+SELECT COUNT(*)::BIGINT
 FROM route_turns
 WHERE dongle_id = $1 AND route = $2
 `
@@ -22,15 +22,19 @@ type CountTurnsForRouteParams struct {
 	Route    string `json:"route"`
 }
 
+// Total number of turns recorded for a route. Used by the turn detector
+// worker's idempotency tests to verify re-runs do not double up rows,
+// and by future analytics that want a per-route turn count without
+// listing every row.
 func (q *Queries) CountTurnsForRoute(ctx context.Context, arg CountTurnsForRouteParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countTurnsForRoute, arg.DongleID, arg.Route)
-	var turn_count int64
-	err := row.Scan(&turn_count)
-	return turn_count, err
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const countTurnsInWindow = `-- name: CountTurnsInWindow :one
-SELECT COUNT(*) AS turn_count
+SELECT COUNT(*)::BIGINT
 FROM route_turns
 WHERE dongle_id = $1
   AND route     = $2
@@ -39,25 +43,29 @@ WHERE dongle_id = $1
 `
 
 type CountTurnsInWindowParams struct {
-	DongleID string             `json:"dongleId"`
-	Route    string             `json:"route"`
-	TurnTs   pgtype.Timestamptz `json:"turnTs"`
-	TurnTs_2 pgtype.Timestamptz `json:"turnTs2"`
+	DongleID    string             `json:"dongleId"`
+	Route       string             `json:"route"`
+	WindowStart pgtype.Timestamptz `json:"windowStart"`
+	WindowEnd   pgtype.Timestamptz `json:"windowEnd"`
 }
 
+// Number of turns on a route that fall inside an inclusive time window.
+// Backs the stalking heuristic's "did the suspect plate take the same
+// N turns we did" check without forcing the heuristic to load every
+// turn for every encounter.
 func (q *Queries) CountTurnsInWindow(ctx context.Context, arg CountTurnsInWindowParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countTurnsInWindow,
 		arg.DongleID,
 		arg.Route,
-		arg.TurnTs,
-		arg.TurnTs_2,
+		arg.WindowStart,
+		arg.WindowEnd,
 	)
-	var turn_count int64
-	err := row.Scan(&turn_count)
-	return turn_count, err
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
-const deleteTurnsForRoute = `-- name: DeleteTurnsForRoute :exec
+const deleteTurnsForRoute = `-- name: DeleteTurnsForRoute :execrows
 DELETE FROM route_turns
 WHERE dongle_id = $1 AND route = $2
 `
@@ -67,12 +75,18 @@ type DeleteTurnsForRouteParams struct {
 	Route    string `json:"route"`
 }
 
-func (q *Queries) DeleteTurnsForRoute(ctx context.Context, arg DeleteTurnsForRouteParams) error {
-	_, err := q.db.Exec(ctx, deleteTurnsForRoute, arg.DongleID, arg.Route)
-	return err
+// Wipe the route_turns rows for one route. The turn detector calls this
+// before re-running over a route so the new pass starts from a clean
+// slate. Returns the number of rows deleted.
+func (q *Queries) DeleteTurnsForRoute(ctx context.Context, arg DeleteTurnsForRouteParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteTurnsForRoute, arg.DongleID, arg.Route)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const insertTurn = `-- name: InsertTurn :exec
+const insertTurns = `-- name: InsertTurns :execrows
 INSERT INTO route_turns (
     dongle_id,
     route,
@@ -83,26 +97,48 @@ INSERT INTO route_turns (
     delta_deg,
     gps_lat,
     gps_lng
-) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
 )
+SELECT $1::TEXT,
+       $2::TEXT,
+       ts.v,
+       off.v,
+       bb.v,
+       ba.v,
+       d.v,
+       lat.v,
+       lng.v
+FROM UNNEST($3::TIMESTAMPTZ[])           WITH ORDINALITY AS ts(v, idx)
+JOIN UNNEST($4::INT[])            WITH ORDINALITY AS off(v, idx) USING (idx)
+JOIN UNNEST($5::REAL[])       WITH ORDINALITY AS bb(v, idx)  USING (idx)
+JOIN UNNEST($6::REAL[])        WITH ORDINALITY AS ba(v, idx)  USING (idx)
+JOIN UNNEST($7::REAL[])                WITH ORDINALITY AS d(v, idx)   USING (idx)
+JOIN UNNEST($8::DOUBLE PRECISION[])      WITH ORDINALITY AS lat(v, idx) USING (idx)
+JOIN UNNEST($9::DOUBLE PRECISION[])      WITH ORDINALITY AS lng(v, idx) USING (idx)
 ON CONFLICT (dongle_id, route, turn_offset_ms) DO NOTHING
 `
 
-type InsertTurnParams struct {
-	DongleID         string             `json:"dongleId"`
-	Route            string             `json:"route"`
-	TurnTs           pgtype.Timestamptz `json:"turnTs"`
-	TurnOffsetMs     int32              `json:"turnOffsetMs"`
-	BearingBeforeDeg float32            `json:"bearingBeforeDeg"`
-	BearingAfterDeg  float32            `json:"bearingAfterDeg"`
-	DeltaDeg         float32            `json:"deltaDeg"`
-	GpsLat           pgtype.Float8      `json:"gpsLat"`
-	GpsLng           pgtype.Float8      `json:"gpsLng"`
+type InsertTurnsParams struct {
+	DongleID         string               `json:"dongleId"`
+	Route            string               `json:"route"`
+	TurnTs           []pgtype.Timestamptz `json:"turnTs"`
+	TurnOffsetMs     []int32              `json:"turnOffsetMs"`
+	BearingBeforeDeg []float32            `json:"bearingBeforeDeg"`
+	BearingAfterDeg  []float32            `json:"bearingAfterDeg"`
+	DeltaDeg         []float32            `json:"deltaDeg"`
+	GpsLat           []float64            `json:"gpsLat"`
+	GpsLng           []float64            `json:"gpsLng"`
 }
 
-func (q *Queries) InsertTurn(ctx context.Context, arg InsertTurnParams) error {
-	_, err := q.db.Exec(ctx, insertTurn,
+// Batch-insert detected turns for a route. Parallel arrays (one entry
+// per turn) are joined together via WITH ORDINALITY so the i-th element
+// of every array forms one row. ON CONFLICT DO NOTHING keeps
+// reprocessing idempotent: a turn whose (dongle_id, route,
+// turn_offset_ms) already exists is skipped. Callers should pair this
+// with DeleteTurnsForRoute when they want a full overwrite. gps_lat
+// and gps_lng are passed as arrays of DOUBLE PRECISION; SQL NULL
+// elements are preserved through the join.
+func (q *Queries) InsertTurns(ctx context.Context, arg InsertTurnsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertTurns,
 		arg.DongleID,
 		arg.Route,
 		arg.TurnTs,
@@ -113,7 +149,10 @@ func (q *Queries) InsertTurn(ctx context.Context, arg InsertTurnParams) error {
 		arg.GpsLat,
 		arg.GpsLng,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const listTurnsForRoute = `-- name: ListTurnsForRoute :many
@@ -122,7 +161,7 @@ SELECT id, dongle_id, route, turn_ts, turn_offset_ms,
        gps_lat, gps_lng
 FROM route_turns
 WHERE dongle_id = $1 AND route = $2
-ORDER BY turn_offset_ms ASC, id ASC
+ORDER BY turn_ts ASC, id ASC
 `
 
 type ListTurnsForRouteParams struct {
@@ -130,6 +169,9 @@ type ListTurnsForRouteParams struct {
 	Route    string `json:"route"`
 }
 
+// Time-ordered turn list for a single route. Used by the route overlay
+// UI and by the stalking heuristic, which iterates turns to compare
+// against per-encounter time windows.
 func (q *Queries) ListTurnsForRoute(ctx context.Context, arg ListTurnsForRouteParams) ([]RouteTurn, error) {
 	rows, err := q.db.Query(ctx, listTurnsForRoute, arg.DongleID, arg.Route)
 	if err != nil {

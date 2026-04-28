@@ -114,28 +114,6 @@ func (s *Store) SetInt(ctx context.Context, key string, value int) error {
 	return s.Set(ctx, key, strconv.Itoa(value))
 }
 
-// GetFloat returns the float64 value for the given key. If the stored
-// value does not parse cleanly the error wraps strconv.ErrSyntax. If the
-// key is not present it returns ErrNotFound.
-func (s *Store) GetFloat(ctx context.Context, key string) (float64, error) {
-	raw, err := s.Get(ctx, key)
-	if err != nil {
-		return 0, err
-	}
-	f, err := strconv.ParseFloat(raw, 64)
-	if err != nil {
-		return 0, fmt.Errorf("settings: value for %q is not a float: %w", key, err)
-	}
-	return f, nil
-}
-
-// SetFloat writes the float64 value for key. The value is stored using
-// strconv.FormatFloat with 'g' formatting and -1 precision so the round
-// trip is lossless.
-func (s *Store) SetFloat(ctx context.Context, key string, value float64) error {
-	return s.Set(ctx, key, strconv.FormatFloat(value, 'g', -1, 64))
-}
-
 // SeedFloatIfMissing inserts value for key only if no row exists yet.
 // Used at startup to push an env-var default into the database so a later
 // runtime override via the API does not require a restart to take effect.

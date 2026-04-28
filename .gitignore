@@ -50,3 +50,10 @@ lefthook-local.yml
 .projd/mode
 .projd/source
 .projd/no-init
+
+# alpr-spike runtime artifacts (raw fcamera frames, downloaded models, per-run
+# benchmark outputs). The harness scaffolding (bench.py, README.md, etc.) IS
+# tracked; tools/alpr-spike/.gitignore handles the per-subdir specifics.
+tools/alpr-spike/samples/
+tools/alpr-spike/models/
+tools/alpr-spike/results/

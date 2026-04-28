@@ -47,6 +47,16 @@ func main() {
 		log.Printf("warning: failed to seed retention_days setting: %v", err)
 	}
 
+	// ALPR runtime settings: same seeding rationale as retention_days. The
+	// master flag (alpr_enabled) is left unseeded so its absence is
+	// indistinguishable from an explicit `false`, which is the safe default.
+	// If the operator has flipped it on previously the existing row sticks
+	// across restarts. logALPRStartup emits a single info line summarising
+	// the merged settings only when ALPR is currently enabled, so the
+	// expected default (off) produces no log noise.
+	seedALPRDefaults(settingsStore, cfg.ALPR)
+	logALPRStartup(settingsStore, cfg.ALPR)
+
 	// Metrics registry is shared across the process: the HTTP middleware,
 	// the transcoder, the RPC caller, and the hub all observe into it, and
 	// /metrics exposes it.

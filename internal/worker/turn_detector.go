@@ -330,15 +330,15 @@ func (w *TurnDetectorWorker) persistTurns(ctx context.Context, dongleID, routeNa
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	qtx := w.Queries.WithTx(tx)
-	if err := qtx.DeleteTurnsForRoute(ctx, db.DeleteTurnsForRouteParams{
+	if _, err := qtx.DeleteTurnsForRoute(ctx, db.DeleteTurnsForRouteParams{
 		DongleID: dongleID,
 		Route:    routeName,
 	}); err != nil {
 		return fmt.Errorf("delete prior turns: %w", err)
 	}
-	for _, t := range turns {
-		if err := qtx.InsertTurn(ctx, turnInsertParams(dongleID, routeName, routeStart, t)); err != nil {
-			return fmt.Errorf("insert turn @%dms: %w", t.OffsetMs, err)
+	if len(turns) > 0 {
+		if _, err := qtx.InsertTurns(ctx, turnsInsertParams(dongleID, routeName, routeStart, turns)); err != nil {
+			return fmt.Errorf("insert turns: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -348,32 +348,52 @@ func (w *TurnDetectorWorker) persistTurns(ctx context.Context, dongleID, routeNa
 }
 
 func (w *TurnDetectorWorker) persistTurnsNoTx(ctx context.Context, dongleID, routeName string, routeStart time.Time, turns []DetectedTurn) error {
-	if err := w.Queries.DeleteTurnsForRoute(ctx, db.DeleteTurnsForRouteParams{
+	if _, err := w.Queries.DeleteTurnsForRoute(ctx, db.DeleteTurnsForRouteParams{
 		DongleID: dongleID,
 		Route:    routeName,
 	}); err != nil {
 		return fmt.Errorf("delete prior turns: %w", err)
 	}
-	for _, t := range turns {
-		if err := w.Queries.InsertTurn(ctx, turnInsertParams(dongleID, routeName, routeStart, t)); err != nil {
-			return fmt.Errorf("insert turn @%dms: %w", t.OffsetMs, err)
+	if len(turns) > 0 {
+		if _, err := w.Queries.InsertTurns(ctx, turnsInsertParams(dongleID, routeName, routeStart, turns)); err != nil {
+			return fmt.Errorf("insert turns: %w", err)
 		}
 	}
 	return nil
 }
 
-func turnInsertParams(dongleID, routeName string, routeStart time.Time, t DetectedTurn) db.InsertTurnParams {
-	ts := routeStart.Add(time.Duration(t.OffsetMs) * time.Millisecond).UTC()
-	return db.InsertTurnParams{
+// turnsInsertParams builds the parallel-array payload InsertTurns expects.
+// Each detected turn contributes one element to every array; the i-th
+// element of every array forms the i-th row.
+func turnsInsertParams(dongleID, routeName string, routeStart time.Time, turns []DetectedTurn) db.InsertTurnsParams {
+	n := len(turns)
+	ts := make([]pgtype.Timestamptz, n)
+	off := make([]int32, n)
+	bb := make([]float32, n)
+	ba := make([]float32, n)
+	dd := make([]float32, n)
+	lats := make([]float64, n)
+	lngs := make([]float64, n)
+	for i, t := range turns {
+		when := routeStart.Add(time.Duration(t.OffsetMs) * time.Millisecond).UTC()
+		ts[i] = pgtype.Timestamptz{Time: when, Valid: true}
+		off[i] = int32(t.OffsetMs)
+		bb[i] = float32(t.BearingBefore)
+		ba[i] = float32(t.BearingAfter)
+		dd[i] = float32(t.DeltaDeg)
+		lats[i] = t.Lat
+		lngs[i] = t.Lng
+	}
+	return db.InsertTurnsParams{
 		DongleID:         dongleID,
 		Route:            routeName,
-		TurnTs:           pgtype.Timestamptz{Time: ts, Valid: true},
-		TurnOffsetMs:     int32(t.OffsetMs),
-		BearingBeforeDeg: float32(t.BearingBefore),
-		BearingAfterDeg:  float32(t.BearingAfter),
-		DeltaDeg:         float32(t.DeltaDeg),
-		GpsLat:           pgtype.Float8{Float64: t.Lat, Valid: true},
-		GpsLng:           pgtype.Float8{Float64: t.Lng, Valid: true},
+		TurnTs:           ts,
+		TurnOffsetMs:     off,
+		BearingBeforeDeg: bb,
+		BearingAfterDeg:  ba,
+		DeltaDeg:         dd,
+		GpsLat:           lats,
+		GpsLng:           lngs,
 	}
 }
 
