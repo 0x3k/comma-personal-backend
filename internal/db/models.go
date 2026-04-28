@@ -80,22 +80,28 @@ type PlateAlertEvent struct {
 }
 
 type PlateDetection struct {
-	ID              int64              `json:"id"`
-	DongleID        string             `json:"dongleId"`
-	Route           string             `json:"route"`
-	Segment         int32              `json:"segment"`
-	FrameOffsetMs   int32              `json:"frameOffsetMs"`
-	PlateCiphertext []byte             `json:"plateCiphertext"`
-	PlateHash       []byte             `json:"plateHash"`
-	Bbox            []byte             `json:"bbox"`
-	Confidence      float32            `json:"confidence"`
-	OcrCorrected    bool               `json:"ocrCorrected"`
-	GpsLat          pgtype.Float8      `json:"gpsLat"`
-	GpsLng          pgtype.Float8      `json:"gpsLng"`
-	GpsHeadingDeg   pgtype.Float4      `json:"gpsHeadingDeg"`
-	FrameTs         pgtype.Timestamptz `json:"frameTs"`
-	ThumbPath       pgtype.Text        `json:"thumbPath"`
-	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	ID                int64              `json:"id"`
+	DongleID          string             `json:"dongleId"`
+	Route             string             `json:"route"`
+	Segment           int32              `json:"segment"`
+	FrameOffsetMs     int32              `json:"frameOffsetMs"`
+	PlateCiphertext   []byte             `json:"plateCiphertext"`
+	PlateHash         []byte             `json:"plateHash"`
+	Bbox              []byte             `json:"bbox"`
+	Confidence        float32            `json:"confidence"`
+	OcrCorrected      bool               `json:"ocrCorrected"`
+	GpsLat            pgtype.Float8      `json:"gpsLat"`
+	GpsLng            pgtype.Float8      `json:"gpsLng"`
+	GpsHeadingDeg     pgtype.Float4      `json:"gpsHeadingDeg"`
+	FrameTs           pgtype.Timestamptz `json:"frameTs"`
+	ThumbPath         pgtype.Text        `json:"thumbPath"`
+	CreatedAt         pgtype.Timestamptz `json:"createdAt"`
+	SignatureID       pgtype.Int8        `json:"signatureId"`
+	DetMake           pgtype.Text        `json:"detMake"`
+	DetModel          pgtype.Text        `json:"detModel"`
+	DetColor          pgtype.Text        `json:"detColor"`
+	DetBodyType       pgtype.Text        `json:"detBodyType"`
+	DetAttrConfidence pgtype.Float4      `json:"detAttrConfidence"`
 }
 
 type PlateEncounter struct {
@@ -128,6 +134,7 @@ type PlateWatchlist struct {
 	Notes           pgtype.Text        `json:"notes"`
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
 	UpdatedAt       pgtype.Timestamptz `json:"updatedAt"`
+	SignatureID     pgtype.Int8        `json:"signatureId"`
 }
 
 type Route struct {
@@ -218,4 +225,19 @@ type UiUser struct {
 	Username     string             `json:"username"`
 	PasswordHash string             `json:"passwordHash"`
 	CreatedAt    pgtype.Timestamptz `json:"createdAt"`
+}
+
+type VehicleSignature struct {
+	ID           int64              `json:"id"`
+	SignatureKey string             `json:"signatureKey"`
+	Make         pgtype.Text        `json:"make"`
+	Model        pgtype.Text        `json:"model"`
+	YearMin      pgtype.Int4        `json:"yearMin"`
+	YearMax      pgtype.Int4        `json:"yearMax"`
+	Color        pgtype.Text        `json:"color"`
+	BodyType     pgtype.Text        `json:"bodyType"`
+	Confidence   pgtype.Float4      `json:"confidence"`
+	SampleCount  int32              `json:"sampleCount"`
+	CreatedAt    pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt    pgtype.Timestamptz `json:"updatedAt"`
 }
