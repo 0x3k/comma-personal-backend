@@ -1,10 +1,11 @@
 {
   "id": "alpr-vehicle-attributes-engine",
   "name": "Vehicle make/model/color extension to engine + client",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 3,
   "blocked_by": ["alpr-engine-service"],
-  "branch": "",
+  "branch": "agent/alpr-vehicle-attributes-engine",
+  "base_branch": "feat/alpr",
   "summary": "Extend the engine sidecar to emit make/model/color/body_type alongside each plate detection, and update the Go client + Detection struct to carry them. The classifier runs on the same crop or full frame as the plate detector. This feature is intentionally a single unit because the engine response shape and the Go client struct must agree -- splitting introduces premature contract instability. The engine choice from alpr-engine-spike documents whether attribute classification comes natively or requires a bolt-on classifier.",
   "acceptance_criteria": [
     "Engine POST /v1/detect response gains a vehicle field per detection: {make: string|null, model: string|null, year_min: int|null, year_max: int|null, color: string|null, body_type: 'sedan'|'suv'|'truck'|'hatchback'|'coupe'|'van'|'wagon'|'motorcycle'|'other'|null, confidence: float|null}. Each field individually nullable -- low-confidence per-attribute results drop to null rather than guess (downstream relies on null-vs-present, not high-vs-low confidence).",
