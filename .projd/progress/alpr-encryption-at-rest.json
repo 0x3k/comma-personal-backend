@@ -1,10 +1,11 @@
 {
   "id": "alpr-encryption-at-rest",
   "name": "Plate text encryption + stable hash identity",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 2,
   "blocked_by": ["alpr-schema"],
-  "branch": "",
+  "branch": "agent/alpr-encryption-at-rest",
+  "base_branch": "feat/alpr",
   "summary": "Encryption + stable-identity hashing for plate strings. Plate text is sensitive: we want plates indexed for cross-trip matching but not stored in plaintext. Solution: AES-256-GCM ciphertext for the plate text (decrypted only when displaying to the authenticated user) + HMAC-SHA256 hash for cross-row matching. All keys derive from a single ALPR_ENCRYPTION_KEY env var via HKDF so one rotation invalidates everything coherently. This is a hard prerequisite for enabling ALPR -- the feature toggle in alpr-config refuses to flip without this key configured.",
   "acceptance_criteria": [
     "New package internal/alpr/crypto with: LoadKeyring(b64 string) (*Keyring, error) -- decodes base64, requires >= 32 bytes raw, derives via HKDF-SHA256 three subkeys: enc_key (32 B for AES-256-GCM), hash_salt (32 B for HMAC-SHA256), aad (16 B as additional authenticated data). HKDF info strings: 'alpr-encrypt-v1', 'alpr-hash-v1', 'alpr-aad-v1'. Distinct info => distinct keys even from the same root material.",
