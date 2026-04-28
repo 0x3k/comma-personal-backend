@@ -16,6 +16,19 @@ type AlprAuditLog struct {
 	CreatedAt pgtype.Timestamptz `json:"createdAt"`
 }
 
+type AlprBackfillJob struct {
+	ID                 int64              `json:"id"`
+	StartedAt          pgtype.Timestamptz `json:"startedAt"`
+	FinishedAt         pgtype.Timestamptz `json:"finishedAt"`
+	State              string             `json:"state"`
+	FiltersJson        []byte             `json:"filtersJson"`
+	TotalRoutes        pgtype.Int4        `json:"totalRoutes"`
+	ProcessedRoutes    int32              `json:"processedRoutes"`
+	LastProcessedRoute pgtype.Text        `json:"lastProcessedRoute"`
+	Error              pgtype.Text        `json:"error"`
+	StartedBy          pgtype.Text        `json:"startedBy"`
+}
+
 type AlprSegmentProgress struct {
 	DongleID             string             `json:"dongleId"`
 	Route                string             `json:"route"`
