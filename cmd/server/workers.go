@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"comma-personal-backend/internal/alpr/heuristic"
 	"comma-personal-backend/internal/api"
 	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/geocode"
@@ -339,6 +340,54 @@ func startWorkers(ctx context.Context, d *deps) {
 	go aggregator.Run(ctx)
 	log.Printf("alpr aggregator started (concurrency=%d, encounter_gap_seconds=%g)",
 		aggregatorConcurrency, encounterGap)
+
+	// ALPR stalking heuristic worker: consumes EncountersUpdated
+	// events from the aggregator and re-scores each affected plate.
+	// Started AFTER the aggregator so d.alprEncountersUpdated is
+	// already constructed.
+	//
+	// The heuristic and the worker package speak slightly different
+	// event types (the heuristic package intentionally avoids
+	// importing worker so the rules layer stays decoupled from the
+	// pipeline plumbing). A small adapter goroutine bridges the two:
+	// it ranges over the worker.EncountersUpdated channel, translates
+	// to heuristic.EncountersUpdatedEvent, and forwards to the
+	// heuristic worker.
+	//
+	// Channel sizing: alerts is buffered so a slow notification
+	// consumer (currently nil; future push channel) does not stall
+	// the heuristic. The heuristic's drop-on-full path is a soft
+	// fallback because the watchlist row itself is the load-bearing
+	// record -- a missed AlertCreated only delays the badge
+	// invalidation, not the alert itself.
+	d.alprAlertCreated = make(chan heuristic.AlertCreated, 64)
+	heuristicBridge := make(chan heuristic.EncountersUpdatedEvent, cap(d.alprEncountersUpdated))
+	go func() {
+		for ev := range d.alprEncountersUpdated {
+			select {
+			case heuristicBridge <- heuristic.EncountersUpdatedEvent{
+				DongleID:            ev.DongleID,
+				Route:               ev.Route,
+				PlateHashesAffected: ev.PlateHashesAffected,
+			}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		close(heuristicBridge)
+	}()
+	heuristicConcurrency := envInt("ALPR_HEURISTIC_CONCURRENCY", 1)
+	heuristicWorker := heuristic.NewWorker(
+		heuristicBridge,
+		d.queries,
+		d.settings,
+		d.metrics,
+		d.alprAlertCreated,
+	)
+	heuristicWorker.Concurrency = heuristicConcurrency
+	go heuristicWorker.Run(ctx)
+	log.Printf("alpr heuristic worker started (concurrency=%d, version=%s)",
+		heuristicConcurrency, heuristic.HeuristicVersion)
 
 	// Redaction builder: on-demand worker that renders the cached
 	// qcamera-redacted HLS variant for a route the moment a redacted

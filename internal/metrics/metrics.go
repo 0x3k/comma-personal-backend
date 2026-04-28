@@ -65,6 +65,9 @@ type Metrics struct {
 	alprEncountersTotal      prometheus.Counter
 	alprEncounterComputeSecs prometheus.Histogram
 	alprEncountersPerRoute   prometheus.Histogram
+
+	alprHeuristicEvalSeconds prometheus.Histogram
+	alprHeuristicAlertsTotal *prometheus.CounterVec
 }
 
 // New creates a Metrics backed by a fresh registry. Use NewWithRegistry to
@@ -263,6 +266,21 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 				Buckets: []float64{0, 1, 2, 5, 10, 25, 50, 100, 250, 500, 1000},
 			},
 		),
+
+		alprHeuristicEvalSeconds: prometheus.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "alpr_heuristic_eval_seconds",
+				Help:    "Wall-clock duration of one ALPR stalking-heuristic evaluation (per plate).",
+				Buckets: defaultDurationBuckets,
+			},
+		),
+		alprHeuristicAlertsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "alpr_heuristic_alerts_total",
+				Help: "Total ALPR heuristic evaluations, labelled by computed severity (0..5).",
+			},
+			[]string{"severity"},
+		),
 	}
 
 	reg.MustRegister(
@@ -291,6 +309,8 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 		m.alprEncountersTotal,
 		m.alprEncounterComputeSecs,
 		m.alprEncountersPerRoute,
+		m.alprHeuristicEvalSeconds,
+		m.alprHeuristicAlertsTotal,
 	)
 
 	return m
@@ -551,4 +571,31 @@ func (m *Metrics) ObserveALPREncountersPerRoute(n int) {
 		return
 	}
 	m.alprEncountersPerRoute.Observe(float64(n))
+}
+
+// ObserveALPRHeuristicEval records the wall-clock duration of one
+// stalking-heuristic evaluation. Called per plate per
+// EncountersUpdated event.
+func (m *Metrics) ObserveALPRHeuristicEval(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.alprHeuristicEvalSeconds.Observe(d.Seconds())
+}
+
+// IncALPRHeuristicAlerts increments the per-severity counter for one
+// heuristic evaluation. The label is the integer severity (0..5)
+// formatted as a string so the metric is queryable per bucket.
+func (m *Metrics) IncALPRHeuristicAlerts(severity int) {
+	if m == nil {
+		return
+	}
+	if severity < 0 {
+		severity = 0
+	}
+	if severity > 5 {
+		severity = 5
+	}
+	label := [...]string{"0", "1", "2", "3", "4", "5"}[severity]
+	m.alprHeuristicAlertsTotal.WithLabelValues(label).Inc()
 }
