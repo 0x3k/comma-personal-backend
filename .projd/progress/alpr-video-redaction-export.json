@@ -1,7 +1,7 @@
 {
   "id": "alpr-video-redaction-export",
   "name": "Plate-blur on MP4 export + share-link viewing",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 8,
   "blocked_by": ["alpr-detection-worker"],
   "branch": "agent/alpr-video-redaction-export",
