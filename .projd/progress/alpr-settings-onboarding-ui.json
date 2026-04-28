@@ -1,10 +1,11 @@
 {
   "id": "alpr-settings-onboarding-ui",
   "name": "Settings: Optional services -> ALPR card (the on-ramp)",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 6,
   "blocked_by": ["alpr-watchlist-api", "alpr-disclaimer-gate"],
-  "branch": "",
+  "branch": "agent/alpr-settings-onboarding-ui",
+  "base_branch": "feat/alpr",
   "summary": "The opt-in surface. Settings page gains an 'Optional services' section with an ALPR card -- toggle, disclaimer modal, engine reachability indicator, copy-paste deploy command, and (when running) live status (queue depth, last detection). This is the path the user walks to enable the feature. Goal is 'as simple as the postgres container': they flip a toggle, ack a modal, run one command if the sidecar isn't up, and they're done. Modeled on the existing storage-settings-ui pattern -- check that file for layout conventions.",
   "acceptance_criteria": [
     "New section in web/src/app/settings (matches existing settings layout) titled 'Optional services'. ALPR card is the first (and currently only) card.",
