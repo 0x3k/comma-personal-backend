@@ -91,10 +91,29 @@ type InsertDetectionParams struct {
 	ThumbPath       pgtype.Text        `json:"thumbPath"`
 }
 
+type InsertDetectionRow struct {
+	ID              int64              `json:"id"`
+	DongleID        string             `json:"dongleId"`
+	Route           string             `json:"route"`
+	Segment         int32              `json:"segment"`
+	FrameOffsetMs   int32              `json:"frameOffsetMs"`
+	PlateCiphertext []byte             `json:"plateCiphertext"`
+	PlateHash       []byte             `json:"plateHash"`
+	Bbox            []byte             `json:"bbox"`
+	Confidence      float32            `json:"confidence"`
+	OcrCorrected    bool               `json:"ocrCorrected"`
+	GpsLat          pgtype.Float8      `json:"gpsLat"`
+	GpsLng          pgtype.Float8      `json:"gpsLng"`
+	GpsHeadingDeg   pgtype.Float4      `json:"gpsHeadingDeg"`
+	FrameTs         pgtype.Timestamptz `json:"frameTs"`
+	ThumbPath       pgtype.Text        `json:"thumbPath"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+}
+
 // Inserts a single plate detection. Returns the freshly-allocated id and
 // created_at so the caller can correlate the row to whatever in-memory
 // detection it came from.
-func (q *Queries) InsertDetection(ctx context.Context, arg InsertDetectionParams) (PlateDetection, error) {
+func (q *Queries) InsertDetection(ctx context.Context, arg InsertDetectionParams) (InsertDetectionRow, error) {
 	row := q.db.QueryRow(ctx, insertDetection,
 		arg.DongleID,
 		arg.Route,
@@ -111,7 +130,7 @@ func (q *Queries) InsertDetection(ctx context.Context, arg InsertDetectionParams
 		arg.FrameTs,
 		arg.ThumbPath,
 	)
-	var i PlateDetection
+	var i InsertDetectionRow
 	err := row.Scan(
 		&i.ID,
 		&i.DongleID,
@@ -148,17 +167,36 @@ type ListDetectionsForRouteParams struct {
 	Route    string `json:"route"`
 }
 
+type ListDetectionsForRouteRow struct {
+	ID              int64              `json:"id"`
+	DongleID        string             `json:"dongleId"`
+	Route           string             `json:"route"`
+	Segment         int32              `json:"segment"`
+	FrameOffsetMs   int32              `json:"frameOffsetMs"`
+	PlateCiphertext []byte             `json:"plateCiphertext"`
+	PlateHash       []byte             `json:"plateHash"`
+	Bbox            []byte             `json:"bbox"`
+	Confidence      float32            `json:"confidence"`
+	OcrCorrected    bool               `json:"ocrCorrected"`
+	GpsLat          pgtype.Float8      `json:"gpsLat"`
+	GpsLng          pgtype.Float8      `json:"gpsLng"`
+	GpsHeadingDeg   pgtype.Float4      `json:"gpsHeadingDeg"`
+	FrameTs         pgtype.Timestamptz `json:"frameTs"`
+	ThumbPath       pgtype.Text        `json:"thumbPath"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+}
+
 // All detections for a single route, in chronological order. Used by the
 // encounter aggregator and the per-route review UI.
-func (q *Queries) ListDetectionsForRoute(ctx context.Context, arg ListDetectionsForRouteParams) ([]PlateDetection, error) {
+func (q *Queries) ListDetectionsForRoute(ctx context.Context, arg ListDetectionsForRouteParams) ([]ListDetectionsForRouteRow, error) {
 	rows, err := q.db.Query(ctx, listDetectionsForRoute, arg.DongleID, arg.Route)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []PlateDetection
+	var items []ListDetectionsForRouteRow
 	for rows.Next() {
-		var i PlateDetection
+		var i ListDetectionsForRouteRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.DongleID,
@@ -205,18 +243,37 @@ type ListDetectionsForRouteSinceParams struct {
 	FrameTs  pgtype.Timestamptz `json:"frameTs"`
 }
 
+type ListDetectionsForRouteSinceRow struct {
+	ID              int64              `json:"id"`
+	DongleID        string             `json:"dongleId"`
+	Route           string             `json:"route"`
+	Segment         int32              `json:"segment"`
+	FrameOffsetMs   int32              `json:"frameOffsetMs"`
+	PlateCiphertext []byte             `json:"plateCiphertext"`
+	PlateHash       []byte             `json:"plateHash"`
+	Bbox            []byte             `json:"bbox"`
+	Confidence      float32            `json:"confidence"`
+	OcrCorrected    bool               `json:"ocrCorrected"`
+	GpsLat          pgtype.Float8      `json:"gpsLat"`
+	GpsLng          pgtype.Float8      `json:"gpsLng"`
+	GpsHeadingDeg   pgtype.Float4      `json:"gpsHeadingDeg"`
+	FrameTs         pgtype.Timestamptz `json:"frameTs"`
+	ThumbPath       pgtype.Text        `json:"thumbPath"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+}
+
 // Detections for a route at or after the given frame_ts. Used by the
 // aggregator when it processes a route incrementally (segment-by-segment)
 // so it does not re-scan already-aggregated detections on every pass.
-func (q *Queries) ListDetectionsForRouteSince(ctx context.Context, arg ListDetectionsForRouteSinceParams) ([]PlateDetection, error) {
+func (q *Queries) ListDetectionsForRouteSince(ctx context.Context, arg ListDetectionsForRouteSinceParams) ([]ListDetectionsForRouteSinceRow, error) {
 	rows, err := q.db.Query(ctx, listDetectionsForRouteSince, arg.DongleID, arg.Route, arg.FrameTs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []PlateDetection
+	var items []ListDetectionsForRouteSinceRow
 	for rows.Next() {
-		var i PlateDetection
+		var i ListDetectionsForRouteSinceRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.DongleID,
@@ -293,4 +350,44 @@ func (q *Queries) UpdateDetectionPlateHash(ctx context.Context, arg UpdateDetect
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateDetectionSignature = `-- name: UpdateDetectionSignature :exec
+UPDATE plate_detections
+SET signature_id        = $1,
+    det_make            = $2,
+    det_model           = $3,
+    det_color           = $4,
+    det_body_type       = $5,
+    det_attr_confidence = $6
+WHERE id = $7
+`
+
+type UpdateDetectionSignatureParams struct {
+	SignatureID       pgtype.Int8   `json:"signatureId"`
+	DetMake           pgtype.Text   `json:"detMake"`
+	DetModel          pgtype.Text   `json:"detModel"`
+	DetColor          pgtype.Text   `json:"detColor"`
+	DetBodyType       pgtype.Text   `json:"detBodyType"`
+	DetAttrConfidence pgtype.Float4 `json:"detAttrConfidence"`
+	ID                int64         `json:"id"`
+}
+
+// Stamp the signature link plus the denormalized vehicle attribute
+// columns onto a single detection row. Called by the signature
+// classifier after it produces a (signature_id, make, model, color,
+// body_type) tuple for a frame. The denormalized columns are
+// intentionally co-written with the FK so review queries that filter
+// by attribute do not have to join through vehicle_signatures.
+func (q *Queries) UpdateDetectionSignature(ctx context.Context, arg UpdateDetectionSignatureParams) error {
+	_, err := q.db.Exec(ctx, updateDetectionSignature,
+		arg.SignatureID,
+		arg.DetMake,
+		arg.DetModel,
+		arg.DetColor,
+		arg.DetBodyType,
+		arg.DetAttrConfidence,
+		arg.ID,
+	)
+	return err
 }

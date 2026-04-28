@@ -58,12 +58,26 @@ FROM plate_watchlist
 WHERE plate_hash = $1
 `
 
+type GetWatchlistByHashRow struct {
+	ID              int64              `json:"id"`
+	PlateHash       []byte             `json:"plateHash"`
+	LabelCiphertext []byte             `json:"labelCiphertext"`
+	Kind            string             `json:"kind"`
+	Severity        pgtype.Int2        `json:"severity"`
+	FirstAlertAt    pgtype.Timestamptz `json:"firstAlertAt"`
+	LastAlertAt     pgtype.Timestamptz `json:"lastAlertAt"`
+	AckedAt         pgtype.Timestamptz `json:"ackedAt"`
+	Notes           pgtype.Text        `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt       pgtype.Timestamptz `json:"updatedAt"`
+}
+
 // Look up a plate's current watchlist row, or pgx.ErrNoRows when none
 // exists. Used by the alert-evaluation worker to decide whether the
 // plate is whitelisted (suppress) before computing severity.
-func (q *Queries) GetWatchlistByHash(ctx context.Context, plateHash []byte) (PlateWatchlist, error) {
+func (q *Queries) GetWatchlistByHash(ctx context.Context, plateHash []byte) (GetWatchlistByHashRow, error) {
 	row := q.db.QueryRow(ctx, getWatchlistByHash, plateHash)
-	var i PlateWatchlist
+	var i GetWatchlistByHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.PlateHash,
@@ -99,19 +113,33 @@ type ListAlertsParams struct {
 	AckedFilter pgtype.Bool `json:"ackedFilter"`
 }
 
+type ListAlertsRow struct {
+	ID              int64              `json:"id"`
+	PlateHash       []byte             `json:"plateHash"`
+	LabelCiphertext []byte             `json:"labelCiphertext"`
+	Kind            string             `json:"kind"`
+	Severity        pgtype.Int2        `json:"severity"`
+	FirstAlertAt    pgtype.Timestamptz `json:"firstAlertAt"`
+	LastAlertAt     pgtype.Timestamptz `json:"lastAlertAt"`
+	AckedAt         pgtype.Timestamptz `json:"ackedAt"`
+	Notes           pgtype.Text        `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt       pgtype.Timestamptz `json:"updatedAt"`
+}
+
 // The alert feed: alerted-kind rows ordered by recency of last_alert_at,
 // with optional filtering on whether the row is currently acknowledged.
 // Pass NULL for @acked_filter to include both states. Pagination via
 // limit/offset to match the events feed style elsewhere in the project.
-func (q *Queries) ListAlerts(ctx context.Context, arg ListAlertsParams) ([]PlateWatchlist, error) {
+func (q *Queries) ListAlerts(ctx context.Context, arg ListAlertsParams) ([]ListAlertsRow, error) {
 	rows, err := q.db.Query(ctx, listAlerts, arg.Limit, arg.Offset, arg.AckedFilter)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []PlateWatchlist
+	var items []ListAlertsRow
 	for rows.Next() {
-		var i PlateWatchlist
+		var i ListAlertsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.PlateHash,
@@ -151,17 +179,31 @@ type ListWatchlistByKindParams struct {
 	Offset int32  `json:"offset"`
 }
 
+type ListWatchlistByKindRow struct {
+	ID              int64              `json:"id"`
+	PlateHash       []byte             `json:"plateHash"`
+	LabelCiphertext []byte             `json:"labelCiphertext"`
+	Kind            string             `json:"kind"`
+	Severity        pgtype.Int2        `json:"severity"`
+	FirstAlertAt    pgtype.Timestamptz `json:"firstAlertAt"`
+	LastAlertAt     pgtype.Timestamptz `json:"lastAlertAt"`
+	AckedAt         pgtype.Timestamptz `json:"ackedAt"`
+	Notes           pgtype.Text        `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt       pgtype.Timestamptz `json:"updatedAt"`
+}
+
 // Paginated list of watchlist rows of a given kind, newest update first.
 // Used by the watchlist UI tabs (alerted / whitelist / note).
-func (q *Queries) ListWatchlistByKind(ctx context.Context, arg ListWatchlistByKindParams) ([]PlateWatchlist, error) {
+func (q *Queries) ListWatchlistByKind(ctx context.Context, arg ListWatchlistByKindParams) ([]ListWatchlistByKindRow, error) {
 	rows, err := q.db.Query(ctx, listWatchlistByKind, arg.Kind, arg.Limit, arg.Offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []PlateWatchlist
+	var items []ListWatchlistByKindRow
 	for rows.Next() {
-		var i PlateWatchlist
+		var i ListWatchlistByKindRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.PlateHash,
@@ -271,13 +313,27 @@ type UpsertWatchlistAlertedParams struct {
 	AlertAt         pgtype.Timestamptz `json:"alertAt"`
 }
 
+type UpsertWatchlistAlertedRow struct {
+	ID              int64              `json:"id"`
+	PlateHash       []byte             `json:"plateHash"`
+	LabelCiphertext []byte             `json:"labelCiphertext"`
+	Kind            string             `json:"kind"`
+	Severity        pgtype.Int2        `json:"severity"`
+	FirstAlertAt    pgtype.Timestamptz `json:"firstAlertAt"`
+	LastAlertAt     pgtype.Timestamptz `json:"lastAlertAt"`
+	AckedAt         pgtype.Timestamptz `json:"ackedAt"`
+	Notes           pgtype.Text        `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt       pgtype.Timestamptz `json:"updatedAt"`
+}
+
 // Insert a new alerted-kind row for a plate, or refresh an existing one
 // so its severity/last_alert_at advance and acked_at clears. The
 // transition from whitelist or note into alerted is intentionally
 // permitted: the heuristic decided the plate is alert-worthy regardless
 // of the previous state. Operators reverse it via UpsertWatchlistWhitelist
 // or RemoveWatchlist.
-func (q *Queries) UpsertWatchlistAlerted(ctx context.Context, arg UpsertWatchlistAlertedParams) (PlateWatchlist, error) {
+func (q *Queries) UpsertWatchlistAlerted(ctx context.Context, arg UpsertWatchlistAlertedParams) (UpsertWatchlistAlertedRow, error) {
 	row := q.db.QueryRow(ctx, upsertWatchlistAlerted,
 		arg.PlateHash,
 		arg.LabelCiphertext,
@@ -285,7 +341,7 @@ func (q *Queries) UpsertWatchlistAlerted(ctx context.Context, arg UpsertWatchlis
 		arg.Notes,
 		arg.AlertAt,
 	)
-	var i PlateWatchlist
+	var i UpsertWatchlistAlertedRow
 	err := row.Scan(
 		&i.ID,
 		&i.PlateHash,
@@ -333,13 +389,27 @@ type UpsertWatchlistWhitelistParams struct {
 	Notes           pgtype.Text `json:"notes"`
 }
 
+type UpsertWatchlistWhitelistRow struct {
+	ID              int64              `json:"id"`
+	PlateHash       []byte             `json:"plateHash"`
+	LabelCiphertext []byte             `json:"labelCiphertext"`
+	Kind            string             `json:"kind"`
+	Severity        pgtype.Int2        `json:"severity"`
+	FirstAlertAt    pgtype.Timestamptz `json:"firstAlertAt"`
+	LastAlertAt     pgtype.Timestamptz `json:"lastAlertAt"`
+	AckedAt         pgtype.Timestamptz `json:"ackedAt"`
+	Notes           pgtype.Text        `json:"notes"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt       pgtype.Timestamptz `json:"updatedAt"`
+}
+
 // Insert a new whitelist row for a plate, or update an existing row to
 // the whitelist kind. Whitelisting an alerted plate is the operator's
 // "this is fine, stop alerting on it" action: the alert timestamps and
 // severity are cleared so the alert feed no longer surfaces the row.
-func (q *Queries) UpsertWatchlistWhitelist(ctx context.Context, arg UpsertWatchlistWhitelistParams) (PlateWatchlist, error) {
+func (q *Queries) UpsertWatchlistWhitelist(ctx context.Context, arg UpsertWatchlistWhitelistParams) (UpsertWatchlistWhitelistRow, error) {
 	row := q.db.QueryRow(ctx, upsertWatchlistWhitelist, arg.PlateHash, arg.LabelCiphertext, arg.Notes)
-	var i PlateWatchlist
+	var i UpsertWatchlistWhitelistRow
 	err := row.Scan(
 		&i.ID,
 		&i.PlateHash,
