@@ -184,6 +184,10 @@ func resetALPRSchema(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	stmts := []string{
 		// ALPR tables (drop first so leftover state from prior runs is gone).
+		// vehicle_signatures must be dropped before plate_detections /
+		// plate_encounters / plate_watchlist so the FKs added by the
+		// 016_alpr_vehicle_signatures migration do not block the cascade.
+		`DROP TABLE IF EXISTS vehicle_signatures     CASCADE`,
 		`DROP TABLE IF EXISTS alpr_audit_log         CASCADE`,
 		`DROP TABLE IF EXISTS alpr_segment_progress  CASCADE`,
 		`DROP TABLE IF EXISTS route_turns            CASCADE`,

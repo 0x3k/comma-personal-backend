@@ -51,6 +51,14 @@ const (
 	// operator acknowledged the current disclaimer. Owned by
 	// alpr-disclaimer-gate; used here for the enable precondition only.
 	KeyALPRDisclaimerAckedAt = "alpr_disclaimer_acked_at"
+
+	// KeyALPRDisclaimerAckedJurisdiction is the jurisdiction the operator
+	// declared when they acknowledged the disclaimer. One of "us", "eu",
+	// "uk", "ca", "au", "other". Recorded so the audit trail captures the
+	// declared legal context (Illinois BIPA, EU GDPR, UK DPA, etc.) at the
+	// time of the ack -- it does NOT change the ALPR pipeline's region
+	// selection (that is KeyALPRRegion).
+	KeyALPRDisclaimerAckedJurisdiction = "alpr_disclaimer_acked_jurisdiction"
 )
 
 // GetBool returns the boolean value for the given key. Stored values are
