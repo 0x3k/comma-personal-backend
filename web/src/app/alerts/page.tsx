@@ -89,12 +89,31 @@ function AlertsPageInner() {
     [tab, filters],
   );
   useEffect(() => {
-    const current = urlString;
-    if (current === targetQuery) return;
+    // Only write to the URL when state actually changes -- depending
+    // on urlString here would race with the hydrate effect: when the
+    // URL changes externally (back-button), hydrate parses the new
+    // URL into state, but on that same render the state hasn't yet
+    // updated, so mirror would stomp the freshly-arrived URL with
+    // the stale state's serialization.
+    //
+    // Reading the live URL via window.location keeps the no-op fast
+    // path (skip when the current URL already matches) without
+    // creating a dependency cycle.
+    if (typeof window !== "undefined") {
+      const currentSearch = window.location.search.startsWith("?")
+        ? window.location.search.slice(1)
+        : window.location.search;
+      if (currentSearch === targetQuery) return;
+    }
     router.replace(targetQuery ? `/alerts?${targetQuery}` : "/alerts", {
       scroll: false,
     });
-  }, [targetQuery, urlString, router]);
+    // router is a stable ref under Next.js's app router but not under
+    // our test mock; intentionally omitted so a mock that returns a
+    // fresh router each render does not retrigger this effect every
+    // render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetQuery]);
 
   // Device list: fetched once. Drives the dongle filter dropdown.
   // Failure is non-fatal -- the alerts list still works (the filter

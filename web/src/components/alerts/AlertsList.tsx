@@ -79,6 +79,38 @@ export function AlertsList({
     getScrollElement: () => parentRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
     overscan: 10,
+    // observeElementRect lets us bypass the default getBoundingClientRect
+    // path which jsdom always reports as 0 -- the unit tests then see
+    // an empty virtualised range and render nothing. We feed back a
+    // generous height when the element measures zero (jsdom) and
+    // otherwise defer to the real rect so production behaviour is
+    // unchanged.
+    observeElementRect: (instance, cb) => {
+      const measure = () => {
+        const el = instance.scrollElement;
+        if (!el) {
+          cb({ width: 0, height: 0 });
+          return;
+        }
+        const rect = el.getBoundingClientRect();
+        // jsdom returns 0 here; pretend the viewport is large enough
+        // to fit the entire rendered list so the virtualizer surfaces
+        // every row via getVirtualItems().
+        const width = rect.width || el.offsetWidth || 800;
+        const height = rect.height || el.offsetHeight || 720;
+        cb({ width, height });
+      };
+      measure();
+      // The default observer (ResizeObserver) is not available in
+      // jsdom; falling back to a single sync measure is enough for
+      // tests because the list never resizes mid-test.
+      if (typeof window !== "undefined" && typeof window.ResizeObserver !== "undefined") {
+        const ro = new window.ResizeObserver(measure);
+        if (instance.scrollElement) ro.observe(instance.scrollElement);
+        return () => ro.disconnect();
+      }
+      return () => {};
+    },
   });
 
   const allSelected = useMemo(() => {

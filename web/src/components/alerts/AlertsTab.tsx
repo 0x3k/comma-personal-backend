@@ -269,15 +269,22 @@ export function AlertsTab({
       selectedHashes.map((h) => ackAlert(h)),
     );
 
+    // Tally counts outside the setRowState updater. React's strict
+    // double-invoke of state updaters would otherwise double-count
+    // and produce a "Acknowledged 2, 2 failed" toast for a 1+1 split.
     let successCount = 0;
     let failCount = 0;
+    for (const r of results) {
+      if (r.status === "fulfilled") successCount += 1;
+      else failCount += 1;
+    }
+
     setRowState((prev) => {
       const next = { ...prev };
       for (let i = 0; i < selectedHashes.length; i++) {
         const h = selectedHashes[i];
         const r = results[i];
         if (r.status === "fulfilled") {
-          successCount += 1;
           next[h] = {
             selected: false,
             ackInFlight: false,
@@ -285,7 +292,6 @@ export function AlertsTab({
             ackedOptimistic: true,
           };
         } else {
-          failCount += 1;
           next[h] = {
             selected: true,
             ackInFlight: false,
