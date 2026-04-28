@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageWrapper } from "@/components/layout/PageWrapper";
@@ -64,9 +64,26 @@ interface ToastState {
  * the page renders a stub explanation rather than empty cards. The
  * shell still renders so a shared link does not 404 just because the
  * recipient hasn't enabled the feature.
+ *
+ * The page resolves Next's promise-shaped `params` via a useEffect
+ * + state pair instead of React's `use(promise)` hook. The `use`
+ * approach suspends the whole subtree until the promise resolves,
+ * which interacts poorly with jsdom's microtask handling under
+ * concurrent rendering -- a useEffect-based unwrap renders an
+ * explicit loading state and avoids Suspense entirely.
  */
-export default function PlateDetailPage({ params }: PlateDetailPageProps) {
-  const { hash } = use(params);
+function PlateDetailPageInner({ params }: PlateDetailPageProps) {
+  const [hash, setHash] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.resolve(params).then((p) => {
+      if (cancelled) return;
+      setHash(p.hash);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [params]);
   const { enabled, loading: flagLoading } = useAlprSettings();
   const router = useRouter();
 
@@ -98,6 +115,7 @@ export default function PlateDetailPage({ params }: PlateDetailPageProps) {
   // redirecting through a route push.
   useEffect(() => {
     if (enabled !== true) return;
+    if (hash === null) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -210,7 +228,7 @@ export default function PlateDetailPage({ params }: PlateDetailPageProps) {
   }, []);
 
   const handleAck = useCallback(async () => {
-    if (actionInFlight) return;
+    if (actionInFlight || hash === null) return;
     setActionInFlight(true);
     try {
       await ackPlateAlert(hash);
@@ -227,7 +245,7 @@ export default function PlateDetailPage({ params }: PlateDetailPageProps) {
   }, [actionInFlight, hash, triggerRefetch]);
 
   const handleUnack = useCallback(async () => {
-    if (actionInFlight) return;
+    if (actionInFlight || hash === null) return;
     setActionInFlight(true);
     try {
       await unackPlateAlert(hash);
@@ -271,7 +289,7 @@ export default function PlateDetailPage({ params }: PlateDetailPageProps) {
   }, [actionInFlight, data, triggerRefetch]);
 
   const handleRemoveWhitelist = useCallback(async () => {
-    if (actionInFlight) return;
+    if (actionInFlight || hash === null) return;
     setActionInFlight(true);
     try {
       await removePlateFromWhitelist(hash);
@@ -530,6 +548,15 @@ export default function PlateDetailPage({ params }: PlateDetailPageProps) {
       />
     </PageWrapper>
   );
+}
+
+/**
+ * Default export. Thin wrapper kept around so other modules that
+ * import "@/app/plates/[hash]/page" can stub the inner component
+ * separately if they need to.
+ */
+export default function PlateDetailPage(props: PlateDetailPageProps) {
+  return <PlateDetailPageInner {...props} />;
 }
 
 /**
