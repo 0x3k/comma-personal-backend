@@ -75,6 +75,26 @@ type AlertCreated struct {
 	PlateHashes [][]byte
 }
 
+// AlertSuppressed is emitted when an operator action causes a
+// previously-alerted plate to stop being alert-worthy. The current
+// trigger is whitelisting a plate that had `kind='alerted'` -- the
+// watchlist API needs to wake up notification subsystems so a
+// dashboard alert badge counter can decrement promptly without
+// polling. PriorSeverity carries the severity the watchlist row had
+// before the suppression so consumers that group counts by severity
+// can update the right bucket.
+type AlertSuppressed struct {
+	PlateHash []byte
+	// PriorSeverity is the watchlist row's severity column at the
+	// moment of suppression (0 if the column was NULL -- shouldn't
+	// happen for kind='alerted' but defended against).
+	PriorSeverity int
+	// SuppressedAt is the wall time at which the suppression was
+	// recorded. Set by the producer (typically the API handler) so
+	// tests can pin time deterministically.
+	SuppressedAt time.Time
+}
+
 // HeuristicMetrics is the subset of *metrics.Metrics this worker
 // uses. Defined as an interface so tests can pass nil (the metrics
 // struct is already a no-op when nil) or supply a fake.
