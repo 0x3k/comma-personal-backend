@@ -1,5 +1,5 @@
 -- Queries for the ALPR notify-dispatcher dedup ledger. The schema lives
--- in 018_alpr_notifications_sent.up.sql. The dispatcher reads
+-- in 019_alpr_notifications_sent.up.sql. The dispatcher reads
 -- last_sent_at to decide whether the dedup window has elapsed and writes
 -- a fresh row (or refreshes an existing one) every time at least one
 -- sender succeeded.
