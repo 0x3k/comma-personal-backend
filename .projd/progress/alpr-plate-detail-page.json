@@ -1,7 +1,7 @@
 {
   "id": "alpr-plate-detail-page",
   "name": "Per-plate cross-route detail page",
-  "status": "in_progress",
+  "status": "complete",
   "priority": 6,
   "blocked_by": ["alpr-encounters-api", "alpr-manual-correction-api"],
   "branch": "agent/alpr-plate-detail-page",
@@ -17,5 +17,5 @@
     "Lint, type-check pass; tests for header rendering with each watchlist status, map cluster mode, edit modal happy + hint paths, merge happy path, 404 state.",
     "Manual verification on a plate with >=3 routes and an open alert: header shows correct severity pill, map shows clustered points colored correctly, evidence accordion expands and reads naturally."
   ],
-  "notes": ""
+  "notes": "Implemented at web/src/app/plates/[hash]/page.tsx. Cross-route detail page with header, stats card, Leaflet sightings map (zoom-based clustering, severity colours), encounter list, evidence accordion, edit + merge modals, feature-flag gating, 404 state. Per-encounter trip metadata loaded via /v1/routes/:dongle/:route/trip to plot first_seen markers (the plate-detail endpoint does not embed coordinates). Edit modal resolves the most-recent encounter's detection id by parsing the per-route encounters endpoint's sample_thumb_url. Merge modal accepts raw hash or /plates/<hash> URL. Tests pass + lint + type-check. Added web/src/lib/plateDetail.ts as the typed client. The plate-text -> hash search in the merge modal is omitted because no backend endpoint exposes that lookup; the documented hash-paste / hint-prefill paths cover the spec."
 }
