@@ -69,6 +69,17 @@ type deps struct {
 	// stall the detection worker in the unlikely steady-state burst
 	// of many simultaneous route completions.
 	alprDetectionsComplete chan worker.RouteAlprDetectionsComplete
+
+	// alprEncountersUpdated carries one event per route after the
+	// encounter aggregator has (re)written its plate_encounters rows.
+	// The downstream alpr-stalking-heuristic subscribes so it can
+	// re-run only on plates whose state actually changed instead of
+	// rescanning the entire encounter table on a periodic timer. The
+	// channel is buffered so a slow heuristic does not stall the
+	// aggregator in the unlikely steady-state burst of many
+	// simultaneous route completions; the aggregator falls back to
+	// dropping the event with a warn when full.
+	alprEncountersUpdated chan worker.EncountersUpdated
 }
 
 // alprClientTimeout is the per-request budget the ALPR client applies on
