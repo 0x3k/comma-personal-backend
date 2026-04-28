@@ -1,10 +1,11 @@
 {
   "id": "alpr-watchlist-page",
   "name": "Alert center page (open / acked / whitelist tabs)",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 6,
   "blocked_by": ["alpr-watchlist-api"],
-  "branch": "",
+  "branch": "agent/alpr-watchlist-page",
+  "base_branch": "feat/alpr",
   "summary": "Alert center: a single page listing all currently-open alerts with ack flow + filters, plus tabs for previously-acknowledged and the whitelist. This is what the user actually sees first when 'something might be wrong,' so prioritize density + clear severity sorting over decorative chrome. Virtualized to keep paint times tight -- mirror the log viewer pattern (web/src/components/logs/* uses TanStack Virtual already).",
   "acceptance_criteria": [
     "New route web/src/app/alerts/page.tsx. Behind useAlprSettings() feature flag.",
