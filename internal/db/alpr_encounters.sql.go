@@ -140,6 +140,104 @@ func (q *Queries) ListEncountersForPlateInWindow(ctx context.Context, arg ListEn
 	return items, nil
 }
 
+const listEncountersForPlateInWindowWithStartGPS = `-- name: ListEncountersForPlateInWindowWithStartGPS :many
+SELECT pe.id, pe.dongle_id, pe.route, pe.plate_hash,
+       pe.first_seen_ts, pe.last_seen_ts,
+       pe.detection_count, pe.turn_count, pe.max_internal_gap_seconds,
+       pe.signature_id, pe.status, pe.bbox_first, pe.bbox_last,
+       pe.created_at, pe.updated_at,
+       pd.gps_lat AS start_lat,
+       pd.gps_lng AS start_lng
+FROM plate_encounters pe
+LEFT JOIN LATERAL (
+    SELECT gps_lat, gps_lng
+    FROM plate_detections d
+    WHERE d.dongle_id  = pe.dongle_id
+      AND d.route      = pe.route
+      AND d.plate_hash = pe.plate_hash
+      AND d.frame_ts   = pe.first_seen_ts
+    LIMIT 1
+) pd ON TRUE
+WHERE pe.plate_hash    = $1
+  AND pe.last_seen_ts >= $2
+  AND pe.first_seen_ts <= $3
+ORDER BY pe.last_seen_ts DESC, pe.id DESC
+`
+
+type ListEncountersForPlateInWindowWithStartGPSParams struct {
+	PlateHash   []byte             `json:"plateHash"`
+	LastSeenTs  pgtype.Timestamptz `json:"lastSeenTs"`
+	FirstSeenTs pgtype.Timestamptz `json:"firstSeenTs"`
+}
+
+type ListEncountersForPlateInWindowWithStartGPSRow struct {
+	ID                    int64              `json:"id"`
+	DongleID              string             `json:"dongleId"`
+	Route                 string             `json:"route"`
+	PlateHash             []byte             `json:"plateHash"`
+	FirstSeenTs           pgtype.Timestamptz `json:"firstSeenTs"`
+	LastSeenTs            pgtype.Timestamptz `json:"lastSeenTs"`
+	DetectionCount        int32              `json:"detectionCount"`
+	TurnCount             int32              `json:"turnCount"`
+	MaxInternalGapSeconds int32              `json:"maxInternalGapSeconds"`
+	SignatureID           pgtype.Int8        `json:"signatureId"`
+	Status                string             `json:"status"`
+	BboxFirst             []byte             `json:"bboxFirst"`
+	BboxLast              []byte             `json:"bboxLast"`
+	CreatedAt             pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt             pgtype.Timestamptz `json:"updatedAt"`
+	StartLat              pgtype.Float8      `json:"startLat"`
+	StartLng              pgtype.Float8      `json:"startLng"`
+}
+
+// Same window scan as ListEncountersForPlateInWindow but joined with the
+// plate's first-detection GPS for that encounter. The stalking heuristic
+// needs the start coordinates of each encounter to bucket them into geo
+// cells (cross_route_geo_spread); without the join it would have to
+// issue one detection lookup per encounter.
+//
+// LEFT JOIN: an encounter without a matching detection at first_seen_ts
+// (extremely rare, but possible after a manual correction or partial
+// delete) still appears with NULL gps fields; the heuristic treats those
+// as "no GPS" rather than dropping the encounter.
+func (q *Queries) ListEncountersForPlateInWindowWithStartGPS(ctx context.Context, arg ListEncountersForPlateInWindowWithStartGPSParams) ([]ListEncountersForPlateInWindowWithStartGPSRow, error) {
+	rows, err := q.db.Query(ctx, listEncountersForPlateInWindowWithStartGPS, arg.PlateHash, arg.LastSeenTs, arg.FirstSeenTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEncountersForPlateInWindowWithStartGPSRow
+	for rows.Next() {
+		var i ListEncountersForPlateInWindowWithStartGPSRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DongleID,
+			&i.Route,
+			&i.PlateHash,
+			&i.FirstSeenTs,
+			&i.LastSeenTs,
+			&i.DetectionCount,
+			&i.TurnCount,
+			&i.MaxInternalGapSeconds,
+			&i.SignatureID,
+			&i.Status,
+			&i.BboxFirst,
+			&i.BboxLast,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.StartLat,
+			&i.StartLng,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEncountersForRoute = `-- name: ListEncountersForRoute :many
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,

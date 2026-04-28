@@ -8,6 +8,7 @@ import (
 
 	"comma-personal-backend/internal/alpr"
 	alprcrypto "comma-personal-backend/internal/alpr/crypto"
+	"comma-personal-backend/internal/alpr/heuristic"
 	"comma-personal-backend/internal/config"
 	"comma-personal-backend/internal/db"
 	"comma-personal-backend/internal/metrics"
@@ -80,6 +81,17 @@ type deps struct {
 	// simultaneous route completions; the aggregator falls back to
 	// dropping the event with a warn when full.
 	alprEncountersUpdated chan worker.EncountersUpdated
+
+	// alprAlertCreated carries one event per genuinely-new (or
+	// strictly-upgraded) heuristic alert. Notification subsystems
+	// (push, dashboard badge invalidation) subscribe here so the
+	// alert UX surfaces promptly without polling. Buffered so a
+	// slow notifier does not stall the heuristic worker; the
+	// heuristic falls back to dropping the event with a warn when
+	// full, and the watchlist row itself is the load-bearing record
+	// (the alert is still discoverable on the next list-alerts
+	// poll).
+	alprAlertCreated chan heuristic.AlertCreated
 
 	// redactionBuilder is the on-demand worker that renders the
 	// cached qcamera-redacted HLS variant when a redacted-share link
