@@ -49,6 +49,38 @@ func (q *Queries) DeleteEncountersForRoute(ctx context.Context, arg DeleteEncoun
 	return result.RowsAffected(), nil
 }
 
+const deleteOrphanedEncounters = `-- name: DeleteOrphanedEncounters :execrows
+DELETE FROM plate_encounters pe
+WHERE NOT EXISTS (
+        SELECT 1
+        FROM plate_detections d
+        WHERE d.dongle_id  = pe.dongle_id
+          AND d.route      = pe.route
+          AND d.plate_hash = pe.plate_hash
+          AND d.frame_ts BETWEEN pe.first_seen_ts AND pe.last_seen_ts
+  )
+`
+
+// Retention sweep: drop encounter rows whose underlying detections have
+// already been pruned. After the per-detection retention pass runs, an
+// encounter whose entire (first_seen_ts, last_seen_ts) window has been
+// emptied of detections has no evidence left and should be cleaned up
+// to keep the per-route review UI from showing zombie rows.
+//
+// Match semantics: an encounter survives if ANY detection still exists
+// with the same (dongle_id, route, plate_hash) AND a frame_ts inside
+// the encounter's [first_seen_ts, last_seen_ts] window. The plate_hash
+// column scopes the join so an encounter for plate A is not kept alive
+// by detections of plate B that happen to overlap in time.
+// Returns the number of orphan encounter rows deleted.
+func (q *Queries) DeleteOrphanedEncounters(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOrphanedEncounters)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getMostRecentEncounterForPlate = `-- name: GetMostRecentEncounterForPlate :one
 SELECT id, dongle_id, route, plate_hash, first_seen_ts, last_seen_ts,
        detection_count, turn_count, max_internal_gap_seconds,

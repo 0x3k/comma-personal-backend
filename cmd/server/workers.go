@@ -413,6 +413,43 @@ func startWorkers(ctx context.Context, d *deps) {
 	log.Printf("alpr heuristic worker started (concurrency=%d, version=%s)",
 		heuristicConcurrency, heuristic.HeuristicVersion)
 
+	// ALPR retention cleanup worker: tiered purge of plate_detections,
+	// orphan plate_encounters, and stale plate_alert_events. Started
+	// only when CLEANUP_ENABLED is true (matches the route cleanup
+	// worker's gating); the worker further self-gates on alpr_enabled
+	// so flipping the runtime flag false at runtime stops scheduling
+	// new passes without a restart. DELETE_DRY_RUN is shared with the
+	// route cleanup worker so a single env flip controls both.
+	//
+	// Placed after the heuristic worker because the heuristic owns the
+	// watchlist transitions that the cleanup worker reads as the
+	// "flagged set". Running cleanup before the heuristic on first
+	// boot would not reach a different decision -- the snapshot is
+	// re-read on every pass -- but ordering them in pipeline-order
+	// keeps the bootstrap log readable.
+	if envBool("CLEANUP_ENABLED", true) {
+		retentionUnflagged := worker.DefaultALPRRetentionDaysUnflagged
+		retentionFlagged := worker.DefaultALPRRetentionDaysFlagged
+		if d.cfg != nil && d.cfg.ALPR != nil {
+			retentionUnflagged = d.cfg.ALPR.RetentionDaysUnflagged
+			retentionFlagged = d.cfg.ALPR.RetentionDaysFlagged
+		}
+		alprCleanup := &worker.ALPRCleanupWorker{
+			Queries:                   d.queries,
+			Settings:                  d.settings,
+			Metrics:                   d.metrics,
+			Interval:                  worker.DefaultALPRCleanupInterval,
+			DryRun:                    envBool("DELETE_DRY_RUN", true),
+			EnvRetentionDaysUnflagged: retentionUnflagged,
+			EnvRetentionDaysFlagged:   retentionFlagged,
+		}
+		go alprCleanup.Run(ctx)
+		log.Printf("alpr cleanup worker started (interval=%s, retention_unflagged_days=%d, retention_flagged_days=%d, dry_run=%v)",
+			worker.DefaultALPRCleanupInterval, retentionUnflagged, retentionFlagged, alprCleanup.DryRun)
+	} else {
+		log.Printf("alpr cleanup worker: disabled via CLEANUP_ENABLED=false")
+	}
+
 	// ALPR notification subscriber: drains heuristic.AlertCreated
 	// events into the notify.Dispatcher (email + webhook fan-out).
 	// Always started so the channel has exactly one consumer. When no

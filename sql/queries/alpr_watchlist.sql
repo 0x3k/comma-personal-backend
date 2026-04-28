@@ -194,6 +194,29 @@ FROM plate_watchlist
 WHERE kind = 'alerted'
   AND acked_at IS NULL;
 
+-- name: ListFlaggedPlateHashes :many
+-- Retention "flagged set" feed: alerted plate_hashes that should be
+-- preserved under the longer flagged retention window. The semantics
+-- intentionally match what the user agreed to in feature notes:
+--   - kind = 'alerted'                : whitelisted/note rows are NOT
+--                                       in the flagged set; whitelisting
+--                                       a plate drops it to the
+--                                       unflagged tier.
+--   - acked_at IS NULL                : an unacked alert is preserved
+--                                       regardless of severity.
+--   - acked_at IS NOT NULL AND
+--     severity >= 4                   : a high-severity alert stays
+--                                       preserved even after ack so
+--                                       evidence is retained for review.
+--   - acked low-severity (1..3)       : NOT in the set; demotes to the
+--                                       unflagged retention tier.
+-- The worker uses the returned hashes as the exclusion list for the
+-- unflagged-retention DELETE pass.
+SELECT plate_hash
+FROM plate_watchlist
+WHERE kind = 'alerted'
+  AND (acked_at IS NULL OR severity >= 4);
+
 -- name: GetWatchlistSignatureSwap :one
 -- Look up the signature-keyed plate-swap alert (if any) for a given
 -- signature_id. Returns pgx.ErrNoRows when no signature-swap row exists.

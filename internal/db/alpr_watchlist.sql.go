@@ -201,6 +201,51 @@ func (q *Queries) ListAlerts(ctx context.Context, arg ListAlertsParams) ([]ListA
 	return items, nil
 }
 
+const listFlaggedPlateHashes = `-- name: ListFlaggedPlateHashes :many
+SELECT plate_hash
+FROM plate_watchlist
+WHERE kind = 'alerted'
+  AND (acked_at IS NULL OR severity >= 4)
+`
+
+// Retention "flagged set" feed: alerted plate_hashes that should be
+// preserved under the longer flagged retention window. The semantics
+// intentionally match what the user agreed to in feature notes:
+//   - kind = 'alerted'                : whitelisted/note rows are NOT
+//     in the flagged set; whitelisting
+//     a plate drops it to the
+//     unflagged tier.
+//   - acked_at IS NULL                : an unacked alert is preserved
+//     regardless of severity.
+//   - acked_at IS NOT NULL AND
+//     severity >= 4                   : a high-severity alert stays
+//     preserved even after ack so
+//     evidence is retained for review.
+//   - acked low-severity (1..3)       : NOT in the set; demotes to the
+//     unflagged retention tier.
+//
+// The worker uses the returned hashes as the exclusion list for the
+// unflagged-retention DELETE pass.
+func (q *Queries) ListFlaggedPlateHashes(ctx context.Context) ([][]byte, error) {
+	rows, err := q.db.Query(ctx, listFlaggedPlateHashes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items [][]byte
+	for rows.Next() {
+		var plate_hash []byte
+		if err := rows.Scan(&plate_hash); err != nil {
+			return nil, err
+		}
+		items = append(items, plate_hash)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPlateHashesForSignatureInWindow = `-- name: ListPlateHashesForSignatureInWindow :many
 SELECT pe.plate_hash,
        FLOOR(pd.gps_lat / $1)::BIGINT  AS cell_lat,

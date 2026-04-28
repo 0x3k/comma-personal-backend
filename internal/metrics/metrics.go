@@ -68,6 +68,11 @@ type Metrics struct {
 
 	alprHeuristicEvalSeconds prometheus.Histogram
 	alprHeuristicAlertsTotal *prometheus.CounterVec
+
+	alprCleanupDeletedDetections  *prometheus.CounterVec
+	alprCleanupDeletedEncounters  prometheus.Counter
+	alprCleanupDeletedAlertEvents prometheus.Counter
+	alprCleanupRunSeconds         prometheus.Histogram
 }
 
 // New creates a Metrics backed by a fresh registry. Use NewWithRegistry to
@@ -281,6 +286,33 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 			},
 			[]string{"severity"},
 		),
+
+		alprCleanupDeletedDetections: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "alpr_cleanup_deleted_detections_total",
+				Help: "Total plate_detections rows deleted by the ALPR retention worker, labelled by tier (unflagged|flagged).",
+			},
+			[]string{"tier"},
+		),
+		alprCleanupDeletedEncounters: prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "alpr_cleanup_deleted_encounters_total",
+				Help: "Total orphan plate_encounters rows deleted by the ALPR retention worker.",
+			},
+		),
+		alprCleanupDeletedAlertEvents: prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "alpr_cleanup_deleted_alert_events_total",
+				Help: "Total plate_alert_events rows deleted by the ALPR retention worker (only for plates not on the watchlist and older than the alert-events review window).",
+			},
+		),
+		alprCleanupRunSeconds: prometheus.NewHistogram(
+			prometheus.HistogramOpts{
+				Name:    "alpr_cleanup_run_seconds",
+				Help:    "Wall-clock duration of one ALPR retention cleanup pass.",
+				Buckets: defaultDurationBuckets,
+			},
+		),
 	}
 
 	reg.MustRegister(
@@ -311,6 +343,10 @@ func NewWithRegistry(reg *prometheus.Registry) *Metrics {
 		m.alprEncountersPerRoute,
 		m.alprHeuristicEvalSeconds,
 		m.alprHeuristicAlertsTotal,
+		m.alprCleanupDeletedDetections,
+		m.alprCleanupDeletedEncounters,
+		m.alprCleanupDeletedAlertEvents,
+		m.alprCleanupRunSeconds,
 	)
 
 	return m
@@ -598,4 +634,43 @@ func (m *Metrics) IncALPRHeuristicAlerts(severity int) {
 	}
 	label := [...]string{"0", "1", "2", "3", "4", "5"}[severity]
 	m.alprHeuristicAlertsTotal.WithLabelValues(label).Inc()
+}
+
+// AddALPRCleanupDeletedDetections bumps the counter of plate_detections
+// rows the ALPR retention worker deleted. tier should be "unflagged" or
+// "flagged"; any other value is still recorded as a new label value.
+// n may be zero (a no-op) so callers do not need to special-case empty
+// passes.
+func (m *Metrics) AddALPRCleanupDeletedDetections(tier string, n int64) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.alprCleanupDeletedDetections.WithLabelValues(tier).Add(float64(n))
+}
+
+// AddALPRCleanupDeletedEncounters bumps the orphan-encounter delete
+// counter by n. n may be zero (a no-op).
+func (m *Metrics) AddALPRCleanupDeletedEncounters(n int64) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.alprCleanupDeletedEncounters.Add(float64(n))
+}
+
+// AddALPRCleanupDeletedAlertEvents bumps the alert-event delete counter
+// by n. n may be zero (a no-op).
+func (m *Metrics) AddALPRCleanupDeletedAlertEvents(n int64) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.alprCleanupDeletedAlertEvents.Add(float64(n))
+}
+
+// ObserveALPRCleanupRun records the wall-clock duration of one ALPR
+// retention cleanup pass.
+func (m *Metrics) ObserveALPRCleanupRun(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.alprCleanupRunSeconds.Observe(d.Seconds())
 }

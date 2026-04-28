@@ -132,6 +132,37 @@ notice repeats; drop them after a month if nothing flagged them.
 recommended -- the database grows unbounded and the heuristic does not
 benefit from very old reads. Adjust with care.
 
+The retention sweep is owned by a dedicated worker
+(`internal/worker/alpr_cleanup.go`) that runs once every 24 hours when
+both `CLEANUP_ENABLED=true` and `alpr_enabled=true`. It performs four
+tiered passes per run:
+
+1. **Unflagged detections.** Delete `plate_detections` older than
+   `ALPR_RETENTION_DAYS_UNFLAGGED` whose `plate_hash` is NOT in the
+   "flagged set" -- alerted+unacked watchlist rows OR alerted rows with
+   `severity >= 4`. Whitelisted plates and acked low-severity (1..3)
+   alerts are not in the flagged set, so their old detections age out
+   under the unflagged window.
+2. **Absolute ceiling.** Delete every `plate_detections` row older than
+   `ALPR_RETENTION_DAYS_FLAGGED` regardless of flag state. Acts as the
+   belt-and-braces guarantee that even a long-running alert cannot keep
+   evidence past the operator-configured maximum window.
+3. **Orphan encounters.** Delete `plate_encounters` rows whose
+   underlying detections have all been pruned in the previous tiers.
+4. **Orphan alert events.** Delete `plate_alert_events` older than 90
+   days for plates no longer in `plate_watchlist`. Plates still on the
+   watchlist keep their full audit trail.
+
+`plate_watchlist` and `vehicle_signatures` are **never** touched by the
+worker -- the former is user-curated state, the latter is a small
+long-lived identity index for cross-route fusion.
+
+`DELETE_DRY_RUN=true` (the default on first boot) makes the worker log
+the delete sets it would issue without executing them, so operators can
+audit the planned scope before flipping to real deletion. The same
+flag also gates the route cleanup worker, so a single env toggle
+controls both.
+
 ### Networking
 
 The only HTTP call ALPR makes is from the Go backend to the ALPR engine
