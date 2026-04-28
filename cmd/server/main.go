@@ -15,6 +15,7 @@ import (
 	"comma-personal-backend/internal/metrics"
 	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
+	"comma-personal-backend/internal/worker"
 	"comma-personal-backend/internal/ws"
 )
 
@@ -47,20 +48,54 @@ func main() {
 		log.Printf("warning: failed to seed retention_days setting: %v", err)
 	}
 
+	// ALPR runtime settings: same seeding rationale as retention_days. The
+	// master flag (alpr_enabled) is left unseeded so its absence is
+	// indistinguishable from an explicit `false`, which is the safe default.
+	// If the operator has flipped it on previously the existing row sticks
+	// across restarts. logALPRStartup emits a single info line summarising
+	// the merged settings only when ALPR is currently enabled, so the
+	// expected default (off) produces no log noise.
+	alprKeyring := verifyALPRKeyring(cfg.ALPR)
+	seedALPRDefaults(settingsStore, cfg.ALPR)
+	logALPRStartup(settingsStore, cfg.ALPR)
+
 	// Metrics registry is shared across the process: the HTTP middleware,
 	// the transcoder, the RPC caller, and the hub all observe into it, and
 	// /metrics exposes it.
 	m := metrics.New()
 
+	// Redaction builder is constructed up-front (before setupRoutes)
+	// so the share handler can be wired with a Trigger reference. It
+	// stays unstarted here; startWorkers calls Start (or skips it
+	// entirely when REDACTION_BUILDER_ENABLED=false). When the env
+	// flag is off we leave d.redactionBuilder nil so the share handler
+	// degrades gracefully -- viewers of redact_plates=true tokens
+	// receive a 503 with no follow-up build, which is the correct
+	// behaviour when ALPR is fully disabled.
+	concurrency := envInt("REDACTION_BUILDER_CONCURRENCY", 1)
+	redactionBuilder := worker.NewRedactionBuilder(queries, store, concurrency)
+
+	// ALPR notify dispatcher: constructed up-front so setupRoutes can
+	// register the operator-facing test endpoint and startWorkers can
+	// spawn the AlertCreated subscriber goroutine. The dispatcher is
+	// non-nil even when no ALPR_NOTIFY_* env vars are configured -- in
+	// that case it has zero senders and Dispatch / Test are no-ops, so
+	// the test endpoint reports "configured: false" cleanly.
+	alprNotifyDispatcher := buildALPRNotifyDispatcher(cfg.ALPR, queries, alprKeyring)
+
 	d := &deps{
-		cfg:           cfg,
-		queries:       queries,
-		store:         store,
-		settings:      settingsStore,
-		metrics:       m,
-		hub:           ws.NewHubWithMetrics(m),
-		rpcCaller:     ws.NewRPCCallerWithMetrics(m),
-		sessionSecret: []byte(cfg.SessionSecret),
+		cfg:              cfg,
+		pool:             pool,
+		queries:          queries,
+		store:            store,
+		settings:         settingsStore,
+		metrics:          m,
+		hub:              ws.NewHubWithMetrics(m),
+		rpcCaller:        ws.NewRPCCallerWithMetrics(m),
+		sessionSecret:    []byte(cfg.SessionSecret),
+		alprKeyring:      alprKeyring,
+		redactionBuilder: redactionBuilder,
+		alprNotify:       alprNotifyDispatcher,
 	}
 
 	e := echo.New()

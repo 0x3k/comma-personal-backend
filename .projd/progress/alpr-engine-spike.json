@@ -1,0 +1,20 @@
+{
+  "id": "alpr-engine-spike",
+  "name": "ALPR engine evaluation spike (decision document)",
+  "status": "complete",
+  "priority": 1,
+  "blocked_by": [],
+  "branch": "agent/alpr-engine-spike",
+  "base_branch": "feat/alpr",
+  "summary": "Time-boxed empirical evaluation of ALPR engines on the user's actual fcamera footage. Every implementation feature in this batch depends on a concrete engine choice, but the right answer is empirical: detection rate, OCR exact-match, and inference cost vary dramatically by engine and by the lighting/region of the user's footage. Output is a written decision in docs/ALPR-ENGINE-DECISION.md plus benchmark numbers, NOT production code. Spike code stays under tools/alpr-spike/ and is git-ignored after the decision lands. The feature ends with a chosen engine + a recommended hardware profile (CPU-only acceptable vs GPU recommended) that the rest of the plan can build on.",
+  "acceptance_criteria": [
+    "Hand-curate a sample of ~50 fcamera frames spanning day/night, highway/city, clear/dirty plates, and label ground-truth plate text for each. Frames live under tools/alpr-spike/samples/ (git-ignored).",
+    "Evaluate at minimum: FastALPR (Python, MIT, YOLOv9 + PaddleOCR, https://github.com/ankandrew/fast-alpr), OpenALPR-OSS branch (older but still usable), and a DIY YOLOv8 + EasyOCR pipeline. Add Plate Recognizer or other commercial engines only as an accuracy ceiling reference -- they are NOT a deployment option (defeats the privacy posture; document explicitly).",
+    "Per-engine measurements: detection rate (% frames with any plate detected), OCR exact-match rate vs ground truth, character error rate, mean and p95 inference latency on CPU, mean and p95 on GPU if available, peak RSS, model size on disk.",
+    "Document make/model/color extension support per engine -- this matters for alpr-vehicle-attributes-engine. Note any engine that bundles vehicle-attribute classification natively (FastALPR has a make/color plugin; OpenVINO has vehicle-attributes-recognition-barrier).",
+    "Write docs/ALPR-ENGINE-DECISION.md: results table, chosen engine + reasoning, hardware recommendation (minimum CPU spec for acceptable real-time-of-real-time ratio; GPU recommendation), licensing notes (MIT/Apache vs commercial), risks (e.g. PaddleOCR Chinese-character bias, regional plate format quirks).",
+    "Spike code lives under tools/alpr-spike/ with a small Python or bash harness that reproduces the benchmark numbers. Add tools/alpr-spike/ to .gitignore (or document the carve-out). No production-path Go code added in this feature.",
+    "Decision document explicitly answers: (1) which engine, (2) Docker image source (pre-built vs we build), (3) CPU-only acceptable for typical user (yes/no with caveats), (4) does the chosen engine support make/model/color or does alpr-vehicle-attributes-engine need to bolt on a separate classifier."
+  ],
+  "notes": "Decision: FastALPR (MIT) as the primary engine. Build the Docker image locally under docker/alpr/. CPU-only acceptable for typical home use (~6-25x realtime at 1 fps sample rate); GPU recommended for bulk backfill. Vehicle make/color extension uses open-image-models (MIT, same author) in the same container; exact model+year stay nullable (no OSS engine supports them in 2026). Harness lives at tools/alpr-spike/ (samples/, models/, results/ git-ignored at both local and root level). Decision document at docs/ALPR-ENGINE-DECISION.md."
+}

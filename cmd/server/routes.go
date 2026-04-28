@@ -138,9 +138,10 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	v1Routes := e.Group("/v1/routes", sessionOrJWT)
 	routeHandler.RegisterPreservedRoute(v1Routes)
 	routeHandler.RegisterAnnotationReadRoutes(v1Routes)
-	api.NewExportHandler(d.queries, d.store).RegisterRoutes(v1Routes)
+	api.NewExportHandler(d.queries, d.store).WithSettings(d.settings).RegisterRoutes(v1Routes)
 	api.NewSignalsHandler(d.queries, d.store).RegisterRoutes(v1Routes)
 	api.NewThumbnailHandler(d.store).RegisterRoutes(v1Routes)
+	api.NewTurnsHandler(d.queries).RegisterRoutes(v1Routes)
 
 	// Authenticated segment file streaming. Mounted at the top-level path
 	// /storage/... (not under /v1) because the frontend was already
@@ -154,7 +155,8 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	// mounted directly on the top-level Echo instance below -- they must
 	// not be gated on the session middleware because the whole point is
 	// to let an unauthenticated viewer see a single shared route.
-	shareHandler := api.NewShareHandler(d.queries, d.store, d.cfg.SessionSecret)
+	shareHandler := api.NewShareHandler(d.queries, d.store, d.cfg.SessionSecret).
+		WithRedaction(d.settings, d.redactionBuilder, d.cfg.StoragePath)
 	v1RoutesSessionOnly := e.Group("/v1/routes", sessionOnly)
 	shareHandler.RegisterCreateRoute(v1RoutesSessionOnly)
 	shareHandler.RegisterPublicRoutes(e)
@@ -216,6 +218,97 @@ func setupRoutes(e *echo.Echo, d *deps) {
 	settingsHandler := api.NewSettingsHandler(d.settings, d.cfg.RetentionDays)
 	settingsHandler.RegisterReadRoutes(v1ConfigRead)
 	settingsHandler.RegisterMutationRoutes(v1ConfigWrite)
+
+	// ALPR configuration. Routes always register (no env-gating) so the
+	// frontend can flip the master flag without a server restart. Reads
+	// ride sessionOrJWT because devices can ask "is ALPR enabled?";
+	// mutations are session-only because a compromised device must never
+	// be able to enable plate recording on itself.
+	alprSettingsHandler := api.NewALPRSettingsHandler(d.settings, d.cfg.ALPR, d.queries)
+	alprSettingsHandler.RegisterReadRoutes(v1ConfigRead)
+	alprSettingsHandler.RegisterMutationRoutes(v1ConfigWrite)
+
+	// ALPR historical backfill operator endpoints. All five routes
+	// (start/status/pause/resume/cancel) are session-only -- a device
+	// JWT must never start, pause, or cancel a backfill on the
+	// operator's behalf. The trigger interface lets a successful start
+	// wake the worker immediately rather than wait for its periodic
+	// re-check.
+	if d.cfg.UIAuthEnabled() {
+		alprBackfillHandler := api.NewALPRBackfillHandler(d.queries, d.alprBackfill)
+		alprBackfillHandler.RegisterRoutes(v1ConfigWrite)
+	}
+
+	// ALPR notification test endpoint. Session-only -- a device JWT
+	// must never be able to make the backend send mail or POST to a
+	// user-configured webhook. The dispatcher itself is constructed in
+	// main.go regardless of UI-auth state; we only register the route
+	// when UI auth is on.
+	if d.cfg.UIAuthEnabled() {
+		api.NewALPRNotifyHandler(d.alprNotify).RegisterRoutes(v1ConfigWrite)
+	}
+
+	// ALPR encounters / plate-detail read endpoints. Routes register
+	// regardless of the runtime alpr_enabled flag so the frontend can
+	// render a clean "feature disabled" state from a 503 response
+	// instead of crashing on a 404. The requireAlprEnabled middleware
+	// short-circuits each request when the flag is off (or the
+	// keyring is unconfigured), and the handler decrypts plate text
+	// only after auth has succeeded.
+	//
+	// /v1/routes/:dongle/:route/plates is sessionOrJWT (the device-
+	// facing /upload paths already trust the dongle's own JWT for
+	// reads of its own state). /v1/plates/:hash_b64 is session-only
+	// because a device should never be able to query plate history
+	// across the entire fleet.
+	alprEncountersHandler := api.NewALPREncountersHandler(d.queries, d.settings, d.alprKeyring)
+	v1RoutesAlpr := e.Group("/v1/routes", sessionOrJWT, alprEncountersHandler.RequireEnabled())
+	alprEncountersHandler.RegisterRouteEncounters(v1RoutesAlpr)
+	v1Plates := e.Group("/v1/plates", sessionOnly, alprEncountersHandler.RequireEnabled())
+	alprEncountersHandler.RegisterPlateDetail(v1Plates)
+
+	// ALPR alert center + whitelist. All endpoints session-only --
+	// alerts are user-curated state and a device JWT must never list
+	// or mutate them. Routes register regardless of the runtime flag
+	// so the frontend can render a clean disabled state from a 503;
+	// requireAlprEnabled short-circuits each request when the flag is
+	// off (or the keyring is unconfigured). The handler emits
+	// AlertSuppressed on the dedicated channel when a whitelist
+	// transition takes a row out of the open-alerts bucket.
+	alprWatchlistHandler := api.NewALPRWatchlistHandler(
+		d.queries,
+		d.settings,
+		d.alprKeyring,
+		d.alprAlertSuppressed,
+	)
+	v1AlprSession := e.Group("/v1", sessionOnly, alprWatchlistHandler.RequireEnabled())
+	alprWatchlistHandler.RegisterRoutes(v1AlprSession)
+
+	// ALPR heuristic re-evaluation endpoint. Session-only -- a
+	// device JWT must never be able to trigger a fleet-wide rescore
+	// (it is also a non-trivial workload). The handler reuses the
+	// running heuristic worker so settings overrides written by the
+	// tuning UI take effect on the very next call.
+	if d.cfg.UIAuthEnabled() {
+		api.NewALPRReevaluateHandler(d.queries, d.alprHeuristicWorker).
+			RegisterRoutes(v1AlprSession)
+	}
+
+	// ALPR manual-correction + plate-merge endpoints. Session-only --
+	// rewriting plate identity is an operator action; a device JWT
+	// must never trigger one. Mounted on the same v1AlprSession group
+	// so it inherits the requireAlprEnabled gate. The handler runs each
+	// mutation inside a transaction and enqueues a re-trigger event on
+	// d.alprDetectionsComplete after commit so the existing aggregator
+	// + heuristic pipeline picks up the change without inline blocking.
+	alprCorrectionsHandler := api.NewALPRCorrectionsHandler(
+		api.WrapPgxQueriesForCorrections(d.queries),
+		d.pool,
+		d.settings,
+		d.alprKeyring,
+		d.alprDetectionsComplete,
+	)
+	alprCorrectionsHandler.RegisterRoutes(v1AlprSession)
 
 	// Per-device trip stats live at /v1/devices/:dongle_id/stats, so they
 	// accept either a session cookie or a device JWT via the shared read group.

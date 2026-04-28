@@ -4,7 +4,8 @@
     "protected_branches": ["main", "master"],
     "allow_push": "feature",
     "allow_force_push": false,
-    "auto_commit": true
+    "auto_commit": true,
+    "merge_strategy": "squash"
   },
   "dispatch": {
     "max_agents": 20,

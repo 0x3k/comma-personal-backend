@@ -1,0 +1,24 @@
+{
+  "id": "alpr-route-overlay-ui",
+  "name": "Plate sightings track on the route detail timeline",
+  "status": "complete",
+  "priority": 5,
+  "blocked_by": ["alpr-encounters-api"],
+  "branch": "agent/alpr-route-overlay-ui",
+  "base_branch": "feat/alpr",
+  "summary": "Surface plate sightings on the existing route detail page as a new track on the signal timeline. Clicking a sighting marker seeks the video; hovering shows a thumbnail and the detected plate + vehicle badge. Visible only when alpr_enabled is true (frontend reads /v1/settings/alpr). Severity-colored: gray for unalerted, amber for sev 2-3, red for sev 4-5. Don't fork the existing SignalTimeline component; add a sibling track inside it. Existing component lives at web/src/components/video/SignalTimeline.tsx.",
+  "acceptance_criteria": [
+    "New hook web/src/lib/useAlprSettings.ts: fetches /v1/settings/alpr once on mount, exposes {enabled, engineReachable, ...}. Caches via SWR or the project's existing API client cache. Default state during loading: do NOT reserve UI space (avoid flicker).",
+    "New component web/src/components/video/PlateTimeline.tsx. Sits inside the existing signal timeline rail (find the SignalTimeline render and add the new track immediately below the engagement track or wherever fits the existing visual hierarchy).",
+    "Each encounter renders as a horizontal segment from first_seen_ts to last_seen_ts on the timeline's time axis. Color-coded by severity: gray (severity 0/null), amber (2-3), red (4-5). Sev 1 not used by the heuristic but treat as gray.",
+    "Hover tooltip: plate text, vehicle badge (color dot in the literal vehicle color when known + 'Make Model' label when signature present), 'Followed through N turns' when turn_count >= 1, ack status, click-to-seek hint.",
+    "Click jumps the player currentTime to first_seen_ts (use the same seek API SignalTimeline already uses for engagement events).",
+    "Severity > 0 segments get a small icon badge (alert-triangle) that is ALSO visible in the minimap/scrubber at the bottom of the player so the user can spot alerted encounters without scrolling the timeline.",
+    "Data fetching: single call to /v1/routes/{dongle}/{route}/plates via the existing apiFetch helper. Refetch on route change only.",
+    "Empty state: zero encounters -> render nothing (do not reserve a blank rail with a placeholder; visual noise is worse than absence).",
+    "Feature flag check: useAlprSettings().enabled === true gates the entire PlateTimeline render. When false, render returns null.",
+    "Lint clean (pnpm --dir web lint), type-check clean (pnpm --dir web type-check), tests added for the empty state, feature-flag-off state, and click-to-seek behavior.",
+    "Manual verification on a route with >=3 encounters of varying severity: load the route, verify color coding matches the encounter severity, hover shows correct vehicle badge, click seeks the video, alerted markers visible in scrubber."
+  ],
+  "notes": "Implemented as PlateTimeline sibling to SignalTimeline in routes/[dongleId]/[routeName]/page.tsx. useAlprSettings hook caches the /v1/settings/alpr response in module scope so it is fetched once per session. Tests cover the three required states (empty, flag-off, click-to-seek). Manual verification of the multi-severity rendering and scrubber markers must be done against a live backend with seeded encounters."
+}

@@ -1,0 +1,22 @@
+{
+  "id": "alpr-encounters-api",
+  "name": "REST endpoints: route plates + plate cross-route history",
+  "status": "complete",
+  "priority": 4,
+  "blocked_by": ["alpr-encounter-aggregator"],
+  "branch": "agent/alpr-encounters-api",
+  "base_branch": "feat/alpr",
+  "summary": "Read endpoints the UI uses to surface plate sightings. Two routes: per-route encounters (for the route detail timeline overlay) and per-plate cross-route history (for the plate detail page). Routes always register; runtime alpr_enabled gating returns 503 when off so the frontend can render a clear 'feature disabled' state instead of crashing on 404. Plate text is decrypted only inside handlers and only after authentication via the standard checkDongleAccess pattern.",
+  "acceptance_criteria": [
+    "Routes registered in cmd/server/routes.go regardless of alpr_enabled. Each handler checks runtime flag at request time and returns 503 with {error: 'alpr_disabled', detail: 'Enable ALPR in Settings to use this endpoint.'} when off. Add a small middleware helper requireAlprEnabled to avoid copy-paste.",
+    "GET /v1/routes/:dongle_id/:route_name/plates (session-or-JWT, calls checkDongleAccess from internal/api/auth_check.go): returns {encounters: [{plate, plate_hash_b64, first_seen_ts, last_seen_ts, detection_count, turn_count, signature: {make, model, color, body_type, confidence}|null, severity_if_alerted: int|null, ack_status: 'open'|'acked'|null, bbox_first, sample_thumb_url: string|null}]}. plate is decrypted text -- requester is authenticated and viewing their own data. plate_hash_b64 is base64-encoded for URL safety in plate-detail links.",
+    "sample_thumb_url is nullable for now; format: /v1/alpr/detections/:id/thumbnail. Implementation of the thumbnail endpoint can be a follow-up; if not implemented yet, set to null and document.",
+    "GET /v1/plates/:hash_b64 (session-only -- device should not query plate history): returns {plate, plate_hash_b64, watchlist_status: {kind, severity, label, acked_at}|null, signature: {...}|null, encounters: [{dongle_id, route, first_seen_ts, last_seen_ts, detection_count, turn_count, signature: {...}|null, area_cluster_label}], stats: {distinct_routes_30d, distinct_areas_30d, total_detections, first_ever_seen, last_ever_seen}}. 404 if no encounters exist for that hash for any of the user's devices. Pagination on encounters via ?limit=&offset=, default limit 50.",
+    "area_cluster_label is a human-friendly representation of the 5 km grid cell -- if the route already has reverse-geocoded start/end addresses (trip-aggregator-worker output), use the start address; otherwise fall back to lat/lng-rounded.",
+    "Both endpoints decrypt plate text inside the handler ONLY -- never log it (use plate_hash_b64 in logs), never write to traces or metrics labels.",
+    "Plate-hash routing: the URL parameter is base64 (URL-safe, no padding). Decode in the handler; 400 on malformed.",
+    "Tests: route-plates with mixed alerted/unalerted, missing-signature path, pagination correctness on /v1/plates, 404 on unknown hash, 403 on cross-device access via checkDongleAccess, 503 when alpr_enabled=false.",
+    "OpenAPI / docs note: list these endpoints in the README API table once alpr-docs lands; cross-reference here so the docs feature picks them up."
+  ],
+  "notes": "Routes register unconditionally via the alprEncountersHandler.RequireEnabled() middleware factory; 503 returned when alpr_enabled=false or the keyring is unconfigured. Plate text decrypted only inside the handler from each encounter's matching detection ciphertext. /v1/plates/:hash_b64 accepts both URL-safe and standard base64 (with or without padding) for resilience; pagination defaults to limit=50, capped at 200. area_cluster_label uses trips.start_address when available, falling back to lat/lng rounded to 2dp. distinct_routes_30d is computed in-memory across the encounter set so no schema changes are required (criterion-5 / aggregator hint in the brief)."
+}

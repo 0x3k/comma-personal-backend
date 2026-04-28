@@ -1,0 +1,27 @@
+{
+  "id": "alpr-frame-extractor",
+  "name": "ALPR frame extractor worker (fcamera -> JPEG frames)",
+  "status": "complete",
+  "priority": 3,
+  "blocked_by": ["alpr-engine-service", "alpr-schema"],
+  "branch": "agent/alpr-frame-extractor",
+  "base_branch": "feat/alpr",
+  "summary": "Background worker that samples frames from each new fcamera segment at the configured FPS, paired with per-frame millisecond offsets so detections can be correlated with the route's GPS timeline. Producer half of the ALPR pipeline; alpr-detection-worker is the consumer. Triggered by the same segment-finalized signal that the existing transcoder + event-detector workers use -- check internal/worker/event_detector.go and internal/worker/transcoder.go for the exact wire-up pattern.",
+  "acceptance_criteria": [
+    "New worker file internal/worker/alpr_extractor.go. Started from cmd/server/workers.go, gated on the runtime alpr_enabled flag (not env var).",
+    "Toggle responsiveness: when the runtime flag flips false the worker stops dequeuing new segments within ~30 s; when it flips true, it resumes from the queue. Implementation can be poll-based (check the flag every ~10s + at the top of each segment loop) or event-based via a settings-change channel; either is acceptable, document choice in code.",
+    "Trigger: subscribes to the same segment-finalized signal used by event-detector. Match the existing pattern; do NOT invent a new signaling mechanism. Look at how cmd/server/workers.go starts event-detector and follow.",
+    "For each fcamera segment file at <storage>/<dongle>/<route>/<seg>/fcamera.hevc: call ffmpeg via os/exec with `-i fcamera.hevc -vf 'fps=<configured>' -f image2pipe -vcodec mjpeg -` to stream JPEG frames on stdout. Wrap stderr to a rate-limited logger so transient ffmpeg warnings don't flood logs.",
+    "Compute frame_offset_ms = round(frame_index * 1000 / fps) relative to segment start. Emit {dongle_id, route, segment, frame_offset_ms, jpeg_bytes []byte} onto a buffered channel (capacity ~32; tunable via env ALPR_EXTRACTOR_BUFFER, default 32) consumed by alpr-detection-worker.",
+    "Concurrency: ALPR_EXTRACTOR_CONCURRENCY env (default 1). With CPU-only ALPR engine this should stay 1 to avoid starving the engine; on GPU users may bump to 2-4. Honor the existing config plumbing.",
+    "Idempotency: skip a segment if alpr_segment_progress.processed_at_extractor is non-null. Mark it set on successful completion (all frames pushed to channel, ffmpeg exited cleanly). Do NOT mark on failure.",
+    "Failure handling: ffmpeg non-zero exit => log warn with stderr tail, do NOT mark processed, move on to next segment. Don't crash the worker on a single bad segment.",
+    "Graceful shutdown: on context cancel, stop the ffmpeg child, drain in-flight frames, close the output channel, return.",
+    "Backpressure: if the downstream channel is full, the extractor blocks (this is the intended behavior -- prevents unbounded memory growth when the engine is slow).",
+    "Metrics: register Prometheus counters/histograms via internal/metrics: alpr_frames_extracted_total{result=ok|error}, alpr_extractor_segment_seconds (histogram), alpr_extractor_queue_depth (gauge of channel length).",
+    "Tests with a small fixture HEVC under internal/worker/testdata/: extract at 2 fps and assert correct frame count + monotonic increasing offsets. Test the idempotency path (second run on same segment is a no-op). Test cancel during extraction (no goroutine leak)."
+  ],
+  "notes": "Implemented internal/worker/alpr_extractor.go with poll-based scanner over ListRecentRoutes (mirrors transcoder/event-detector pattern), per-segment processing under a small worker pool, ffmpeg via os/exec with -vf fps=N -f image2pipe -vcodec mjpeg, MJPEG SOI/EOI parsing on stdout, concurrent rate-limited stderr drain, idempotency via alpr_segment_progress.processed_at_extractor, graceful shutdown that closes the output channel. Channel exposed on deps.alprFrames so the future detection worker (next wave) can subscribe. Metrics added: alpr_frames_extracted_total{result}, alpr_extractor_segment_seconds histogram, alpr_extractor_queue_depth gauge. Tests cover fps cadence, idempotency, cancel-with-no-leak, and the JPEG parser. No schema changes; existing sqlc-generated MarkExtractorProcessed/IsExtractorProcessed/ListRecentRoutes used as-is."
+}
+</content>
+</invoke>

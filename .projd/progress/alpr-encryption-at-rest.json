@@ -1,0 +1,24 @@
+{
+  "id": "alpr-encryption-at-rest",
+  "name": "Plate text encryption + stable hash identity",
+  "status": "complete",
+  "priority": 2,
+  "blocked_by": ["alpr-schema"],
+  "branch": "agent/alpr-encryption-at-rest",
+  "base_branch": "feat/alpr",
+  "summary": "Encryption + stable-identity hashing for plate strings. Plate text is sensitive: we want plates indexed for cross-trip matching but not stored in plaintext. Solution: AES-256-GCM ciphertext for the plate text (decrypted only when displaying to the authenticated user) + HMAC-SHA256 hash for cross-row matching. All keys derive from a single ALPR_ENCRYPTION_KEY env var via HKDF so one rotation invalidates everything coherently. This is a hard prerequisite for enabling ALPR -- the feature toggle in alpr-config refuses to flip without this key configured.",
+  "acceptance_criteria": [
+    "New package internal/alpr/crypto with: LoadKeyring(b64 string) (*Keyring, error) -- decodes base64, requires >= 32 bytes raw, derives via HKDF-SHA256 three subkeys: enc_key (32 B for AES-256-GCM), hash_salt (32 B for HMAC-SHA256), aad (16 B as additional authenticated data). HKDF info strings: 'alpr-encrypt-v1', 'alpr-hash-v1', 'alpr-aad-v1'. Distinct info => distinct keys even from the same root material.",
+    "(*Keyring).Encrypt(plaintext string) ([]byte, error): AES-256-GCM with a fresh 12-byte random nonce prepended; AAD = aad || []byte(\"plate\"). Output format: nonce || ciphertext_with_tag. Returns nil + error if plaintext is empty (caller bug).",
+    "(*Keyring).Decrypt(ciphertext []byte) (string, error): inverse. Authenticated; tampering returns ErrAuthFailed.",
+    "(*Keyring).Hash(plaintext string) []byte: HMAC-SHA256(hash_salt, normalize(plaintext)). Normalize: strings.ToUpper + strip {' ', '-', '.', tab}. Returns 32 bytes.",
+    "(*Keyring).EncryptLabel(plaintext string) etc. -- same primitives but AAD = aad || []byte(\"label\"); used for plate_watchlist.label_ciphertext.",
+    "All writers of plate_ciphertext, plate_hash, label_ciphertext use ONLY these helpers. Add a lint-style grep test (or vet checker if practical) confirming no other call sites instantiate aes.NewCipher or hmac.New for plate-related work.",
+    "New small CLI helper cmd/alpr-keygen/main.go: prints crypto/rand 32 bytes base64-encoded so the user can populate ALPR_ENCRYPTION_KEY without rolling their own. Document in docs/ALPR.md (owned by alpr-docs).",
+    "Startup self-check: when alpr-config initializes the keyring, encrypt+decrypt a probe string and verify roundtrip; abort startup with a clear error message if encryption fails (saves a 3am debugging session). The probe string is fixed and harmless ('alpr-probe').",
+    "Hash determinism: same plate text -> same hash forever, given the same env key. Different formatting of the same plate ('abc 123' vs 'ABC-123') -> identical hash. Different plates -> different hashes. Rotating ALPR_ENCRYPTION_KEY invalidates ALL prior hashes and ciphertexts (data is lost from the user's POV) -- document this loudly in docs/ALPR.md.",
+    "Tests: encrypt/decrypt roundtrip, ciphertext nonce uniqueness across N=1000 calls (no collisions), tampered ciphertext rejected, hash determinism, hash format-insensitivity, missing-key bootstrap error message, key-too-short error.",
+    "Performance: encrypt + hash combined under 50 microseconds on a typical CPU (these run inside the detection-worker hot loop). Verify with a small benchmark."
+  ],
+  "notes": ""
+}

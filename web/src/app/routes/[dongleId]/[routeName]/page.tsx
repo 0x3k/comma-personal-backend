@@ -7,6 +7,7 @@ import { apiFetch, BASE_URL } from "@/lib/api";
 import type { LogEntry, RouteDetailResponse, Segment } from "@/lib/types";
 import { type CameraType } from "@/components/video/MultiCameraPlayer";
 import { SignalTimeline } from "@/components/video/SignalTimeline";
+import { PlateTimeline } from "@/components/video/PlateTimeline";
 import {
   RoutePlayer,
   type RoutePlayerHandle,
@@ -25,6 +26,7 @@ import { ShareButton } from "@/components/ShareButton";
 import { RouteThumbnail } from "@/components/routes/RouteThumbnail";
 import { RouteAnnotations } from "@/components/routes/RouteAnnotations";
 import { FullDataRequestControl } from "@/components/routes/FullDataRequestControl";
+import { ExportMP4Menu } from "@/components/routes/ExportMP4Menu";
 import { formatDurationBetween } from "@/lib/format";
 
 const FILE_TYPES: { key: keyof Omit<Segment, "number">; label: string }[] = [
@@ -226,6 +228,10 @@ export default function RouteDetailPage() {
                     routeName={route.routeName}
                     onComplete={fetchRoute}
                   />
+                  <ExportMP4Menu
+                    dongleId={route.dongleId}
+                    routeName={route.routeName}
+                  />
                   <ShareButton
                     dongleId={route.dongleId}
                     routeName={route.routeName}
@@ -342,6 +348,19 @@ export default function RouteDetailPage() {
                     routeName={routeName}
                     currentTime={routeRelativeTime}
                     segmentOffsetSec={0}
+                    onSeek={(routeRelativeSec) => {
+                      playerRef.current?.seekRoute(routeRelativeSec);
+                    }}
+                  />
+                  {/* Plate sightings rail. Renders nothing unless
+                      alpr_enabled is true and the route has at least
+                      one encounter, so it sits silently below the
+                      signal timeline on routes without ALPR data. */}
+                  <PlateTimeline
+                    dongleId={dongleId}
+                    routeName={routeName}
+                    routeStartTs={route.startTime}
+                    routeDurationSec={route.segmentCount * SEGMENT_DURATION_SEC}
                     onSeek={(routeRelativeSec) => {
                       playerRef.current?.seekRoute(routeRelativeSec);
                     }}

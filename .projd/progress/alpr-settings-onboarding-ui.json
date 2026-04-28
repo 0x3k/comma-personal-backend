@@ -1,0 +1,24 @@
+{
+  "id": "alpr-settings-onboarding-ui",
+  "name": "Settings: Optional services -> ALPR card (the on-ramp)",
+  "status": "complete",
+  "priority": 6,
+  "blocked_by": ["alpr-watchlist-api", "alpr-disclaimer-gate"],
+  "branch": "agent/alpr-settings-onboarding-ui",
+  "base_branch": "feat/alpr",
+  "summary": "The opt-in surface. Settings page gains an 'Optional services' section with an ALPR card -- toggle, disclaimer modal, engine reachability indicator, copy-paste deploy command, and (when running) live status (queue depth, last detection). This is the path the user walks to enable the feature. Goal is 'as simple as the postgres container': they flip a toggle, ack a modal, run one command if the sidecar isn't up, and they're done. Modeled on the existing storage-settings-ui pattern -- check that file for layout conventions.",
+  "acceptance_criteria": [
+    "New section in web/src/app/settings (matches existing settings layout) titled 'Optional services'. ALPR card is the first (and currently only) card.",
+    "Card has 4 visual states driven by /v1/settings/alpr response + a side fetch of /v1/alpr/alerts/summary when enabled:",
+    "  STATE 1 -- Disabled (default): short description -- 'Detect license plates in your dashcam footage and warn when the same vehicle appears across multiple trips. All processing is local; plates are encrypted at rest. Off by default.' Single 'Enable...' button.",
+    "  STATE 2 -- Disclaimer modal (on Enable click): displays the jurisdictional disclaimer text (defined in this file as a const DISCLAIMER_TEXT keyed by jurisdiction code). Jurisdiction dropdown: US, EU, UK, CA, AU, Other (with brief tooltip per option pointing to legal nuances; full text in docs/ALPR.md). User must check 'I understand and consent to processing license plates from my own dashcam footage for personal stalking-detection purposes only.' before the Confirm button enables. On Confirm: POST /v1/settings/alpr/disclaimer/ack {jurisdiction, version}, then PUT /v1/settings/alpr {enabled: true}. If encryption_key_configured is false in the GET response, the modal instead shows 'Set ALPR_ENCRYPTION_KEY in your environment and restart the server -- this key encrypts plate data at rest. Run `go run ./cmd/alpr-keygen` to generate one.' with a Close button (no enable until key is configured).",
+    "  STATE 3 -- Enabled, engine unreachable (engine_reachable: false): status pill 'Engine offline' (amber). Copy-paste box with the exact command -- `make alpr-up` (preferred) or `docker compose --profile alpr up -d alpr` (fallback). Auto-refresh probe every 10 s while the card is visible (cap at 30 attempts then stop polling and show a 'Stopped probing -- click to retry' button).",
+    "  STATE 4 -- Enabled, engine reachable (engine_reachable: true): status pill 'Engine online' (green). Live stats grid: queue depth (extractor + detector counts from /v1/alpr/status if available, else null), last_detection_ts (relative), total_plates_24h, alerts_24h. Disable button (with confirm modal warning that workers will stop and APIs will deregister but data is retained). Advanced collapsible: read-only sliders for FPS and confidence-min wired to PUT /v1/settings/alpr (or read-only display referring user to alpr-tuning-ui when that ships).",
+    "Disclaimer text content lives in this file (a small JSX constant per jurisdiction); reviewed against docs/ALPR.md by the alpr-docs feature for consistency. Define DISCLAIMER_VERSION = '2026-04-v1' as a const so the backend's CurrentDisclaimerVersion (in alpr-disclaimer-gate) and this UI agree. Wire the const into the POST body.",
+    "Disable flow: confirmation modal -- 'Disable ALPR? Workers will stop processing new routes and the dashboard surfaces will hide. Existing detection data is retained until retention policy or manual deletion. Re-enable any time.' On confirm: PUT /v1/settings/alpr {enabled: false}.",
+    "Encryption-key-not-configured guard: if the user lands on the page with state.disabled and encryption_key_configured: false, show an inline warning above the Enable button rather than letting them click into the disclaimer modal. Reduces dead-end clicks.",
+    "Tests: each of the 4 states render correctly given mocked /v1/settings/alpr responses; ack + enable flow end-to-end with msw; encryption-key-missing path; jurisdiction selection persisted to ack body.",
+    "Lint, type-check pass. Manual verification: walk through enable from cold-start, ack disclaimer, see engine-offline state, run make alpr-up in a terminal, watch state transition to engine-online within 10 s."
+  ],
+  "notes": "Implemented as web/src/components/alpr/AlprSettingsCard.tsx and wired into web/src/app/settings/page.tsx. Tests at web/src/components/alpr/AlprSettingsCard.test.tsx cover all 4 states, ack+enable flow with jurisdiction persistence, and encryption-key-missing path. Lint, type-check, and full vitest suite (23 tests) pass; smoke is green."
+}

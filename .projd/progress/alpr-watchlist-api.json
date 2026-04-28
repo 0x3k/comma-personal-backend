@@ -1,0 +1,25 @@
+{
+  "id": "alpr-watchlist-api",
+  "name": "REST endpoints: alerts feed + ack + whitelist + summary",
+  "status": "complete",
+  "priority": 5,
+  "blocked_by": ["alpr-stalking-heuristic"],
+  "branch": "agent/alpr-watchlist-api",
+  "base_branch": "feat/alpr",
+  "summary": "REST endpoints for the alert center and whitelist management. Powers the alert feed UI, ack flow, and the user's ability to whitelist plates they recognize as harmless (own car, family, neighbor). Includes a cheap summary endpoint for the dashboard badge that returns just the open-count + max severity. All endpoints session-only -- alerts are user-curated state and the device has no business querying them. Every mutation writes an alpr_audit_log row for user accountability.",
+  "acceptance_criteria": [
+    "GET /v1/alpr/alerts (session-only, requireAlprEnabled): paginated alert feed. Default sort: last_alert_at DESC. Filters: ?severity=N (multi via comma), ?status=open|acked|all (default open), ?dongle_id=. Pagination ?limit=&offset=, default 25, max 100. Each item: {plate_hash_b64, plate, signature: {...}|null, severity, kind: 'alerted'|'plate_swap', first_alert_at, last_alert_at, acked_at, encounter_count, latest_route: {dongle_id, route, started_at, address_label}, evidence_summary: 'string'}.",
+    "evidence_summary: a one-line human summary derived from plate_alert_events.components -- e.g. 'Seen on 5 trips in 2 areas over 9 days; followed through 4 turns once.' Compute in handler; cache nothing (cheap).",
+    "POST /v1/alpr/alerts/:hash_b64/ack (session-only): sets acked_at = now() on plate_watchlist. Idempotent (re-ack on already-acked = 200, no-op). 404 on unknown hash. Audit log: action='alert_ack'.",
+    "POST /v1/alpr/alerts/:hash_b64/unack (session-only): clears acked_at (sets to null). For when the user changes their mind. Audit log: action='alert_unack'.",
+    "POST /v1/alpr/whitelist (session-only) body {plate: string, label: string} (label optional; empty string allowed): hash + encrypt via internal/alpr/crypto, upsert plate_watchlist with kind='whitelist', label_ciphertext. If row exists with kind='alerted', transition to whitelist (preserves severity in audit but clears severity column) and emit AlertSuppressed event so notification-channels can deduct from open counts. 400 if plate text empty after normalization. Audit log: action='whitelist_add'.",
+    "DELETE /v1/alpr/whitelist/:hash_b64 (session-only): removes the row. Future encounters for this plate run through heuristic again normally. 404 on unknown. Audit log: action='whitelist_remove'.",
+    "GET /v1/alpr/whitelist (session-only): list current whitelist, decrypted labels. Pagination same defaults as /alerts.",
+    "GET /v1/alpr/alerts/summary (session-only, requireAlprEnabled): cheap counts endpoint for the dashboard badge -- {open_count: int, max_open_severity: int|null, last_alert_at: timestamp|null}. Implement with a single query; must respond <50 ms on a DB with thousands of rows.",
+    "POST /v1/alpr/alerts/:hash_b64/note (session-only) body {notes: string}: sets plate_watchlist.notes. Useful for the user to jot 'this is the white truck from Tuesday.' Audit: action='alert_note'.",
+    "All routes always register; requireAlprEnabled middleware returns 503 when runtime flag off.",
+    "Tests: ack idempotency, whitelist transition from alerted preserves audit and emits suppression event, whitelist removal restores future scoring (verified by re-running heuristic in a unit test), summary counts match listing, pagination correctness, 503 path.",
+    "Listing endpoints decrypt plate + label inside the handler; never log decrypted text."
+  ],
+  "notes": ""
+}

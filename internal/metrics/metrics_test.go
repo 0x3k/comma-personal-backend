@@ -28,6 +28,13 @@ func TestMetricsNamesAndLabelsExist(t *testing.T) {
 	m.ObserveWorkerRun("transcoder", 800*time.Millisecond)
 	m.ObserveThumbnailGeneration("success", 200*time.Millisecond)
 	m.SetThumbnailQueueDepth(3)
+	m.IncTurnDetectorRun("emitted")
+	m.AddTurnDetectorTurnsEmitted(4)
+	m.ObserveTurnDetectorRun(150 * time.Millisecond)
+	m.IncALPRFrameExtracted("ok")
+	m.AddALPRFramesExtracted("ok", 5)
+	m.ObserveALPRExtractorSegment(750 * time.Millisecond)
+	m.SetALPRExtractorQueueDepth(7)
 
 	families, err := m.Registry().Gather()
 	if err != nil {
@@ -56,6 +63,12 @@ func TestMetricsNamesAndLabelsExist(t *testing.T) {
 		{"thumbnail_generations_total", map[string]string{"result": "success"}},
 		{"thumbnail_generation_duration_seconds", nil},
 		{"thumbnail_queue_depth", nil},
+		{"turn_detector_runs_total", map[string]string{"result": "emitted"}},
+		{"turn_detector_turns_emitted_total", nil},
+		{"turn_detector_run_seconds", nil},
+		{"alpr_frames_extracted_total", map[string]string{"result": "ok"}},
+		{"alpr_extractor_segment_seconds", nil},
+		{"alpr_extractor_queue_depth", nil},
 	}
 
 	for _, tc := range cases {

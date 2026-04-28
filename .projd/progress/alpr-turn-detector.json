@@ -1,0 +1,24 @@
+{
+  "id": "alpr-turn-detector",
+  "name": "Per-route turn timeline from GPS geometry",
+  "status": "complete",
+  "priority": 3,
+  "blocked_by": [],
+  "branch": "agent/alpr-turn-detector",
+  "base_branch": "feat/alpr",
+  "summary": "Compute a turn timeline for each route from existing GPS geometry. Independently useful (analytics, smart playback, future driving-style features) but lives in the ALPR plan because the stalking heuristic needs to count 'turns since first sighting of plate X.' Has zero ALPR-specific dependencies -- runs for every route regardless of alpr_enabled. Triggers off the same route-metadata-completion signal that trip-aggregator-worker uses; check internal/worker/trip_aggregator.go for the wire-up pattern.",
+  "acceptance_criteria": [
+    "New worker internal/worker/turn_detector.go. Always-on (not gated on ALPR), started from cmd/server/workers.go.",
+    "Trigger: subscribes to the route-metadata-completion signal (same trigger as trip-aggregator). Reuse the existing pub/sub pattern; do not invent a new one.",
+    "Algorithm: load route geometry vertices (with timestamps). For each consecutive pair compute bearing using haversine + atan2 (formulas in code comments since this is the one place WHY a comment is justified -- the math is easy to misread). For a sliding window of TURN_WINDOW_SECONDS (default 4 s), compute delta = wrap_to_180(bearing_after - bearing_before). When |delta| >= TURN_DELTA_DEG_MIN (default 35 deg), emit a turn at the central timestamp.",
+    "Suppress duplicates: do not emit two turns within TURN_DEDUP_SECONDS (default 5 s) of each other -- keeps a rotary or sweeping curve from firing 12 times.",
+    "Skip routes with fewer than 30 vertices or shorter than 30 s -- not enough signal, would produce noise. Log skip at debug.",
+    "Tunables exposed via internal/settings (writable at runtime): turn_window_seconds, turn_delta_deg_min, turn_dedup_seconds. Env defaults via TURN_WINDOW_SECONDS, TURN_DELTA_DEG_MIN, TURN_DEDUP_SECONDS.",
+    "Idempotent: re-processing a route deletes prior turns for that route then inserts the new set in a single transaction. sqlc query DeleteTurnsForRoute exists in alpr-schema; InsertTurns is a batch insert.",
+    "New endpoint GET /v1/routes/:dongle_id/:route_name/turns (session-or-JWT, checkDongleAccess): returns {turns: [{ts, offset_ms, delta_deg, lat, lng}, ...]}. Useful beyond ALPR (UI may show turn markers on the route timeline as a future enhancement).",
+    "First-deploy backfill: an idempotent backfill task processes the most-recent N routes (default 200, env TURN_BACKFILL_LIMIT) and stops. Older routes are deferred to alpr-historical-backfill if/when ALPR is enabled (which will handle turn computation for any route it processes). Backfill runs once per process start, logs progress, and is rate-limited (~1 route/sec).",
+    "Metrics: turn_detector_runs_total, turn_detector_turns_emitted_total, turn_detector_run_seconds histogram.",
+    "Tests: synthetic geometry with a known 90 deg right turn -> exactly one turn at the expected timestamp. Straight-line geometry -> 0 turns. Circle geometry -> at least the dedup-bound count. Bearing-wrap edge case (358 deg -> 2 deg = +4 deg, NOT -356 deg) -> no spurious turn. Window-shorter-than-min-route guard."
+  ],
+  "notes": "Ships its own minimal route_turns migration (015) so the feature lands independently of alpr-schema. Both migrations use IF NOT EXISTS and are coexistence-safe."
+}

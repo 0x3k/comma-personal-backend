@@ -1,0 +1,25 @@
+{
+  "id": "alpr-stalking-heuristic",
+  "name": "Stalking detection heuristic + alert generation",
+  "status": "complete",
+  "priority": 5,
+  "blocked_by": ["alpr-encounter-aggregator", "alpr-turn-detector"],
+  "branch": "agent/alpr-stalking-heuristic",
+  "base_branch": "feat/alpr",
+  "summary": "The brain of the feature. Scores each plate's behavior across one route and across history (configurable lookback window), raises alerts when scores cross thresholds, and writes them to plate_watchlist with severity. Each alert is backed by a plate_alert_events row with the component breakdown so the UI can show the user WHY the alert fired -- transparency is critical for a feature that nudges someone toward 'someone might be following me.' Heuristic is deliberately separate from the aggregator so the rule set can evolve without re-running detection.",
+  "acceptance_criteria": [
+    "New package internal/alpr/heuristic with a pure scoring function Score(input ScoringInput) (Result) -- no DB/IO -- and a Run(ctx, deps, dongle, plate_hash) worker hook that loads the input, calls Score, and writes results.",
+    "ScoringInput struct: PlateHash, RecentEncounters []Encounter (last N days; default 30), Whitelisted bool, ConfigThresholds (so tuning UI changes flow through without redeploy).",
+    "Result struct: TotalScore float64, Severity int (0..5), Components []Component{Name, Points, Evidence map[string]any}, Reason string (one-line summary).",
+    "Scoring components (each contributes to TotalScore; evidence map captures the numbers used so UI can render the explanation): (1) within_route_turns -- for the encounter with the highest turn_count, points = max(0, (turn_count - 2)) * 1.0, capped at 4. Evidence: turn_count, route, encounter_id. (2) within_route_persistence -- if any encounter has duration >= 8 minutes, +1.0; >= 15 min +1.5. (3) cross_route_count -- distinct routes with this plate_hash in window. >=3 routes => +1.5; >=5 routes => +1.0 more. (4) cross_route_geo_spread -- routes start in distinct >=5 km cells (cluster centers via simple grid bucketing). >=2 distinct areas => +2.0 (strong stalking signal: same plate, different parts of your life). (5) cross_route_timing -- multiple distinct routes within 24h => +1.0. (6) whitelist_suppression -- if Whitelisted, TotalScore=0 regardless.",
+    "Severity buckets: TotalScore < 2 => severity 0 (no alert, do not write watchlist row); 2..3.99 => 2; 4..5.99 => 3; 6..7.99 => 4; >=8 => 5. Severity 1 is reserved for manually-flagged 'note' entries from the UI.",
+    "On severity >= 2: UPSERT plate_watchlist row keyed on plate_hash with kind='alerted', severity = max(existing_severity, computed), last_alert_at = now(), first_alert_at = COALESCE(existing.first_alert_at, now()), do NOT touch acked_at on re-trigger (re-evaluation should not silently re-arm an acknowledged alert -- if the user acked, leave acked_at as-is unless severity strictly increased; if severity strictly increased, clear acked_at so the user re-sees the upgraded alert).",
+    "Always (severity 0 included) insert a plate_alert_events row with severity, components JSONB, heuristic_version (a constant string in the package, e.g. 'v1.0.0'). Versioning lets the UI display 'evaluated under heuristic v1.0.0' and lets the team change rules without silently rewriting history.",
+    "Emit AlertCreated{plate_hash, severity, route, dongle_id} ONLY when severity >= 2 AND severity strictly increased OR no alert exists yet. (Avoid spamming notifications on every re-evaluation that confirms an already-known alert.)",
+    "Triggered by EncountersUpdated{plate_hashes_affected}. Run scoring per affected plate_hash; only re-evaluate plates that actually changed.",
+    "Configurable thresholds (all of the magic numbers above) live in internal/settings under alpr_heuristic_*: turns_min, persistence_minutes_min, distinct_routes_min, distinct_areas_min, area_cell_km, etc. Defaults match the listed numbers.",
+    "Tests: each component in isolation with hand-crafted ScoringInputs; combined-score boundary cases (2.0, 3.99, 4.0, 6.0, 8.0); whitelist suppression overrides everything; bearing-cell bucketing handles equator/180-deg edge; ack preservation on re-trigger; severity-upgrade clears ack.",
+    "Heuristic version constant -- bumping this is a deliberate act and should require a manual code change (do NOT make it a settings value). Document the change process in code comments."
+  ],
+  "notes": "Implemented in three commits: pure scoring function with full unit-test coverage of every component and severity boundary; sqlc additions (ListEncountersForPlateInWindowWithStartGPS LATERAL-join query for cell bucketing + UpsertWatchlistAlertedPreserveAck for ack preservation on re-eval) and alpr_heuristic_* settings keys; worker layer wired into cmd/server/workers.go after the aggregator with a small EncountersUpdated bridge so the heuristic package stays decoupled from internal/worker. Heuristic version constant is heuristic.HeuristicVersion (v1.0.0) -- a code-level decision tied to a deploy, not a setting."
+}

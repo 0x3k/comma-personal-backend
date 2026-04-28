@@ -1,0 +1,21 @@
+{
+  "id": "alpr-dashboard-alert-badge",
+  "name": "Dashboard alert badge + recent-alerts widget",
+  "status": "complete",
+  "priority": 7,
+  "blocked_by": ["alpr-watchlist-api"],
+  "branch": "agent/alpr-dashboard-alert-badge",
+  "base_branch": "feat/alpr",
+  "summary": "Make new alerts impossible to miss. The dashboard home page (web/src/app/page.tsx) gets a prominent badge showing open-alert count + worst severity, plus a small 'Recent alerts' widget that links into the alert feed. Hidden entirely when ALPR is disabled OR there are zero open alerts (no zero-state pill -- visual noise is worse than absence here).",
+  "acceptance_criteria": [
+    "Home page integration: import useAlprSettings(); when disabled, render nothing ALPR-related. When enabled, fetch /v1/alpr/alerts/summary on mount + every 60 s while the document.visibilityState === 'visible' (visibility API check; pause polling when tab hidden to avoid waste).",
+    "Badge: when summary.open_count > 0, render a pill in the dashboard header (or wherever the existing dashboard badges live -- check the home page layout). Badge color matches max_open_severity: amber for 2-3, red for 4-5. Click navigates to /alerts.",
+    "When summary.open_count == 0, hide the badge entirely. Do not render a 'No alerts' pill.",
+    "Recent-alerts widget below the existing stats card: top 3 most-recent open alerts (fetched via /v1/alpr/alerts?status=open&limit=3). Each row: severity badge, plate, vehicle badge, evidence_summary one-liner, click-into-plate-page link. When there are zero open alerts: hide the widget entirely (matches badge logic).",
+    "Mobile: badge moves into the existing nav header; widget collapses below stats. Match the responsive patterns used for the existing dashboard cards.",
+    "Performance: home-page initial paint must not regress by >50 ms. Lazy-load the widget if necessary. The summary endpoint is cheap; the widget's full alerts call is the more expensive one and can be deferred until after the stats card paints.",
+    "Lint, type-check, tests pass. Tests: hidden when disabled, hidden when zero alerts, severity-color mapping, polling pause when tab hidden.",
+    "Manual verification: trigger an alert in dev (insert a plate_watchlist row directly), reload home, see badge + widget; ack the alert, refresh, both vanish."
+  ],
+  "notes": ""
+}

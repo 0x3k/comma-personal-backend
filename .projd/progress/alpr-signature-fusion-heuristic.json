@@ -1,0 +1,22 @@
+{
+  "id": "alpr-signature-fusion-heuristic",
+  "name": "Vehicle-signature fusion: corroboration + plate-swap detection",
+  "status": "complete",
+  "priority": 6,
+  "blocked_by": ["alpr-stalking-heuristic", "alpr-vehicle-attributes-engine"],
+  "branch": "agent/alpr-signature-fusion-heuristic",
+  "base_branch": "feat/alpr",
+  "summary": "Layer that uses vehicle signatures (make/model/color/body_type) to (1) corroborate plate-based alerts -- raise confidence when the same signature backs the same plate across encounters; (2) detect signature-inconsistent plates -- a single plate hash with wildly different signatures probably means OCR error or plate cloning; (3) detect plate-swap -- multiple plate hashes share one signature in the same area, the strongest 'someone is actively trying to evade detection' signal we can produce. Strictly additive on top of alpr-stalking-heuristic; if no detections have signatures (attributes engine off or unsupported), this layer produces no output.",
+  "acceptance_criteria": [
+    "Extend internal/alpr/heuristic with FuseSignatures(ctx, deps, plate_hash) (extraSeverity int, evidence []Component, plateSwapAlerts []SwapAlert).",
+    "Plate-confirmation: if all encounters for plate_hash share the same signature_id (>=80% of underlying detections), add 0.5 severity points and emit a Component named signature_consistent with evidence {signature_key, share_pct}. This corroborates the plate-based alert without flooding new alerts.",
+    "Signature-conflict: same plate_hash has 2+ distinct signature_ids across encounters where each accounts for >=20% of detections. Emit Component signature_inconsistent with evidence {signatures: [...]}; severity contribution 0 (does not raise alert) but exposed in the UI as 'OCR may be wrong -- review.' Triggers an automatic candidate for the manual-correction UI.",
+    "Plate-swap detection: query encounters across the lookback window, group by (signature_id, area_cluster_5km). If a signature has >=3 distinct plate_hashes within the same area cluster, raise a NEW alert keyed on signature itself: write a plate_watchlist row with plate_hash=NULL, signature_id=<id>, kind='alerted', severity=4 (default; tunable), first_alert_at/last_alert_at handled the same way as plate alerts. Emit AlertCreated with a signature_id field instead of plate_hash. The UI will render this as 'A vehicle (Silver Toyota Camry) has been seen with 3 different plates in your area in the last 14 days.'",
+    "Plate-swap re-evaluation: when a new encounter lands for any plate_hash whose signature_id matches an existing plate_swap alert, refresh last_alert_at and add the new plate_hash to the alert's evidence chain. Do NOT generate a brand-new alert per detection.",
+    "Whitelist suppression also applies here: a signature_id with all underlying plate_hashes whitelisted is itself suppressed.",
+    "Add SignatureFusionVersion constant (separate from stalking heuristic version) so changes here are tracked independently in plate_alert_events.heuristic_version.",
+    "Tests with synthetic encounter sets exercising: plate-swap (3 plates / 1 signature in 1 area => alert), plate-swap suppressed by whitelist on each underlying plate, signature-consistent path (raises plate severity by 0.5), signature-inconsistent flag emitted but no alert raised, missing-signature path (every detection has signature_id=NULL => function returns 0/empty).",
+    "Performance: this runs after stalking-heuristic on each AlertCreated/EncountersUpdated event; ensure queries use the (signature_id) index from alpr-vehicle-signature-schema and stay under 100ms on a database with ~1M detection rows."
+  ],
+  "notes": "Implemented across three commits: schema migration 018 (nullable plate_hash + partial unique indexes for the signature-keyed alert path), four new sqlc queries (CountDetectionsBySignatureForPlate, GetWatchlistSignatureSwap, UpsertWatchlistSignatureSwap, ListPlateHashesForSignatureInWindow), and the FuseSignatures function with worker integration. SignatureFusionVersion is 'fusion-v1.0.0' to track independently from the stalking heuristic's HeuristicVersion. Eight new alpr_signature_* settings keys expose the fusion thresholds. Twelve fusion-specific tests cover plate-confirmation, signature-conflict, plate-swap (3 plates / 1 sig / 1 area), whitelist suppression (full and partial), lookback windowing, missing-signature path, refire silence, and the fusion-bumps-severity worker integration. All existing heuristic, worker, settings, db, and cmd/server tests continue to pass."
+}

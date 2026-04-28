@@ -25,6 +25,7 @@ import (
 
 	"comma-personal-backend/internal/api/middleware"
 	"comma-personal-backend/internal/db"
+	"comma-personal-backend/internal/settings"
 	"comma-personal-backend/internal/storage"
 )
 
@@ -536,6 +537,348 @@ func TestBuildConcatList(t *testing.T) {
 	want := "ffconcat version 1.0\nfile 'file:/tmp/a.ts'\nfile 'file:/tmp/b'\\''s.ts'\n"
 	if got != want {
 		t.Errorf("buildConcatList = %q\nwant %q", got, want)
+	}
+}
+
+// ----- redact_plates query param tests -----
+
+// exportRedactMockDB is a multi-table stub that serves both the route
+// geometry lookup (used by the GPX endpoint) and the
+// ListDetectionsForRoute query the redaction path consumes. It also
+// stubs GetSetting so the export handler can read alpr_enabled.
+type exportRedactMockDB struct {
+	wkt        pgtype.Text
+	settings   map[string]string
+	detections []db.ListDetectionsForRouteRow
+}
+
+func (m *exportRedactMockDB) Exec(_ context.Context, _ string, _ ...interface{}) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+
+func (m *exportRedactMockDB) Query(_ context.Context, sql string, _ ...interface{}) (pgx.Rows, error) {
+	if strings.Contains(sql, "FROM plate_detections") {
+		return &exportDetectionRows{rows: m.detections}, nil
+	}
+	return nil, fmt.Errorf("unexpected Query: %s", sql)
+}
+
+func (m *exportRedactMockDB) QueryRow(_ context.Context, sql string, _ ...interface{}) pgx.Row {
+	if strings.Contains(sql, "FROM settings") {
+		v, ok := m.settings["alpr_enabled"]
+		if !ok {
+			return &exportMockRow{err: pgx.ErrNoRows}
+		}
+		return &exportSettingsRow{value: v}
+	}
+	return &exportMockRow{wkt: m.wkt}
+}
+
+type exportSettingsRow struct{ value string }
+
+func (r *exportSettingsRow) Scan(dest ...interface{}) error {
+	if len(dest) < 3 {
+		return fmt.Errorf("expected 3 dests, got %d", len(dest))
+	}
+	if k, ok := dest[0].(*string); ok {
+		*k = "alpr_enabled"
+	}
+	if v, ok := dest[1].(*string); ok {
+		*v = r.value
+	}
+	if ts, ok := dest[2].(*pgtype.Timestamptz); ok {
+		*ts = pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	}
+	return nil
+}
+
+// exportDetectionRows iterates a slice of ListDetectionsForRouteRow
+// for the redaction-loader test path.
+type exportDetectionRows struct {
+	rows []db.ListDetectionsForRouteRow
+	idx  int
+}
+
+func (r *exportDetectionRows) Close()                                       {}
+func (r *exportDetectionRows) Err() error                                   { return nil }
+func (r *exportDetectionRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *exportDetectionRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *exportDetectionRows) Next() bool {
+	r.idx++
+	return r.idx <= len(r.rows)
+}
+func (r *exportDetectionRows) Values() ([]interface{}, error) { return nil, nil }
+func (r *exportDetectionRows) RawValues() [][]byte            { return nil }
+func (r *exportDetectionRows) Conn() *pgx.Conn                { return nil }
+func (r *exportDetectionRows) Scan(dest ...interface{}) error {
+	if r.idx == 0 || r.idx > len(r.rows) {
+		return fmt.Errorf("Scan called out of range")
+	}
+	src := r.rows[r.idx-1]
+	// dests, in order matching ListDetectionsForRoute columns.
+	if d, ok := dest[0].(*int64); ok {
+		*d = src.ID
+	}
+	if d, ok := dest[1].(*string); ok {
+		*d = src.DongleID
+	}
+	if d, ok := dest[2].(*string); ok {
+		*d = src.Route
+	}
+	if d, ok := dest[3].(*int32); ok {
+		*d = src.Segment
+	}
+	if d, ok := dest[4].(*int32); ok {
+		*d = src.FrameOffsetMs
+	}
+	if d, ok := dest[5].(*[]byte); ok {
+		*d = src.PlateCiphertext
+	}
+	if d, ok := dest[6].(*[]byte); ok {
+		*d = src.PlateHash
+	}
+	if d, ok := dest[7].(*[]byte); ok {
+		*d = src.Bbox
+	}
+	if d, ok := dest[8].(*float32); ok {
+		*d = src.Confidence
+	}
+	if d, ok := dest[9].(*bool); ok {
+		*d = src.OcrCorrected
+	}
+	if d, ok := dest[10].(*pgtype.Float8); ok {
+		*d = src.GpsLat
+	}
+	if d, ok := dest[11].(*pgtype.Float8); ok {
+		*d = src.GpsLng
+	}
+	if d, ok := dest[12].(*pgtype.Float4); ok {
+		*d = src.GpsHeadingDeg
+	}
+	if d, ok := dest[13].(*pgtype.Timestamptz); ok {
+		*d = src.FrameTs
+	}
+	if d, ok := dest[14].(*pgtype.Text); ok {
+		*d = src.ThumbPath
+	}
+	if d, ok := dest[15].(*pgtype.Timestamptz); ok {
+		*d = src.CreatedAt
+	}
+	return nil
+}
+
+func TestExportMP4_RedactPlatesNoOpWhenALPRDisabled(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not available; skipping")
+	}
+
+	store := newExportStorage(t)
+	setupHLSRoute(t, store, ffmpegPath, testExportDongleID, testExportRoute, "f", 1)
+
+	mock := &exportRedactMockDB{settings: map[string]string{"alpr_enabled": "false"}}
+	queries := db.New(mock)
+	settingsStore := settings.New(queries)
+
+	handler := NewExportHandler(queries, store).WithSettings(settingsStore)
+	handler.SetFFmpegPath(ffmpegPath)
+
+	rec, c := newExportMP4Request(t, testExportDongleID, testExportRoute,
+		"f", testExportDongleID)
+	// Inject ?redact_plates=true; ALPR is off so the request must
+	// degrade to the unredacted (-c copy) path and return 200.
+	c.QueryParams().Set("redact_plates", "true")
+
+	if err := handler.ExportMP4(c); err != nil {
+		t.Fatalf("ExportMP4: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	// Filename should be the unredacted form when redaction was a no-op.
+	cd := rec.Header().Get(echo.HeaderContentDisposition)
+	if strings.Contains(cd, "redacted") {
+		t.Errorf("Content-Disposition = %q, must not say 'redacted' on no-op path", cd)
+	}
+}
+
+func TestExportMP4_RedactPlatesFalseProducesIdenticalOutput(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not available; skipping")
+	}
+
+	store := newExportStorage(t)
+	setupHLSRoute(t, store, ffmpegPath, testExportDongleID, testExportRoute, "f", 2)
+
+	handler := NewExportHandler(nil, store)
+	handler.SetFFmpegPath(ffmpegPath)
+
+	// First export with no redaction.
+	rec1, c1 := newExportMP4Request(t, testExportDongleID, testExportRoute,
+		"f", testExportDongleID)
+	if err := handler.ExportMP4(c1); err != nil {
+		t.Fatalf("ExportMP4 first: %v", err)
+	}
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first status = %d", rec1.Code)
+	}
+
+	// Second export with redact_plates=false (explicit no-op).
+	rec2, c2 := newExportMP4Request(t, testExportDongleID, testExportRoute,
+		"f", testExportDongleID)
+	c2.QueryParams().Set("redact_plates", "false")
+	if err := handler.ExportMP4(c2); err != nil {
+		t.Fatalf("ExportMP4 second: %v", err)
+	}
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second status = %d", rec2.Code)
+	}
+
+	// Both bodies should be identical: the same -c copy ffmpeg
+	// invocation runs in both cases and ffmpeg is deterministic.
+	if !bytes.Equal(rec1.Body.Bytes(), rec2.Body.Bytes()) {
+		t.Errorf("redact_plates=false changed output bytes (len1=%d, len2=%d)",
+			len(rec1.Body.Bytes()), len(rec2.Body.Bytes()))
+	}
+}
+
+func TestExportMP4_RedactPlatesTrueAppliesFilter(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not available; skipping")
+	}
+
+	store := newExportStorage(t)
+	setupHLSRoute(t, store, ffmpegPath, testExportDongleID, testExportRoute, "f", 1)
+
+	// Build a fake detection in segment 0 covering most of the frame
+	// so the boxblur measurably reduces variance over the source.
+	bboxJSON, err := json.Marshal(map[string]float64{
+		"x": 100, "y": 50, "w": 800, "h": 400,
+	})
+	if err != nil {
+		t.Fatalf("marshal bbox: %v", err)
+	}
+	mock := &exportRedactMockDB{
+		settings: map[string]string{"alpr_enabled": "true"},
+		detections: []db.ListDetectionsForRouteRow{
+			{
+				ID:            1,
+				DongleID:      testExportDongleID,
+				Route:         testExportRoute,
+				Segment:       0,
+				FrameOffsetMs: 0,
+				Bbox:          bboxJSON,
+				Confidence:    0.9,
+				FrameTs:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+			},
+		},
+	}
+	queries := db.New(mock)
+	settingsStore := settings.New(queries)
+	handler := NewExportHandler(queries, store).WithSettings(settingsStore)
+	handler.SetFFmpegPath(ffmpegPath)
+
+	rec, c := newExportMP4Request(t, testExportDongleID, testExportRoute,
+		"f", testExportDongleID)
+	c.QueryParams().Set("redact_plates", "true")
+
+	if err := handler.ExportMP4(c); err != nil {
+		t.Fatalf("ExportMP4: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	// Filename suffix changes to indicate redaction.
+	cd := rec.Header().Get(echo.HeaderContentDisposition)
+	if !strings.Contains(cd, "redacted") {
+		t.Errorf("Content-Disposition = %q, want contains 'redacted'", cd)
+	}
+	// Body should still be a valid MP4 (ftyp box present).
+	body := rec.Body.Bytes()
+	if len(body) < 64 {
+		t.Fatalf("response too short: %d bytes", len(body))
+	}
+	if !bytes.Contains(body[:64], []byte("ftyp")) {
+		t.Errorf("expected ftyp box in first 64 bytes, got %q", body[:64])
+	}
+}
+
+// TestExportMP4_RedactedOutputDiffersFromUnredacted validates the
+// effect of redaction at the byte level: with the same input, a
+// redacted export must produce a different MP4 than the unredacted
+// one. This is the export-side counterpart to the per-pixel variance
+// check in the redaction-builder integration test (which verifies the
+// HLS variant).
+func TestExportMP4_RedactedOutputDiffersFromUnredacted(t *testing.T) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not available; skipping")
+	}
+
+	store := newExportStorage(t)
+	setupHLSRoute(t, store, ffmpegPath, testExportDongleID, testExportRoute, "f", 1)
+
+	bboxJSON, _ := json.Marshal(map[string]float64{
+		"x": 100, "y": 50, "w": 800, "h": 400,
+	})
+	mock := &exportRedactMockDB{
+		settings: map[string]string{"alpr_enabled": "true"},
+		detections: []db.ListDetectionsForRouteRow{
+			{ID: 1, Segment: 0, FrameOffsetMs: 0, Bbox: bboxJSON, Confidence: 0.9,
+				FrameTs: pgtype.Timestamptz{Time: time.Now(), Valid: true}},
+		},
+	}
+	queries := db.New(mock)
+	settingsStore := settings.New(queries)
+	handler := NewExportHandler(queries, store).WithSettings(settingsStore)
+	handler.SetFFmpegPath(ffmpegPath)
+
+	// Unredacted.
+	rec1, c1 := newExportMP4Request(t, testExportDongleID, testExportRoute,
+		"f", testExportDongleID)
+	if err := handler.ExportMP4(c1); err != nil {
+		t.Fatalf("ExportMP4 (no redact): %v", err)
+	}
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first status = %d", rec1.Code)
+	}
+
+	// Redacted.
+	rec2, c2 := newExportMP4Request(t, testExportDongleID, testExportRoute,
+		"f", testExportDongleID)
+	c2.QueryParams().Set("redact_plates", "true")
+	if err := handler.ExportMP4(c2); err != nil {
+		t.Fatalf("ExportMP4 (redact): %v", err)
+	}
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second status = %d", rec2.Code)
+	}
+
+	if bytes.Equal(rec1.Body.Bytes(), rec2.Body.Bytes()) {
+		t.Errorf("redact_plates=true produced byte-identical output to unredacted")
+	}
+}
+
+func TestParseBoolQuery(t *testing.T) {
+	cases := map[string]bool{
+		"true":  true,
+		"True":  true,
+		"TRUE":  true,
+		"1":     true,
+		"yes":   true,
+		"on":    true,
+		"":      false,
+		"false": false,
+		"0":     false,
+		"no":    false,
+		"asdf":  false,
+	}
+	for in, want := range cases {
+		if got := parseBoolQuery(in); got != want {
+			t.Errorf("parseBoolQuery(%q) = %v, want %v", in, got, want)
+		}
 	}
 }
 

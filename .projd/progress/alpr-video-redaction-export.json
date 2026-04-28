@@ -1,0 +1,22 @@
+{
+  "id": "alpr-video-redaction-export",
+  "name": "Plate-blur on MP4 export + share-link viewing",
+  "status": "complete",
+  "priority": 8,
+  "blocked_by": ["alpr-detection-worker"],
+  "branch": "agent/alpr-video-redaction-export",
+  "base_branch": "feat/alpr",
+  "summary": "When exporting an MP4 of a route or sharing it via public link, optionally blur all detected plate bboxes so other people's plates aren't broadcast. Default: blur ON for share links (privacy-respecting outbound default), OFF for local exports (the user owns their own data). Bboxes interpolate ~200ms across frames to avoid flicker. Re-encoding HLS for share-link views is expensive, so cache the redacted variant alongside the existing transcoded streams.",
+  "acceptance_criteria": [
+    "Export pipeline (route-export-mp4 worker; check internal/worker for the existing implementation): GET /v1/routes/:dongle/:route/export.mp4 gains a query param ?redact_plates=true|false. Default false. When true: load plate_detections for the route, build a per-frame bbox list (interpolating up to 200ms across frames where no detection exists for the current frame timestamp), pass the bbox list to ffmpeg as a series of `-vf` filters chaining `boxblur` over each region. Implementation hint: ffmpeg's geq + crop + overlay approach scales poorly with many bboxes; preferred path is to write a small per-frame mask and use `unsharp` or `gblur` with `enable='between(t,...)'` per detection. Document the chosen approach and benchmark.",
+    "Share-link viewing (internal/api/share): the existing share endpoint serves whitelisted HLS files (qcamera.ts, index.m3u8). Add a redaction flag to the share token (signed in at creation time, default true). When the token's redaction flag is true: serve from a cached redacted variant at <storage>/<dongle>/<route>/<seg>/qcamera-redacted/index.m3u8 + segments. If the variant doesn't exist yet, return 503 with a Retry-After: 30 header while a background job builds it.",
+    "Cached variant builder: a one-shot worker triggered when the first redacted-share request comes in. Re-encodes qcamera HLS with plate bboxes blurred. Stores under qcamera-redacted/. Emits a completion event so the share handler can serve it.",
+    "Cache invalidation: when alpr-manual-correction-api edits or merges a plate (which changes the bbox/hash for a route's detections), delete the cached qcamera-redacted/ directory for affected routes so the next view rebuilds with the corrected redaction.",
+    "Toggle exposed in share-link creation modal (frontend): checkbox 'Blur license plates in shared video' default ON. Stored in the signed token payload (extend internal/share token struct). Recipients cannot bypass the flag (token signature covers the redaction bit).",
+    "Toggle also exposed in the route detail export-action menu: dropdown -> 'Export MP4 (with plate blur)' / 'Export MP4 (no blur)'. Default no-blur for local exports.",
+    "When alpr_enabled=false at request time: redact_plates=true is treated as a no-op (serve unredacted) since there are no detections to redact against. Log debug; no error.",
+    "Tests: synthetic detections + a fixture qcamera.ts produce a blurred output where bboxes were detected (verified by sampling pixels in the bbox region and comparing variance to the same region of the unredacted source). Identical input with redaction off produces a bit-identical original. Cache invalidation on plate edit. Share token with redaction=false serves unredacted segments.",
+    "Performance: redacted variant build for a 30-minute route should complete in <2x realtime on a typical CPU. If chosen ffmpeg approach exceeds this budget, document and consider GPU acceleration as a follow-up."
+  ],
+  "notes": ""
+}
