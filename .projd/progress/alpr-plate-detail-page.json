@@ -1,10 +1,11 @@
 {
   "id": "alpr-plate-detail-page",
   "name": "Per-plate cross-route detail page",
-  "status": "pending",
+  "status": "in_progress",
   "priority": 6,
   "blocked_by": ["alpr-encounters-api", "alpr-manual-correction-api"],
-  "branch": "",
+  "branch": "agent/alpr-plate-detail-page",
+  "base_branch": "feat/alpr",
   "summary": "Per-plate page accessible from any encounter on the route timeline or from any alert in the watchlist. Shows the plate's full history: a timeline of routes, a Leaflet map with sighting points, the vehicle signature, watchlist controls, and links into each contributing route's detail page. This is the surface where the user makes the call: 'is this somebody I should worry about?' Lean on density and clear evidence over decoration.",
   "acceptance_criteria": [
     "New route web/src/app/plates/[hash]/page.tsx. Behind useAlprSettings() feature flag (renders a 'feature disabled' shell when off, since users may have shared links into this page).",
